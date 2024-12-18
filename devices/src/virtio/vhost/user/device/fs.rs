@@ -4,21 +4,16 @@
 
 mod sys;
 
-use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::bail;
-use anyhow::Context;
 use argh::FromArgs;
-use base::error;
 use base::warn;
-use base::AsRawDescriptors;
 use base::RawDescriptor;
 use base::Tube;
-use cros_async::EventAsync;
-use cros_async::Executor;
+use base::WorkerThread;
 use data_model::Le32;
 use fuse::Server;
 use hypervisor::ProtectionType;
@@ -34,47 +29,31 @@ use crate::virtio;
 use crate::virtio::copy_config;
 use crate::virtio::device_constants::fs::FS_MAX_TAG_LEN;
 use crate::virtio::fs::passthrough::PassthroughFs;
-use crate::virtio::fs::process_fs_queue;
 use crate::virtio::fs::Config;
+use crate::virtio::fs::Result as FsResult;
+use crate::virtio::fs::Worker;
 use crate::virtio::vhost::user::device::handler::Error as DeviceError;
 use crate::virtio::vhost::user::device::handler::VhostUserDevice;
-use crate::virtio::vhost::user::device::handler::WorkerState;
 use crate::virtio::Queue;
 
 const MAX_QUEUE_NUM: usize = 2; /* worker queue and high priority queue */
 
-async fn handle_fs_queue(
-    queue: Rc<RefCell<virtio::Queue>>,
-    kick_evt: EventAsync,
-    server: Arc<fuse::Server<PassthroughFs>>,
-    tube: Arc<Mutex<Tube>>,
-) {
-    // Slot is always going to be 0 because we do not support DAX
-    let slot: u32 = 0;
-
-    loop {
-        if let Err(e) = kick_evt.next_val().await {
-            error!("Failed to read kick event for fs queue: {}", e);
-            break;
-        }
-        if let Err(e) = process_fs_queue(&mut queue.borrow_mut(), &server, &tube, slot) {
-            error!("Process FS queue failed: {}", e);
-            break;
-        }
-    }
-}
-
 struct FsBackend {
-    ex: Executor,
     server: Arc<fuse::Server<PassthroughFs>>,
-    tag: [u8; FS_MAX_TAG_LEN],
+    tag: String,
     avail_features: u64,
-    workers: [Option<WorkerState<Rc<RefCell<Queue>>, ()>>; MAX_QUEUE_NUM],
+    workers: BTreeMap<usize, WorkerThread<FsResult<Queue>>>,
     keep_rds: Vec<RawDescriptor>,
 }
 
 impl FsBackend {
-    pub fn new(ex: &Executor, tag: &str, cfg: Option<Config>) -> anyhow::Result<Self> {
+    #[allow(unused_variables)]
+    pub fn new(
+        tag: &str,
+        shared_dir: &str,
+        skip_pivot_root: bool,
+        cfg: Option<Config>,
+    ) -> anyhow::Result<Self> {
         if tag.len() > FS_MAX_TAG_LEN {
             bail!(
                 "fs tag is too long: {} (max supported: {})",
@@ -82,27 +61,26 @@ impl FsBackend {
                 FS_MAX_TAG_LEN
             );
         }
-        let mut fs_tag = [0u8; FS_MAX_TAG_LEN];
-        fs_tag[..tag.len()].copy_from_slice(tag.as_bytes());
 
         let avail_features = virtio::base_features(ProtectionType::Unprotected)
             | 1 << VHOST_USER_F_PROTOCOL_FEATURES;
 
         // Use default passthroughfs config
-        let fs = PassthroughFs::new(tag, cfg.unwrap_or_default())?;
+        #[allow(unused_mut)]
+        let mut fs = PassthroughFs::new(tag, cfg.unwrap_or_default())?;
+        #[cfg(feature = "fs_runtime_ugid_map")]
+        if skip_pivot_root {
+            fs.set_root_dir(shared_dir.to_string())?;
+        }
 
         let mut keep_rds: Vec<RawDescriptor> = [0, 1, 2].to_vec();
         keep_rds.append(&mut fs.keep_rds());
 
-        let ex = ex.clone();
-        keep_rds.extend(ex.as_raw_descriptors());
-
         let server = Arc::new(Server::new(fs));
 
         Ok(FsBackend {
-            ex,
             server,
-            tag: fs_tag,
+            tag: tag.to_owned(),
             avail_features,
             workers: Default::default(),
             keep_rds,
@@ -124,16 +102,17 @@ impl VhostUserDevice for FsBackend {
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
-        let config = virtio_fs_config {
-            tag: self.tag,
+        let mut config = virtio_fs_config {
+            tag: [0; FS_MAX_TAG_LEN],
             num_request_queues: Le32::from(1),
         };
+        config.tag[..self.tag.len()].copy_from_slice(self.tag.as_bytes());
         copy_config(data, 0, config.as_bytes(), offset);
     }
 
     fn reset(&mut self) {
-        for worker in self.workers.iter_mut().filter_map(Option::take) {
-            let _ = self.ex.run_until(worker.queue_task.cancel());
+        for worker in std::mem::take(&mut self.workers).into_values() {
+            let _ = worker.stop();
         }
     }
 
@@ -143,38 +122,34 @@ impl VhostUserDevice for FsBackend {
         queue: virtio::Queue,
         _mem: GuestMemory,
     ) -> anyhow::Result<()> {
-        if self.workers[idx].is_some() {
+        if self.workers.contains_key(&idx) {
             warn!("Starting new queue handler without stopping old handler");
             self.stop_queue(idx)?;
         }
 
-        let kick_evt = queue
-            .event()
-            .try_clone()
-            .context("failed to clone queue event")?;
-        let kick_evt = EventAsync::new(kick_evt, &self.ex)
-            .context("failed to create EventAsync for kick_evt")?;
         let (_, fs_device_tube) = Tube::pair()?;
+        let tube = Arc::new(Mutex::new(fs_device_tube));
 
-        let queue = Rc::new(RefCell::new(queue));
-        let queue_task = self.ex.spawn_local(handle_fs_queue(
-            queue.clone(),
-            kick_evt,
-            self.server.clone(),
-            Arc::new(Mutex::new(fs_device_tube)),
-        ));
+        let server = self.server.clone();
+        let irq = queue.interrupt().clone();
 
-        self.workers[idx] = Some(WorkerState { queue_task, queue });
+        // Slot is always going to be 0 because we do not support DAX
+        let slot: u32 = 0;
+
+        let worker = WorkerThread::start(format!("v_fs:{}:{}", self.tag, idx), move |kill_evt| {
+            let mut worker = Worker::new(queue, server, irq, tube, slot);
+            worker.run(kill_evt, false)?;
+            Ok(worker.queue)
+        });
+        self.workers.insert(idx, worker);
+
         Ok(())
     }
 
     fn stop_queue(&mut self, idx: usize) -> anyhow::Result<virtio::Queue> {
-        if let Some(worker) = self.workers.get_mut(idx).and_then(Option::take) {
-            // Wait for queue_task to be aborted.
-            let _ = self.ex.run_until(worker.queue_task.cancel());
-
-            let queue = match Rc::try_unwrap(worker.queue) {
-                Ok(queue_cell) => queue_cell.into_inner(),
+        if let Some(worker) = self.workers.remove(&idx) {
+            let queue = match worker.stop() {
+                Ok(queue) => queue,
                 Err(_) => panic!("failed to recover queue from worker"),
             };
 
@@ -202,9 +177,18 @@ impl VhostUserDevice for FsBackend {
 #[argh(subcommand, name = "fs")]
 /// FS Device
 pub struct Options {
+    #[argh(option, arg_name = "PATH", hidden_help)]
+    /// deprecated - please use --socket-path instead
+    socket: Option<String>,
     #[argh(option, arg_name = "PATH")]
-    /// path to a vhost-user socket
-    socket: String,
+    /// path to the vhost-user socket to bind to.
+    /// If this flag is set, --fd cannot be specified.
+    socket_path: Option<String>,
+    #[argh(option, arg_name = "FD")]
+    /// file descriptor of a connected vhost-user socket.
+    /// If this flag is set, --socket-path cannot be specified.
+    fd: Option<RawDescriptor>,
+
     #[argh(option, arg_name = "TAG")]
     /// the virtio-fs tag
     tag: String,
@@ -248,4 +232,17 @@ pub struct Options {
     /// a new mount namespace and run without seccomp filter.
     /// Default: false.
     disable_sandbox: bool,
+    #[argh(option, arg_name = "skip_pivot_root", default = "false")]
+    /// disable pivot_root when process is jailed.
+    ///
+    /// virtio-fs typically uses mount namespaces and pivot_root for file system isolation,
+    /// making the jailed process's root directory "/".
+    ///
+    /// Android's security model restricts crosvm's access to certain system capabilities,
+    /// specifically those related to managing mount namespaces and using pivot_root.
+    /// These capabilities are typically associated with the SYS_ADMIN capability.
+    /// To maintain a secure environment, Android relies on mechanisms like SELinux to
+    /// enforce isolation and control access to directories.
+    #[allow(dead_code)]
+    skip_pivot_root: bool,
 }

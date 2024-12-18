@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use zerocopy::AsBytes;
-use zerocopy_derive::FromBytes;
-use zerocopy_derive::FromZeroes;
+use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use crate::arena::Arena;
 use crate::arena::BlockId;
@@ -131,7 +131,7 @@ mod test {
     use base::MemoryMappingBuilder;
 
     use super::*;
-    use crate::superblock::Config;
+    use crate::Builder;
 
     // Check if `GroupMetaData` is correctly initialized from `SuperBlock` with one block group.
     #[test]
@@ -143,10 +143,11 @@ mod test {
         let arena = Arena::new(BLOCK_SIZE, &mut mem).unwrap();
         let sb = SuperBlock::new(
             &arena,
-            &Config {
+            &Builder {
                 inodes_per_group: 1024,
                 blocks_per_group,
                 size,
+                root_dir: None,
             },
         )
         .unwrap();
@@ -196,10 +197,11 @@ mod test {
         let arena = Arena::new(BLOCK_SIZE, &mut mem).unwrap();
         let sb = SuperBlock::new(
             &arena,
-            &Config {
+            &Builder {
                 inodes_per_group: 512,
                 blocks_per_group,
                 size: mem_size,
+                root_dir: None,
             },
         )
         .unwrap();

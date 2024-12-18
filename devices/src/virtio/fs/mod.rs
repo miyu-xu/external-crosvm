@@ -54,8 +54,7 @@ pub use config::CachePolicy;
 pub use config::Config;
 use fuse::Server;
 use passthrough::PassthroughFs;
-pub use worker::process_fs_queue;
-use worker::Worker;
+pub use worker::Worker;
 
 const QUEUE_SIZE: u16 = 1024;
 
@@ -98,7 +97,7 @@ pub enum Error {
     #[error("failed to signal used queue: {0}")]
     SignalUsedQueue(SysError),
     /// The tag for the Fs device was too long to fit in the config space.
-    #[error("Fs device tag is too long: len = {0}, max = {}", FS_MAX_TAG_LEN)]
+    #[error("Fs device tag is too long: len = {0}, max = {FS_MAX_TAG_LEN}")]
     TagTooLong(usize),
     /// Calling unshare to disassociate FS attributes from parent failed.
     #[error("failed to unshare fs from parent: {0}")]
@@ -241,7 +240,7 @@ impl VirtioDevice for Fs {
                 .send(&request)
                 .expect("failed to send allocation message");
             slot = match socket.recv() {
-                Ok(VmResponse::RegisterMemory { gfn: _, slot }) => slot,
+                Ok(VmResponse::RegisterMemory { slot }) => slot,
                 Ok(VmResponse::Err(e)) => panic!("failed to allocate shared memory region: {}", e),
                 r => panic!(
                     "unexpected response to allocate shared memory region: {:?}",

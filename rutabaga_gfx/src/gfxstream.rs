@@ -31,8 +31,8 @@ use crate::rutabaga_core::RutabagaContext;
 use crate::rutabaga_core::RutabagaResource;
 use crate::rutabaga_os::FromRawDescriptor;
 use crate::rutabaga_os::IntoRawDescriptor;
+use crate::rutabaga_os::OwnedDescriptor;
 use crate::rutabaga_os::RawDescriptor;
-use crate::rutabaga_os::SafeDescriptor;
 use crate::rutabaga_utils::*;
 
 // See `virtgpu-gfxstream-renderer.h` for definitions
@@ -185,10 +185,19 @@ extern "C" {
     ) -> c_int;
 
     #[cfg(gfxstream_unstable)]
+    fn stream_renderer_suspend() -> c_int;
+
+    #[cfg(gfxstream_unstable)]
     fn stream_renderer_snapshot(dir: *const c_char) -> c_int;
 
     #[cfg(gfxstream_unstable)]
     fn stream_renderer_restore(dir: *const c_char) -> c_int;
+
+    #[cfg(gfxstream_unstable)]
+    fn stream_renderer_resume() -> c_int;
+
+    #[cfg(gfxstream_unstable)]
+    fn stream_renderer_wait_sync_resource(res_handle: u32) -> c_int;
 }
 
 /// The virtio-gpu backend state tracker which supports accelerated rendering.
@@ -215,7 +224,7 @@ impl GfxstreamContext {
         // SAFETY:
         // Safe because the handle was just returned by a successful gfxstream call so it must
         // be valid and owned by us.
-        let handle = unsafe { SafeDescriptor::from_raw_descriptor(raw_descriptor) };
+        let handle = unsafe { OwnedDescriptor::from_raw_descriptor(raw_descriptor) };
 
         Ok(RutabagaHandle {
             os_handle: handle,
@@ -446,7 +455,7 @@ impl Gfxstream {
         // SAFETY:
         // Safe because the handle was just returned by a successful gfxstream call so it must be
         // valid and owned by us.
-        let handle = unsafe { SafeDescriptor::from_raw_descriptor(raw_descriptor) };
+        let handle = unsafe { OwnedDescriptor::from_raw_descriptor(raw_descriptor) };
 
         Ok(Arc::new(RutabagaHandle {
             os_handle: handle,
@@ -784,6 +793,15 @@ impl RutabagaComponent for Gfxstream {
     }
 
     #[cfg(gfxstream_unstable)]
+    fn suspend(&self) -> RutabagaResult<()> {
+        // SAFETY:
+        // Safe because gfxstream is initialized by now.
+        let ret = unsafe { stream_renderer_suspend() };
+        ret_to_res(ret)?;
+        Ok(())
+    }
+
+    #[cfg(gfxstream_unstable)]
     fn snapshot(&self, directory: &str) -> RutabagaResult<()> {
         let cstring = CString::new(directory)?;
 
@@ -802,6 +820,22 @@ impl RutabagaComponent for Gfxstream {
         // SAFETY:
         // Safe because directory string is valid
         let ret = unsafe { stream_renderer_restore(cstring.as_ptr() as *const c_char) };
+        ret_to_res(ret)?;
+        Ok(())
+    }
+
+    #[cfg(gfxstream_unstable)]
+    fn resume(&self) -> RutabagaResult<()> {
+        // SAFETY:
+        // Safe because gfxstream is initialized by now.
+        let ret = unsafe { stream_renderer_resume() };
+        ret_to_res(ret)?;
+        Ok(())
+    }
+
+    #[cfg(gfxstream_unstable)]
+    fn wait_sync(&self, resource: &RutabagaResource) -> RutabagaResult<()> {
+        let ret = unsafe { stream_renderer_wait_sync_resource(resource.resource_id) };
         ret_to_res(ret)?;
         Ok(())
     }

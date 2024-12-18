@@ -204,6 +204,7 @@ impl SyncWorker {
             for event in events.iter().filter(|e| e.is_readable) {
                 match event.token {
                     Token::Sync => {
+                        timer.mark_waited().unwrap();
                         if let Err(e) = self.file.fsync() {
                             error!("failed to fsync serial device, stopping sync thread: {}", e);
                             return;
@@ -272,8 +273,8 @@ mod tests {
         #[allow(clippy::undocumented_unsafe_blocks)]
         unsafe {
             // Check that serial output is sent to the pipe
-            device.write(serial_bus_address(DATA), &[b'T']);
-            device.write(serial_bus_address(DATA), &[b'D']);
+            device.write(serial_bus_address(DATA), b"T");
+            device.write(serial_bus_address(DATA), b"D");
 
             let mut read_buf: [u8; 2] = [0; 2];
 

@@ -14,9 +14,12 @@ use std::time::Duration;
 use arch::set_default_serial_parameters;
 use arch::CpuSet;
 use arch::FdtPosition;
+use arch::PciConfig;
 use arch::Pstore;
 #[cfg(target_arch = "x86_64")]
 use arch::SmbiosOptions;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+use arch::SveConfig;
 use arch::VcpuAffinity;
 use base::debug;
 use base::pagesize;
@@ -80,14 +83,6 @@ cfg_if::cfg_if! {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-const ONE_MB: u64 = 1 << 20;
-#[cfg(target_arch = "x86_64")]
-const MB_ALIGNED: u64 = ONE_MB - 1;
-// the max bus number is 256 and each bus occupy 1MB, so the max pcie cfg mmio size = 256M
-#[cfg(target_arch = "x86_64")]
-const MAX_PCIE_ECAM_SIZE: u64 = ONE_MB * 256;
-
 // by default, if enabled, the balloon WS features will use 4 bins.
 #[cfg(feature = "balloon")]
 const VIRTIO_BALLOON_WS_DEFAULT_NUM_BINS: u8 = 4;
@@ -141,6 +136,12 @@ pub struct CpuOptions {
     /// Select which CPU to boot from.
     #[serde(default)]
     pub boot_cpu: Option<usize>,
+    /// Vector of CPU ids to be grouped into the same freq domain.
+    #[serde(default)]
+    pub freq_domains: Vec<CpuSet>,
+    /// Scalable Vector Extension.
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    pub sve: Option<SveConfig>,
 }
 
 /// Device tree overlay configuration.
@@ -227,7 +228,10 @@ pub struct VhostUserFrontendOption {
 #[derive(Serialize, Deserialize, FromKeyValues)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct VhostUserFsOption {
-    pub socket: PathBuf,
+    #[serde(alias = "socket")]
+    pub socket_path: Option<PathBuf>,
+    /// File descriptor of connected socket
+    pub socket_fd: Option<u32>,
     pub tag: Option<String>,
 
     /// Maximum number of entries per queue (default: 32768)
@@ -262,9 +266,10 @@ pub fn parse_vhost_user_fs_option(param: &str) -> Result<VhostUserFsOption, Stri
         );
 
         Ok(VhostUserFsOption {
-            socket,
+            socket_path: Some(socket),
             tag: Some(tag),
             max_queue_size: None,
+            socket_fd: None,
         })
     } else {
         from_key_values::<VhostUserFsOption>(param)
@@ -374,6 +379,11 @@ pub enum InputDeviceOption {
         height: Option<u32>,
         name: Option<String>,
     },
+    #[serde(rename_all = "kebab-case")]
+    Custom {
+        path: PathBuf,
+        config_path: PathBuf,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, FromKeyValues)]
@@ -444,10 +454,7 @@ pub fn validate_serial_parameters(params: &SerialParameters) -> Result<(), Strin
         ));
     }
 
-    if params.pci_address.is_some()
-        && params.hardware != SerialHardware::VirtioConsole
-        && params.hardware != SerialHardware::LegacyVirtioConsole
-    {
+    if params.pci_address.is_some() && params.hardware != SerialHardware::VirtioConsole {
         return Err(invalid_value_err(
             params.pci_address.unwrap().to_string(),
             "Providing serial PCI address is only supported for virtio-console hardware type",
@@ -463,63 +470,6 @@ pub fn parse_serial_options(s: &str) -> Result<SerialParameters, String> {
     validate_serial_parameters(&params)?;
 
     Ok(params)
-}
-
-#[cfg(target_arch = "x86_64")]
-pub fn parse_memory_region(value: &str) -> Result<AddressRange, String> {
-    let paras: Vec<&str> = value.split(',').collect();
-    if paras.len() != 2 {
-        return Err(invalid_value_err(
-            value,
-            "pcie-ecam must have exactly 2 parameters: ecam_base,ecam_size",
-        ));
-    }
-    let base = parse_hex_or_decimal(paras[0]).map_err(|_| {
-        invalid_value_err(
-            value,
-            "pcie-ecam, the first parameter base should be integer",
-        )
-    })?;
-    let mut len = parse_hex_or_decimal(paras[1]).map_err(|_| {
-        invalid_value_err(
-            value,
-            "pcie-ecam, the second parameter size should be integer",
-        )
-    })?;
-
-    if (base & MB_ALIGNED != 0) || (len & MB_ALIGNED != 0) {
-        return Err(invalid_value_err(
-            value,
-            "pcie-ecam, the base and len should be aligned to 1MB",
-        ));
-    }
-
-    if len > MAX_PCIE_ECAM_SIZE {
-        len = MAX_PCIE_ECAM_SIZE;
-    }
-
-    if base + len >= 0x1_0000_0000 {
-        return Err(invalid_value_err(
-            value,
-            "pcie-ecam, the end address couldn't beyond 4G",
-        ));
-    }
-
-    if base % len != 0 {
-        return Err(invalid_value_err(
-            value,
-            "pcie-ecam, base should be multiple of len",
-        ));
-    }
-
-    if let Some(range) = AddressRange::from_start_and_size(base, len) {
-        Ok(range)
-    } else {
-        Err(invalid_value_err(
-            value,
-            "pcie-ecam must be representable as AddressRange",
-        ))
-    }
 }
 
 pub fn parse_bus_id_addr(v: &str) -> Result<(u8, u8, u16, u16), String> {
@@ -749,6 +699,7 @@ pub struct Config {
     pub core_scheduling: bool,
     pub cpu_capacity: BTreeMap<usize, u32>, // CPU index -> capacity
     pub cpu_clusters: Vec<CpuSet>,
+    pub cpu_freq_domains: Vec<CpuSet>,
     #[cfg(all(
         any(target_arch = "arm", target_arch = "aarch64"),
         any(target_os = "android", target_os = "linux")
@@ -818,20 +769,19 @@ pub struct Config {
     pub mmio_address_ranges: Vec<AddressRange>,
     #[cfg(target_arch = "aarch64")]
     pub mte: bool,
+    pub name: Option<String>,
     #[cfg(feature = "net")]
     pub net: Vec<NetParameters>,
     #[cfg(windows)]
     pub net_vhost_user_tube: Option<Tube>,
     pub no_i8042: bool,
+    pub no_pmu: bool,
     pub no_rtc: bool,
     pub no_smt: bool,
     pub params: Vec<String>,
+    pub pci_config: PciConfig,
     #[cfg(feature = "pci-hotplug")]
     pub pci_hotplug_slots: Option<u8>,
-    #[cfg(target_arch = "x86_64")]
-    pub pci_low_start: Option<u64>,
-    #[cfg(target_arch = "x86_64")]
-    pub pcie_ecam: Option<AddressRange>,
     pub per_vm_core_scheduling: bool,
     pub pflash_parameters: Option<PflashParameters>,
     #[cfg(feature = "plugin")]
@@ -869,6 +819,8 @@ pub struct Config {
     #[cfg(any(target_os = "android", target_os = "linux"))]
     #[serde(skip)]
     pub shared_dirs: Vec<SharedDir>,
+    #[cfg(feature = "media")]
+    pub simple_media_device: bool,
     #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
     pub slirp_capture_file: Option<String>,
     #[cfg(target_arch = "x86_64")]
@@ -880,6 +832,8 @@ pub struct Config {
     pub sound: Option<PathBuf>,
     pub stub_pci_devices: Vec<StubPciParameters>,
     pub suspended: bool,
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    pub sve: Option<SveConfig>,
     pub swap_dir: Option<PathBuf>,
     pub swiotlb: Option<u64>,
     #[cfg(target_os = "android")]
@@ -887,6 +841,9 @@ pub struct Config {
     #[cfg(any(target_os = "android", target_os = "linux"))]
     pub unmap_guest_memory_on_fork: bool,
     pub usb: bool,
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(feature = "media")]
+    pub v4l2_proxy: Vec<PathBuf>,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_cgroup_path: Option<PathBuf>,
     pub vcpu_count: Option<usize>,
@@ -914,6 +871,7 @@ pub struct Config {
         any(target_os = "android", target_os = "linux")
     ))]
     pub virt_cpufreq: bool,
+    pub virt_cpufreq_v2: bool,
     pub virtio_input: Vec<InputDeviceOption>,
     #[cfg(feature = "audio")]
     #[serde(skip)]
@@ -975,6 +933,7 @@ impl Default for Config {
                 any(target_os = "android", target_os = "linux")
             ))]
             cpu_frequencies_khz: BTreeMap::new(),
+            cpu_freq_domains: Vec::new(),
             delay_rt: false,
             device_tree_overlay: Vec::new(),
             disks: Vec::new(),
@@ -1045,20 +1004,19 @@ impl Default for Config {
             mmio_address_ranges: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             mte: false,
+            name: None,
             #[cfg(feature = "net")]
             net: Vec::new(),
             #[cfg(windows)]
             net_vhost_user_tube: None,
             no_i8042: false,
+            no_pmu: false,
             no_rtc: false,
             no_smt: false,
             params: Vec::new(),
+            pci_config: Default::default(),
             #[cfg(feature = "pci-hotplug")]
             pci_hotplug_slots: None,
-            #[cfg(target_arch = "x86_64")]
-            pci_low_start: None,
-            #[cfg(target_arch = "x86_64")]
-            pcie_ecam: None,
             per_vm_core_scheduling: false,
             pflash_parameters: None,
             #[cfg(feature = "plugin")]
@@ -1089,6 +1047,8 @@ impl Default for Config {
             service_pipe_name: None,
             #[cfg(any(target_os = "android", target_os = "linux"))]
             shared_dirs: Vec::new(),
+            #[cfg(feature = "media")]
+            simple_media_device: Default::default(),
             #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
             slirp_capture_file: None,
             #[cfg(target_arch = "x86_64")]
@@ -1100,6 +1060,8 @@ impl Default for Config {
             sound: None,
             stub_pci_devices: Vec::new(),
             suspended: false,
+            #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+            sve: None,
             swap_dir: None,
             swiotlb: None,
             #[cfg(target_os = "android")]
@@ -1135,9 +1097,13 @@ impl Default for Config {
                 any(target_os = "android", target_os = "linux")
             ))]
             virt_cpufreq: false,
+            virt_cpufreq_v2: false,
             virtio_input: Vec::new(),
             #[cfg(feature = "audio")]
             virtio_snds: Vec::new(),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(feature = "media")]
+            v4l2_proxy: Vec::new(),
             #[cfg(feature = "vtpm")]
             vtpm_proxy: false,
             wayland_socket_paths: BTreeMap::new(),
@@ -1230,8 +1196,8 @@ pub fn validate_config(cfg: &mut Config) -> std::result::Result<(), String> {
         any(target_os = "android", target_os = "linux")
     ))]
     if !cfg.cpu_frequencies_khz.is_empty() {
-        if !cfg.virt_cpufreq {
-            return Err("`cpu-frequencies` requires `virt-cpufreq`".to_string());
+        if !cfg.virt_cpufreq_v2 {
+            return Err("`cpu-frequencies` requires `virt-cpufreq-upstream`".to_string());
         }
 
         if cfg.host_cpu_topology {
@@ -1401,6 +1367,13 @@ mod tests {
     use uuid::uuid;
 
     use super::*;
+
+    fn config_from_args(args: &[&str]) -> Config {
+        crate::crosvm::cmdline::RunCommand::from_args(&[], args)
+            .unwrap()
+            .try_into()
+            .unwrap()
+    }
 
     #[test]
     fn parse_cpu_opts() {
@@ -2071,9 +2044,11 @@ mod tests {
 
         assert_eq!(cfg.vhost_user_fs.len(), 1);
         let fs = &cfg.vhost_user_fs[0];
-        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        let socket = fs.socket_path.as_ref().unwrap();
+        assert_eq!(socket.to_str(), Some("my_socket"));
         assert_eq!(fs.tag, Some("my_tag".to_string()));
         assert_eq!(fs.max_queue_size, None);
+        assert_eq!(fs.socket_fd, None);
     }
 
     #[test]
@@ -2089,7 +2064,31 @@ mod tests {
 
         assert_eq!(cfg.vhost_user_fs.len(), 1);
         let fs = &cfg.vhost_user_fs[0];
-        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        let socket = fs.socket_path.as_ref().unwrap();
+        assert_eq!(socket.to_str(), Some("my_socket"));
+        assert_eq!(fs.tag, Some("my_tag".to_string()));
+        assert_eq!(fs.max_queue_size, None);
+    }
+
+    #[test]
+    fn parse_vhost_user_fs_explict_socket() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &[
+                    "--vhost-user-fs",
+                    "socket=my_socket,tag=my_tag",
+                    "/dev/null",
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.vhost_user_fs.len(), 1);
+        let fs = &cfg.vhost_user_fs[0];
+        let socket = fs.socket_path.as_ref().unwrap();
+        assert_eq!(socket.to_str(), Some("my_socket"));
         assert_eq!(fs.tag, Some("my_tag".to_string()));
         assert_eq!(fs.max_queue_size, None);
     }
@@ -2111,7 +2110,8 @@ mod tests {
 
         assert_eq!(cfg.vhost_user_fs.len(), 1);
         let fs = &cfg.vhost_user_fs[0];
-        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        let socket = fs.socket_path.as_ref().unwrap();
+        assert_eq!(socket.to_str(), Some("my_socket"));
         assert_eq!(fs.tag, Some("my_tag".to_string()));
         assert_eq!(fs.max_queue_size, Some(256));
     }
@@ -2129,9 +2129,33 @@ mod tests {
 
         assert_eq!(cfg.vhost_user_fs.len(), 1);
         let fs = &cfg.vhost_user_fs[0];
-        assert_eq!(fs.socket.to_str(), Some("my_socket"));
+        let socket = fs.socket_path.as_ref().unwrap();
+        assert_eq!(socket.to_str(), Some("my_socket"));
         assert_eq!(fs.tag, None);
         assert_eq!(fs.max_queue_size, None);
+    }
+
+    #[test]
+    fn parse_vhost_user_fs_socket_fd() {
+        let cfg = TryInto::<Config>::try_into(
+            crate::crosvm::cmdline::RunCommand::from_args(
+                &[],
+                &[
+                    "--vhost-user-fs",
+                    "tag=my_tag,max-queue-size=256,socket-fd=1234",
+                    "/dev/null",
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.vhost_user_fs.len(), 1);
+        let fs = &cfg.vhost_user_fs[0];
+        assert!(fs.socket_path.is_none());
+        assert_eq!(fs.tag, Some("my_tag".to_string()));
+        assert_eq!(fs.max_queue_size, Some(256));
+        assert_eq!(fs.socket_fd.unwrap(), 1234_u32);
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -2415,6 +2439,80 @@ mod tests {
             InputDeviceOption::Rotary {
                 path: PathBuf::from("/dev/rotary-test")
             }
+        );
+    }
+
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    #[test]
+    fn parse_pci_cam() {
+        assert_eq!(
+            config_from_args(&["--pci", "cam=[start=0x123]", "/dev/null"]).pci_config,
+            PciConfig {
+                cam: Some(arch::MemoryRegionConfig {
+                    start: 0x123,
+                    size: None,
+                }),
+                ..PciConfig::default()
+            }
+        );
+        assert_eq!(
+            config_from_args(&["--pci", "cam=[start=0x123,size=0x456]", "/dev/null"]).pci_config,
+            PciConfig {
+                cam: Some(arch::MemoryRegionConfig {
+                    start: 0x123,
+                    size: Some(0x456),
+                }),
+                ..PciConfig::default()
+            },
+        );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn parse_pci_ecam() {
+        assert_eq!(
+            config_from_args(&["--pci", "ecam=[start=0x123]", "/dev/null"]).pci_config,
+            PciConfig {
+                ecam: Some(arch::MemoryRegionConfig {
+                    start: 0x123,
+                    size: None,
+                }),
+                ..PciConfig::default()
+            }
+        );
+        assert_eq!(
+            config_from_args(&["--pci", "ecam=[start=0x123,size=0x456]", "/dev/null"]).pci_config,
+            PciConfig {
+                ecam: Some(arch::MemoryRegionConfig {
+                    start: 0x123,
+                    size: Some(0x456),
+                }),
+                ..PciConfig::default()
+            },
+        );
+    }
+
+    #[test]
+    fn parse_pci_mem() {
+        assert_eq!(
+            config_from_args(&["--pci", "mem=[start=0x123]", "/dev/null"]).pci_config,
+            PciConfig {
+                mem: Some(arch::MemoryRegionConfig {
+                    start: 0x123,
+                    size: None,
+                }),
+                ..PciConfig::default()
+            }
+        );
+        assert_eq!(
+            config_from_args(&["--pci", "mem=[start=0x123,size=0x456]", "/dev/null"]).pci_config,
+            PciConfig {
+                mem: Some(arch::MemoryRegionConfig {
+                    start: 0x123,
+                    size: Some(0x456),
+                }),
+                ..PciConfig::default()
+            },
         );
     }
 

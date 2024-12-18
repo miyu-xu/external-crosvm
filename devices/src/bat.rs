@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use acpi_tables::aml;
 use acpi_tables::aml::Aml;
+use anyhow::bail;
 use anyhow::Context;
 use base::error;
 use base::warn;
@@ -17,12 +18,14 @@ use base::Tube;
 use base::WaitContext;
 use base::WorkerThread;
 use power_monitor::BatteryStatus;
+use power_monitor::CreatePowerClientFn;
 use power_monitor::CreatePowerMonitorFn;
 use remain::sorted;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;
 use thiserror::Error;
+use vm_control::BatConfig;
 use vm_control::BatControlCommand;
 use vm_control::BatControlResult;
 
@@ -62,6 +65,7 @@ struct GoldfishBatteryState {
     current: u32,
     charge_counter: u32,
     charge_full: u32,
+    initialized: bool,
 }
 
 macro_rules! create_battery_func {
@@ -117,6 +121,9 @@ pub struct GoldfishBattery {
     monitor_thread: Option<WorkerThread<()>>,
     tube: Option<Tube>,
     create_power_monitor: Option<Box<dyn CreatePowerMonitorFn>>,
+    create_powerd_client: Option<Box<dyn CreatePowerClientFn>>,
+    // battery_config is used for goldfish battery to report fake battery to the guest.
+    battery_config: Arc<Mutex<BatConfig>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -159,6 +166,9 @@ const BATTERY_STATUS_VAL_NOT_CHARGING: u32 = 3;
 /// Goldfish Battery health
 const BATTERY_HEALTH_VAL_UNKNOWN: u32 = 0;
 
+// Goldfish ac online status
+const AC_ONLINE_VAL_OFFLINE: u32 = 0;
+
 #[derive(EventToken)]
 pub(crate) enum Token {
     Commands,
@@ -173,6 +183,7 @@ fn command_monitor(
     kill_evt: Event,
     state: Arc<Mutex<GoldfishBatteryState>>,
     create_power_monitor: Option<Box<dyn CreatePowerMonitorFn>>,
+    battery_config: Arc<Mutex<BatConfig>>,
 ) {
     let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
         (&tube, Token::Commands),
@@ -223,6 +234,7 @@ fn command_monitor(
                         }
                     };
 
+                    let mut bat_config = battery_config.lock();
                     let mut bat_state = state.lock();
                     let inject_irq = match req {
                         BatControlCommand::SetStatus(status) => bat_state.set_status(status.into()),
@@ -238,6 +250,15 @@ fn command_monitor(
                         BatControlCommand::SetACOnline(ac_online) => {
                             let v = ac_online != 0;
                             bat_state.set_ac_online(v.into())
+                        }
+                        BatControlCommand::SetFakeBatConfig(max_capacity) => {
+                            let max_capacity = std::cmp::min(max_capacity, 100);
+                            *bat_config = BatConfig::Fake { max_capacity };
+                            true
+                        }
+                        BatControlCommand::CancelFakeConfig => {
+                            *bat_config = BatConfig::Real;
+                            true
                         }
                     };
 
@@ -323,6 +344,7 @@ impl GoldfishBattery {
         irq_evt: IrqLevelEvent,
         tube: Tube,
         create_power_monitor: Option<Box<dyn CreatePowerMonitorFn>>,
+        create_powerd_client: Option<Box<dyn CreatePowerClientFn>>,
     ) -> Result<Self> {
         if mmio_base + GOLDFISHBAT_MMIO_LEN - 1 > u32::MAX as u64 {
             return Err(BatteryError::Non32BitMmioAddress);
@@ -339,7 +361,10 @@ impl GoldfishBattery {
             current: 0,
             charge_counter: 0,
             charge_full: 0,
+            initialized: false,
         }));
+
+        let battery_config = Arc::new(Mutex::new(BatConfig::default()));
 
         Ok(GoldfishBattery {
             state,
@@ -350,6 +375,8 @@ impl GoldfishBattery {
             monitor_thread: None,
             tube: Some(tube),
             create_power_monitor,
+            create_powerd_client,
+            battery_config,
         })
     }
 
@@ -377,10 +404,58 @@ impl GoldfishBattery {
             let irq_evt = self.irq_evt.try_clone().unwrap();
             let bat_state = self.state.clone();
             let create_monitor_fn = self.create_power_monitor.take();
+            let battery_config = self.battery_config.clone();
             self.monitor_thread = Some(WorkerThread::start(self.debug_label(), move |kill_evt| {
-                command_monitor(tube, irq_evt, kill_evt, bat_state, create_monitor_fn)
+                command_monitor(
+                    tube,
+                    irq_evt,
+                    kill_evt,
+                    bat_state,
+                    create_monitor_fn,
+                    battery_config,
+                )
             }));
             self.activated = true;
+        }
+    }
+
+    fn initialize_battery_state(&mut self) -> anyhow::Result<()> {
+        let mut power_client = match &self.create_powerd_client {
+            Some(f) => match f() {
+                Ok(c) => c,
+                Err(e) => bail!("failed to connect to the powerd: {:#}", e),
+            },
+            None => return Ok(()),
+        };
+        match power_client.get_power_data() {
+            Ok(data) => {
+                let mut bat_state = self.state.lock();
+                bat_state.set_ac_online(data.ac_online.into());
+
+                match data.battery {
+                    Some(battery_data) => {
+                        bat_state.set_capacity(battery_data.percent);
+                        let battery_status = match battery_data.status {
+                            BatteryStatus::Unknown => BATTERY_STATUS_VAL_UNKNOWN,
+                            BatteryStatus::Charging => BATTERY_STATUS_VAL_CHARGING,
+                            BatteryStatus::Discharging => BATTERY_STATUS_VAL_DISCHARGING,
+                            BatteryStatus::NotCharging => BATTERY_STATUS_VAL_NOT_CHARGING,
+                        };
+                        bat_state.set_status(battery_status);
+                        bat_state.set_voltage(battery_data.voltage);
+                        bat_state.set_current(battery_data.current);
+                        bat_state.set_charge_counter(battery_data.charge_counter);
+                        bat_state.set_charge_full(battery_data.charge_full);
+                    }
+                    None => {
+                        bat_state.set_present(0);
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => {
+                bail!("failed to get response from powerd: {:#}", e);
+            }
         }
     }
 }
@@ -412,17 +487,43 @@ impl BusDevice for GoldfishBattery {
             return;
         }
 
+        // Before first read, we try to ask powerd the actual power data to initialize `self.state`.
+        if !self.state.lock().initialized {
+            match self.initialize_battery_state() {
+                Ok(()) => self.state.lock().initialized = true,
+                Err(e) => {
+                    error!(
+                        "{}: failed to get power data and update: {:#}",
+                        self.debug_label(),
+                        e
+                    );
+                }
+            }
+        }
+
         let val = match info.offset as u32 {
             BATTERY_INT_STATUS => {
                 // read to clear the interrupt status
                 std::mem::replace(&mut self.state.lock().int_status, 0)
             }
             BATTERY_INT_ENABLE => self.state.lock().int_enable,
-            BATTERY_AC_ONLINE => self.state.lock().ac_online,
-            BATTERY_STATUS => self.state.lock().status,
+            BATTERY_AC_ONLINE => match *self.battery_config.lock() {
+                BatConfig::Real => self.state.lock().ac_online,
+                BatConfig::Fake { max_capacity: _ } => AC_ONLINE_VAL_OFFLINE,
+            },
+            BATTERY_STATUS => match *self.battery_config.lock() {
+                BatConfig::Real => self.state.lock().status,
+                BatConfig::Fake { max_capacity: _ } => BATTERY_STATUS_VAL_DISCHARGING,
+            },
             BATTERY_HEALTH => self.state.lock().health,
             BATTERY_PRESENT => self.state.lock().present,
-            BATTERY_CAPACITY => self.state.lock().capacity,
+            BATTERY_CAPACITY => {
+                let max_capacity = match *self.battery_config.lock() {
+                    BatConfig::Real => 100,
+                    BatConfig::Fake { max_capacity } => max_capacity,
+                };
+                std::cmp::min(max_capacity, self.state.lock().capacity)
+            }
             BATTERY_VOLTAGE => self.state.lock().voltage,
             BATTERY_TEMP => 0,
             BATTERY_CHARGE_COUNTER => self.state.lock().charge_counter,
@@ -546,6 +647,7 @@ mod tests {
             0,
             IrqLevelEvent::new().unwrap(),
             Tube::pair().unwrap().1,
+            None,
             None,
         ).unwrap(),
         modify_device

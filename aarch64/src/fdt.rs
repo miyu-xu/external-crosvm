@@ -5,6 +5,8 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 
 use arch::apply_device_tree_overlays;
@@ -13,6 +15,7 @@ use arch::CpuSet;
 use arch::DtbOverlay;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use arch::PlatformBusResources;
+use base::open_file_or_duplicate;
 use cros_fdt::Error;
 use cros_fdt::Fdt;
 use cros_fdt::Result;
@@ -47,6 +50,7 @@ use crate::AARCH64_RTC_SIZE;
 use crate::AARCH64_SERIAL_SPEED;
 use crate::AARCH64_VIRTFREQ_BASE;
 use crate::AARCH64_VIRTFREQ_SIZE;
+use crate::AARCH64_VIRTFREQ_V2_SIZE;
 use crate::AARCH64_VMWDT_IRQ;
 
 // This is an arbitrary number to specify the node for the GIC.
@@ -242,6 +246,16 @@ fn create_virt_cpufreq_node(fdt: &mut Fdt, num_cpus: u64) -> Result<()> {
     let compatible = "virtual,android-v-only-cpufreq";
     let vcf_node = fdt.root_mut().subnode_mut("cpufreq")?;
     let reg = [AARCH64_VIRTFREQ_BASE, AARCH64_VIRTFREQ_SIZE * num_cpus];
+
+    vcf_node.set_prop("compatible", compatible)?;
+    vcf_node.set_prop("reg", &reg)?;
+    Ok(())
+}
+
+fn create_virt_cpufreq_v2_node(fdt: &mut Fdt, num_cpus: u64) -> Result<()> {
+    let compatible = "qemu,virtual-cpufreq";
+    let vcf_node = fdt.root_mut().subnode_mut("cpufreq")?;
+    let reg = [AARCH64_VIRTFREQ_BASE, AARCH64_VIRTFREQ_V2_SIZE * num_cpus];
 
     vcf_node.set_prop("compatible", compatible)?;
     vcf_node.set_prop("reg", &reg)?;
@@ -662,6 +676,7 @@ pub fn create_fdt(
     dynamic_power_coefficient: BTreeMap<usize, u32>,
     device_tree_overlays: Vec<DtbOverlay>,
     serial_devices: &[SerialDeviceInfo],
+    virt_cpufreq_v2: bool,
 ) -> Result<()> {
     let mut fdt = Fdt::new(&[]);
     let mut phandles_key_cache = Vec::new();
@@ -716,7 +731,11 @@ pub fn create_fdt(
     create_kvm_cpufreq_node(&mut fdt)?;
     vm_generator(&mut fdt, &phandles)?;
     if !cpu_frequencies.is_empty() {
-        create_virt_cpufreq_node(&mut fdt, num_cpus as u64)?;
+        if virt_cpufreq_v2 {
+            create_virt_cpufreq_v2_node(&mut fdt, num_cpus as u64)?;
+        } else {
+            create_virt_cpufreq_node(&mut fdt, num_cpus as u64)?;
+        }
     }
 
     let pviommu_ids = get_pkvm_pviommu_ids(&platform_dev_resources)?;
@@ -744,7 +763,16 @@ pub fn create_fdt(
     let fdt_final = fdt.finish()?;
 
     if let Some(file_path) = dump_device_tree_blob {
-        std::fs::write(&file_path, &fdt_final)
+        let mut fd = open_file_or_duplicate(
+            &file_path,
+            OpenOptions::new()
+                .read(true)
+                .create(true)
+                .truncate(true)
+                .write(true),
+        )
+        .map_err(|e| Error::FdtIoError(e.into()))?;
+        fd.write_all(&fdt_final)
             .map_err(|e| Error::FdtDumpIoError(e, file_path.clone()))?;
     }
 

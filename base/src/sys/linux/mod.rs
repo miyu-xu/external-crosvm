@@ -40,6 +40,7 @@ mod timer;
 pub mod vsock;
 mod write_zeroes;
 
+use std::ffi::CString;
 use std::fs::remove_file;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -69,6 +70,7 @@ use libc::c_int;
 use libc::c_long;
 use libc::fcntl;
 use libc::pipe2;
+use libc::prctl;
 use libc::syscall;
 use libc::waitpid;
 use libc::SYS_getpid;
@@ -76,6 +78,7 @@ use libc::SYS_getppid;
 use libc::SYS_gettid;
 use libc::EINVAL;
 use libc::O_CLOEXEC;
+use libc::PR_SET_NAME;
 use libc::SIGKILL;
 use libc::WNOHANG;
 pub use mmap::*;
@@ -113,6 +116,19 @@ use crate::Pid;
 pub type Uid = libc::uid_t;
 pub type Gid = libc::gid_t;
 pub type Mode = libc::mode_t;
+
+/// Safe wrapper for PR_SET_NAME(2const)
+#[inline(always)]
+pub fn set_thread_name(name: &str) -> Result<()> {
+    let name = CString::new(name).or(Err(Error::new(EINVAL)))?;
+    // SAFETY: prctl copies name and doesn't expect it to outlive this function.
+    let ret = unsafe { prctl(PR_SET_NAME, name.as_c_str()) };
+    if ret == 0 {
+        Ok(())
+    } else {
+        errno_result()
+    }
+}
 
 /// This bypasses `libc`'s caching `getpid(2)` wrapper which can be invalid if a raw clone was used
 /// elsewhere.
@@ -450,17 +466,17 @@ impl Drop for UnlinkUnixListener {
 /// Verifies that |raw_descriptor| is actually owned by this process and duplicates it
 /// to ensure that we have a unique handle to it.
 pub fn validate_raw_descriptor(raw_descriptor: RawDescriptor) -> Result<RawDescriptor> {
-    validate_raw_fd(raw_descriptor)
+    validate_raw_fd(&raw_descriptor)
 }
 
 /// Verifies that |raw_fd| is actually owned by this process and duplicates it to ensure that
 /// we have a unique handle to it.
-pub fn validate_raw_fd(raw_fd: RawFd) -> Result<RawFd> {
+pub fn validate_raw_fd(raw_fd: &RawFd) -> Result<RawFd> {
     // Checking that close-on-exec isn't set helps filter out FDs that were opened by
     // crosvm as all crosvm FDs are close on exec.
     // SAFETY:
     // Safe because this doesn't modify any memory and we check the return value.
-    let flags = unsafe { libc::fcntl(raw_fd, libc::F_GETFD) };
+    let flags = unsafe { libc::fcntl(*raw_fd, libc::F_GETFD) };
     if flags < 0 || (flags & libc::FD_CLOEXEC) != 0 {
         return Err(Error::new(libc::EBADF));
     }
@@ -469,7 +485,7 @@ pub fn validate_raw_fd(raw_fd: RawFd) -> Result<RawFd> {
     // Duplicate the fd to ensure that we don't accidentally close an fd previously
     // opened by another subsystem.  Safe because this doesn't modify any memory and
     // we check the return value.
-    let dup_fd = unsafe { libc::fcntl(raw_fd, libc::F_DUPFD_CLOEXEC, 0) };
+    let dup_fd = unsafe { libc::fcntl(*raw_fd, libc::F_DUPFD_CLOEXEC, 0) };
     if dup_fd < 0 {
         return Err(Error::last());
     }
@@ -513,7 +529,7 @@ pub fn safe_descriptor_from_path<P: AsRef<Path>>(path: P) -> Result<Option<SafeD
             .and_then(|fd_osstr| fd_osstr.to_str())
             .and_then(|fd_str| fd_str.parse::<RawFd>().ok())
             .ok_or_else(|| Error::new(EINVAL))?;
-        let validated_fd = validate_raw_fd(raw_descriptor)?;
+        let validated_fd = validate_raw_fd(&raw_descriptor)?;
         Ok(Some(
             // SAFETY:
             // Safe because nothing else has access to validated_fd after this call.
@@ -522,6 +538,18 @@ pub fn safe_descriptor_from_path<P: AsRef<Path>>(path: P) -> Result<Option<SafeD
     } else {
         Ok(None)
     }
+}
+
+/// Check FD is not opened by crosvm and returns a FD that is freshly DUPFD_CLOEXEC's.
+/// A SafeDescriptor is created from the duplicated fd. It does not take ownership of
+/// fd passed by argument.
+pub fn safe_descriptor_from_cmdline_fd(fd: &RawFd) -> Result<SafeDescriptor> {
+    let validated_fd = validate_raw_fd(fd)?;
+    Ok(
+        // SAFETY:
+        // Safe because nothing else has access to validated_fd after this call.
+        unsafe { SafeDescriptor::from_raw_descriptor(validated_fd) },
+    )
 }
 
 /// Open the file with the given path, or if it is of the form `/proc/self/fd/N` then just use the
@@ -540,8 +568,8 @@ pub fn open_file_or_duplicate<P: AsRef<Path>>(path: P, options: &OpenOptions) ->
     })
 }
 
-/// Get the max number of open files allowed by the environment.
-pub fn max_open_files() -> Result<u64> {
+/// Get the soft and hard limits of max number of open files allowed by the environment.
+pub fn max_open_files() -> Result<libc::rlimit64> {
     let mut buf = mem::MaybeUninit::<libc::rlimit64>::zeroed();
 
     // SAFETY:
@@ -551,7 +579,44 @@ pub fn max_open_files() -> Result<u64> {
         // SAFETY:
         // Safe because the kernel guarantees that the struct is fully initialized.
         let limit = unsafe { buf.assume_init() };
-        Ok(limit.rlim_max)
+        Ok(limit)
+    } else {
+        errno_result()
+    }
+}
+
+/// Executes the given callback with extended soft limit of max number of open files. After the
+/// callback executed, restore the limit.
+pub fn call_with_extended_max_files<T, E>(
+    callback: impl FnOnce() -> std::result::Result<T, E>,
+) -> Result<std::result::Result<T, E>> {
+    let cur_limit = max_open_files()?;
+    let new_limit = libc::rlimit64 {
+        rlim_cur: cur_limit.rlim_max,
+        ..cur_limit
+    };
+    let needs_extension = cur_limit.rlim_cur < new_limit.rlim_cur;
+    if needs_extension {
+        set_max_open_files(new_limit)?;
+    }
+
+    let r = callback();
+
+    // Restore the soft limit.
+    if needs_extension {
+        set_max_open_files(cur_limit)?;
+    }
+
+    Ok(r)
+}
+
+/// Set the soft and hard limits of max number of open files to the given value.
+fn set_max_open_files(limit: libc::rlimit64) -> Result<()> {
+    // SAFETY: RLIMIT_NOFILE is known only to read a buffer of size rlimit64, and we have always
+    // rlimit64 allocated.
+    let res = unsafe { libc::setrlimit64(libc::RLIMIT_NOFILE, &limit) };
+    if res == 0 {
+        Ok(())
     } else {
         errno_result()
     }

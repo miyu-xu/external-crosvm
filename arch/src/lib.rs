@@ -68,8 +68,6 @@ use jail::FakeMinijailStub as Minijail;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
 use remain::sorted;
-#[cfg(target_arch = "x86_64")]
-use resources::AddressRange;
 use resources::SystemAllocator;
 use resources::SystemAllocatorConfig;
 use serde::de::Visitor;
@@ -93,6 +91,7 @@ use vm_control::PmResource;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
+use vm_memory::MemoryRegionInformation;
 use vm_memory::MemoryRegionOptions;
 
 cfg_if::cfg_if! {
@@ -170,6 +169,15 @@ impl FromIterator<usize> for CpuSet {
     {
         CpuSet::new(iter)
     }
+}
+
+/// The SVE config for Vcpus.
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct SveConfig {
+    /// Use SVE
+    pub enable: bool,
 }
 
 fn parse_cpu_range(s: &str, cpuset: &mut Vec<usize>) -> Result<(), String> {
@@ -333,6 +341,26 @@ pub enum VcpuAffinity {
     PerVcpu(BTreeMap<usize, CpuSet>),
 }
 
+/// Memory region with optional size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, FromKeyValues)]
+pub struct MemoryRegionConfig {
+    pub start: u64,
+    pub size: Option<u64>,
+}
+
+/// General PCI config.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, FromKeyValues)]
+pub struct PciConfig {
+    /// region for PCI Configuration Access Mechanism
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    pub cam: Option<MemoryRegionConfig>,
+    /// region for PCIe Enhanced Configuration Access Mechanism
+    #[cfg(target_arch = "x86_64")]
+    pub ecam: Option<MemoryRegionConfig>,
+    /// region for non-prefetchable PCI device memory below 4G
+    pub mem: Option<MemoryRegionConfig>,
+}
+
 /// Holds the pieces needed to build a VM. Passed to `build_vm` in the `LinuxArch` trait below to
 /// create a `RunnableLinuxVm`.
 #[sorted]
@@ -359,8 +387,6 @@ pub struct VmComponents {
     pub force_s2idle: bool,
     pub fw_cfg_enable: bool,
     pub fw_cfg_parameters: Vec<FwCfgParameters>,
-    #[cfg(feature = "gdb")]
-    pub gdb: Option<(u32, Tube)>, // port and control tube.
     pub host_cpu_topology: bool,
     pub hugepages: bool,
     pub hv_cfg: hypervisor::Config,
@@ -375,10 +401,7 @@ pub struct VmComponents {
         any(target_os = "android", target_os = "linux")
     ))]
     pub normalized_cpu_capacities: BTreeMap<usize, u32>,
-    #[cfg(target_arch = "x86_64")]
-    pub pci_low_start: Option<u64>,
-    #[cfg(target_arch = "x86_64")]
-    pub pcie_ecam: Option<AddressRange>,
+    pub pci_config: PciConfig,
     pub pflash_block_size: u32,
     pub pflash_image: Option<File>,
     pub pstore: Option<Pstore>,
@@ -388,9 +411,26 @@ pub struct VmComponents {
     pub rt_cpus: CpuSet,
     #[cfg(target_arch = "x86_64")]
     pub smbios: SmbiosOptions,
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    pub sve_config: SveConfig,
     pub swiotlb: Option<u64>,
     pub vcpu_affinity: Option<VcpuAffinity>,
     pub vcpu_count: usize,
+    #[cfg(all(
+        any(target_arch = "arm", target_arch = "aarch64"),
+        any(target_os = "android", target_os = "linux")
+    ))]
+    pub vcpu_domain_paths: BTreeMap<usize, PathBuf>,
+    #[cfg(all(
+        any(target_arch = "arm", target_arch = "aarch64"),
+        any(target_os = "android", target_os = "linux")
+    ))]
+    pub vcpu_domains: BTreeMap<usize, u32>,
+    #[cfg(all(
+        any(target_arch = "arm", target_arch = "aarch64"),
+        any(target_os = "android", target_os = "linux")
+    ))]
+    pub virt_cpufreq_v2: bool,
     pub vm_image: VmImage,
 }
 
@@ -400,8 +440,6 @@ pub struct RunnableLinuxVm<V: VmArch, Vcpu: VcpuArch> {
     pub bat_control: Option<BatControl>,
     pub delay_rt: bool,
     pub devices_thread: Option<std::thread::JoinHandle<()>>,
-    #[cfg(feature = "gdb")]
-    pub gdb: Option<(u32, Tube)>,
     pub hotplug_bus: BTreeMap<u8, Arc<Mutex<dyn HotPlugBus>>>,
     pub io_bus: Arc<Bus>,
     pub irq_chip: Box<dyn IrqChipArch>,
@@ -436,6 +474,13 @@ pub struct VirtioDeviceStub {
 /// set up the memory, cpus, and system devices and to boot the kernel.
 pub trait LinuxArch {
     type Error: StdError;
+    type ArchMemoryLayout;
+
+    /// Decide architecture specific memory layout details to be used by later stages of the VM
+    /// setup.
+    fn arch_memory_layout(
+        components: &VmComponents,
+    ) -> std::result::Result<Self::ArchMemoryLayout, Self::Error>;
 
     /// Returns a Vec of the valid memory addresses as pairs of address and length. These should be
     /// used to configure the `GuestMemory` structure for the platform.
@@ -445,6 +490,7 @@ pub trait LinuxArch {
     /// * `components` - Parts used to determine the memory layout.
     fn guest_memory_layout(
         components: &VmComponents,
+        arch_memory_layout: &Self::ArchMemoryLayout,
         hypervisor: &impl hypervisor::Hypervisor,
     ) -> std::result::Result<Vec<(GuestAddress, u64, MemoryRegionOptions)>, Self::Error>;
 
@@ -457,7 +503,10 @@ pub trait LinuxArch {
     /// # Arguments
     ///
     /// * `vm` - The virtual machine to be used as a template for the `SystemAllocator`.
-    fn get_system_allocator_config<V: Vm>(vm: &V) -> SystemAllocatorConfig;
+    fn get_system_allocator_config<V: Vm>(
+        vm: &V,
+        arch_memory_layout: &Self::ArchMemoryLayout,
+    ) -> SystemAllocatorConfig;
 
     /// Takes `VmComponents` and generates a `RunnableLinuxVm`.
     ///
@@ -481,6 +530,7 @@ pub trait LinuxArch {
     /// * `device_tree_overlays` - Device tree overlay binaries
     fn build_vm<V, Vcpu>(
         components: VmComponents,
+        arch_memory_layout: &Self::ArchMemoryLayout,
         vm_evt_wrtube: &SendTube,
         system_allocator: &mut SystemAllocator,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
@@ -499,6 +549,7 @@ pub trait LinuxArch {
         guest_suspended_cvar: Option<Arc<(Mutex<bool>, Condvar)>>,
         device_tree_overlays: Vec<DtbOverlay>,
         fdt_position: Option<FdtPosition>,
+        no_pmu: bool,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmArch,
@@ -893,7 +944,7 @@ pub fn generate_virtio_mmio_bus(
 }
 
 // Generate pci topology starting from parent bus
-pub fn generate_pci_topology(
+fn generate_pci_topology(
     parent_bus: Arc<Mutex<PciBus>>,
     resources: &mut SystemAllocator,
     io_ranges: &mut BTreeMap<usize, Vec<BarRange>>,
@@ -1308,6 +1359,8 @@ where
 /// * `image` - The file containing the image to be loaded.
 /// * `min_guest_addr` - The minimum address of the start of the image.
 /// * `max_guest_addr` - The address to load the last byte of the image.
+/// * `region_filter` - The optional filter function for determining if the given guest memory
+///   region is suitable for loading the image into it.
 /// * `align` - The minimum alignment of the start address of the image in bytes (must be a power of
 ///   two).
 ///
@@ -1317,6 +1370,7 @@ pub fn load_image_high<F>(
     image: &mut F,
     min_guest_addr: GuestAddress,
     max_guest_addr: GuestAddress,
+    region_filter: Option<fn(&MemoryRegionInformation) -> bool>,
     align: u64,
 ) -> Result<(GuestAddress, usize), LoadImageError>
 where
@@ -1339,7 +1393,10 @@ where
 
     // Sort the list of guest memory regions by address so we can iterate over them in reverse order
     // (high to low).
-    let mut regions: Vec<_> = guest_mem.regions().collect();
+    let mut regions: Vec<_> = guest_mem
+        .regions()
+        .filter(region_filter.unwrap_or(|_| true))
+        .collect();
     regions.sort_unstable_by(|a, b| a.guest_addr.cmp(&b.guest_addr));
 
     // Find the highest valid address inside a guest memory region that satisfies the requested
@@ -1487,6 +1544,7 @@ mod tests {
             &mut test_image,
             GuestAddress(0x8000),
             GuestAddress(0xFFFF_FFFF), // max_guest_addr beyond highest guest memory region
+            None,
             TEST_ALIGN,
         )
         .unwrap();

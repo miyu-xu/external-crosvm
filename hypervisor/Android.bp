@@ -29,7 +29,7 @@ rust_test {
     rustlibs: [
         "libanyhow",
         "libbase_rust",
-        "libbit_field",
+        "libbit_field_crosvm",
         "libbitflags",
         "libcros_fdt",
         "libdata_model",
@@ -42,7 +42,7 @@ rust_test {
         "libserde_json",
         "libsync_rust",
         "libvm_memory",
-        "libzerocopy",
+        "libzerocopy-0.7.35",
     ],
     proc_macros: [
         "libenumn",
@@ -71,7 +71,7 @@ rust_test {
     rustlibs: [
         "libanyhow",
         "libbase_rust",
-        "libbit_field",
+        "libbit_field_crosvm",
         "libbitflags",
         "libcros_fdt",
         "libdata_model",
@@ -85,7 +85,7 @@ rust_test {
         "libserde_json",
         "libsync_rust",
         "libvm_memory",
-        "libzerocopy",
+        "libzerocopy-0.7.35",
     ],
     proc_macros: [
         "libenumn",
@@ -114,7 +114,7 @@ rust_test {
     rustlibs: [
         "libanyhow",
         "libbase_rust",
-        "libbit_field",
+        "libbit_field_crosvm",
         "libbitflags",
         "libcros_fdt",
         "libdata_model",
@@ -128,7 +128,7 @@ rust_test {
         "libserde_json",
         "libsync_rust",
         "libvm_memory",
-        "libzerocopy",
+        "libzerocopy-0.7.35",
     ],
     proc_macros: [
         "libenumn",
@@ -157,7 +157,7 @@ rust_test {
     rustlibs: [
         "libanyhow",
         "libbase_rust",
-        "libbit_field",
+        "libbit_field_crosvm",
         "libbitflags",
         "libcros_fdt",
         "libdata_model",
@@ -171,7 +171,7 @@ rust_test {
         "libserde_json",
         "libsync_rust",
         "libvm_memory",
-        "libzerocopy",
+        "libzerocopy-0.7.35",
     ],
     proc_macros: [
         "libenumn",
@@ -200,7 +200,7 @@ rust_test {
     rustlibs: [
         "libanyhow",
         "libbase_rust",
-        "libbit_field",
+        "libbit_field_crosvm",
         "libbitflags",
         "libcros_fdt",
         "libdata_model",
@@ -214,7 +214,7 @@ rust_test {
         "libserde_json",
         "libsync_rust",
         "libvm_memory",
-        "libzerocopy",
+        "libzerocopy-0.7.35",
     ],
     proc_macros: [
         "libenumn",
@@ -243,7 +243,7 @@ rust_test {
     rustlibs: [
         "libanyhow",
         "libbase_rust",
-        "libbit_field",
+        "libbit_field_crosvm",
         "libbitflags",
         "libcros_fdt",
         "libdata_model",
@@ -257,7 +257,7 @@ rust_test {
         "libserde_json",
         "libsync_rust",
         "libvm_memory",
-        "libzerocopy",
+        "libzerocopy-0.7.35",
     ],
     proc_macros: [
         "libenumn",
@@ -286,7 +286,7 @@ rust_test {
     rustlibs: [
         "libanyhow",
         "libbase_rust",
-        "libbit_field",
+        "libbit_field_crosvm",
         "libbitflags",
         "libcros_fdt",
         "libdata_model",
@@ -300,7 +300,7 @@ rust_test {
         "libserde_json",
         "libsync_rust",
         "libvm_memory",
-        "libzerocopy",
+        "libzerocopy-0.7.35",
     ],
     proc_macros: [
         "libenumn",
@@ -329,7 +329,7 @@ rust_test {
     rustlibs: [
         "libanyhow",
         "libbase_rust",
-        "libbit_field",
+        "libbit_field_crosvm",
         "libbitflags",
         "libcros_fdt",
         "libdata_model",
@@ -343,7 +343,7 @@ rust_test {
         "libserde_json",
         "libsync_rust",
         "libvm_memory",
-        "libzerocopy",
+        "libzerocopy-0.7.35",
     ],
     proc_macros: [
         "libenumn",
@@ -372,7 +372,7 @@ rust_test {
     rustlibs: [
         "libanyhow",
         "libbase_rust",
-        "libbit_field",
+        "libbit_field_crosvm",
         "libbitflags",
         "libcros_fdt",
         "libdata_model",
@@ -386,7 +386,7 @@ rust_test {
         "libserde_json",
         "libsync_rust",
         "libvm_memory",
-        "libzerocopy",
+        "libzerocopy-0.7.35",
     ],
     proc_macros: [
         "libenumn",
@@ -410,7 +410,7 @@ rust_library {
     rustlibs: [
         "libanyhow",
         "libbase_rust",
-        "libbit_field",
+        "libbit_field_crosvm",
         "libbitflags",
         "libcros_fdt",
         "libdata_model",

@@ -10,10 +10,13 @@
 mod arena;
 mod bitmap;
 mod blockgroup;
+mod builder;
 mod fs;
 mod inode;
 mod superblock;
+mod xattr;
 
 pub use blockgroup::BLOCK_SIZE;
-pub use fs::create_ext2_region;
-pub use superblock::Config;
+pub use builder::Builder;
+pub use xattr::dump_xattrs;
+pub use xattr::set_xattr;

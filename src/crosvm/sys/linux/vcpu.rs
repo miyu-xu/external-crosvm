@@ -64,35 +64,6 @@ const SCHED_FLAG_UTIL_CLAMP_MIN: u64 = 0x20;
 const SCHED_SCALE_CAPACITY: u32 = 1024;
 const SCHED_FLAG_KEEP_ALL: u64 = SCHED_FLAG_KEEP_POLICY | SCHED_FLAG_KEEP_PARAMS;
 
-fn bus_io_handler(bus: &Bus) -> impl FnMut(IoParams) -> Option<[u8; 8]> + '_ {
-    |IoParams {
-         address,
-         mut size,
-         operation: direction,
-     }| match direction {
-        IoOperation::Read => {
-            let mut data = [0u8; 8];
-            if size > data.len() {
-                error!("unsupported Read size of {} bytes", size);
-                size = data.len();
-            }
-            // Ignore the return value of `read()`. If no device exists on the bus at the given
-            // location, return the initial value of data, which is all zeroes.
-            let _ = bus.read(address, &mut data[..size]);
-            Some(data)
-        }
-        IoOperation::Write { data } => {
-            if size > data.len() {
-                error!("unsupported Write size of {} bytes", size);
-                size = data.len()
-            }
-            let data = &data[..size];
-            bus.write(address, data);
-            None
-        }
-    }
-}
-
 /// Set the VCPU thread affinity and other per-thread scheduler properties.
 /// This function will be called from each VCPU thread at startup.
 #[allow(clippy::unnecessary_cast)]
@@ -104,12 +75,6 @@ pub fn set_vcpu_thread_scheduling(
     run_rt: bool,
     boost_uclamp: bool,
 ) -> anyhow::Result<()> {
-    if !vcpu_affinity.is_empty() {
-        if let Err(e) = set_cpu_affinity(vcpu_affinity) {
-            error!("Failed to set CPU affinity: {}", e);
-        }
-    }
-
     if boost_uclamp {
         let mut sched_attr = sched_attr::default();
         sched_attr.sched_flags = SCHED_FLAG_KEEP_ALL as u64
@@ -133,6 +98,15 @@ pub fn set_vcpu_thread_scheduling(
     if let Some(mut f) = vcpu_cgroup_tasks_file {
         f.write_all(base::gettid().to_string().as_bytes())
             .context("failed to write vcpu tid to cgroup tasks")?;
+    }
+
+    // vcpu_affinity needs to be set after moving to cgroup
+    // or it will be overriden by cgroup settings, vcpu_affinity
+    // here is bounded by the cpuset specified in the cgroup
+    if !vcpu_affinity.is_empty() {
+        if let Err(e) = set_cpu_affinity(vcpu_affinity) {
+            error!("Failed to set CPU affinity: {}", e);
+        }
     }
 
     if run_rt {
@@ -371,6 +345,16 @@ where
                                 error!("Failed to send restore response: {}", e);
                             }
                         }
+                        VcpuControl::Throttle(target_us) => {
+                            let start_time = std::time::Instant::now();
+
+                            while start_time.elapsed().as_micros() < target_us.into() {
+                                // TODO: Investigate replacing this with std::hint::spin_loop()
+                                // to hint to the pCPU to potentially save some power. Also revisit
+                                // this when scheduler updates are available on newer kernel
+                                // versions.
+                            }
+                        }
                     }
                 }
                 if run_mode == VmRunMode::Running {
@@ -399,13 +383,31 @@ where
         if !interrupted_by_signal {
             match vcpu.run() {
                 Ok(VcpuExit::Io) => {
-                    if let Err(e) = vcpu.handle_io(&mut bus_io_handler(&io_bus)) {
+                    if let Err(e) =
+                        vcpu.handle_io(&mut |IoParams { address, operation }| match operation {
+                            IoOperation::Read(data) => {
+                                io_bus.read(address, data);
+                            }
+                            IoOperation::Write(data) => {
+                                io_bus.write(address, data);
+                            }
+                        })
+                    {
                         error!("failed to handle io: {}", e)
                     }
                 }
                 Ok(VcpuExit::Mmio) => {
                     if let Err(e) =
-                        vcpu.handle_mmio(&mut |io_params| Ok(bus_io_handler(&mmio_bus)(io_params)))
+                        vcpu.handle_mmio(&mut |IoParams { address, operation }| match operation {
+                            IoOperation::Read(data) => {
+                                mmio_bus.read(address, data);
+                                Ok(())
+                            }
+                            IoOperation::Write(data) => {
+                                mmio_bus.write(address, data);
+                                Ok(())
+                            }
+                        })
                     {
                         error!("failed to handle mmio: {}", e);
                     }

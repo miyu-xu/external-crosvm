@@ -24,6 +24,9 @@ use std::sync::atomic::Ordering;
 
 use arch::CpuSet;
 use arch::FdtPosition;
+#[cfg(target_arch = "x86_64")]
+use arch::MemoryRegionConfig;
+use arch::PciConfig;
 use arch::Pstore;
 #[cfg(target_arch = "x86_64")]
 use arch::SmbiosOptions;
@@ -86,8 +89,6 @@ use crate::crosvm::config::parse_cpu_capacity;
 ))]
 use crate::crosvm::config::parse_cpu_frequencies;
 use crate::crosvm::config::parse_dynamic_power_coefficient;
-#[cfg(target_arch = "x86_64")]
-use crate::crosvm::config::parse_memory_region;
 use crate::crosvm::config::parse_mmio_address_range;
 use crate::crosvm::config::parse_pflash_parameters;
 use crate::crosvm::config::parse_serial_options;
@@ -646,6 +647,7 @@ pub struct UsbAttachCommand {
         arg_name = "BUS_ID:ADDR:BUS_NUM:DEV_NUM",
         from_str_fn(parse_bus_id_addr)
     )]
+    #[allow(dead_code)]
     pub addr: (u8, u8, u16, u16),
     #[argh(positional)]
     /// usb device path
@@ -680,7 +682,7 @@ pub struct UsbDetachCommand {
 }
 
 #[derive(FromArgs)]
-/// Detach usb device
+/// List currently attached USB devices
 #[argh(subcommand, name = "list")]
 pub struct UsbListCommand {
     #[argh(positional, arg_name = "VM_SOCKET")]
@@ -1150,7 +1152,11 @@ pub struct RunCommand {
     )]
     #[serde(skip)]
     #[merge(strategy = overwrite_option)]
-    /// set the list of frequencies in KHz for the given CPU (default: no frequencies)
+    /// set the list of frequencies in KHz for the given CPU (default: no frequencies).
+    /// In the event that the user specifies a frequency (after normalizing for cpu_capacity)
+    /// that results in a performance point that goes below the lowest frequency that the pCPU can
+    /// support, the virtual cpufreq device will actively throttle the vCPU to deliberately slow
+    /// its performance to match the guest's request.
     pub cpu_frequencies_khz: Option<BTreeMap<usize, Vec<u32>>>, // CPU index -> frequencies
 
     #[argh(option, short = 'c')]
@@ -1179,6 +1185,22 @@ pub struct RunCommand {
     ///       vCPU 1 as intel Atom type, also set vCPU 2 and vCPU 3
     ///       as intel Core type.
     ///     boot-cpu=NUM - Select vCPU to boot from. (default: 0) (aarch64 only)
+    ///     freq_domains=[[FREQ_DOMAIN],...] - CPU freq_domains (default: None) (aarch64 only)
+    ///       Usage is identical to clusters, each FREQ_DOMAIN is a set containing a
+    ///       list of CPUs that should belong to the same freq_domain. Individual
+    ///       CPU ids or ranges can be specified, comma-separated.
+    ///       Examples:
+    ///       freq_domains=[[0],[1],[2],[3]] - creates 4 freq_domains, one
+    ///         for each specified core.
+    ///       freq_domains=[[0-3]] - creates a freq_domain for cores 0 to 3
+    ///         included.
+    ///       freq_domains=[[0,2],[1,3],[4-7,12]] - creates one freq_domain
+    ///         for cores 0 and 2, another one for cores 1 and 3,
+    ///         and one last for cores 4, 5, 6, 7 and 12.
+    ///     sve=[enabled=bool] - SVE Config. (aarch64 only)
+    ///         Examples:
+    ///         sve=[enabled=true] - Enables SVE on device. Will fail is SVE unsupported.
+    ///         default value = false.
     pub cpus: Option<CpuOptions>,
 
     #[cfg(feature = "crash-report")]
@@ -1366,7 +1388,7 @@ pub struct RunCommand {
     /// Possible key values:
     ///     backend=(2d|virglrenderer|gfxstream) - Which backend to
     ///        use for virtio-gpu (determining rendering protocol)
-    ///     max_num_displays=INT - The maximum number of concurrent
+    ///     max-num-displays=INT - The maximum number of concurrent
     ///        virtual displays in this VM. This must not exceed
     ///        VIRTIO_GPU_MAX_SCANOUTS (i.e. 16).
     ///     displays=[[GpuDisplayParameters]] - The list of virtual
@@ -1634,6 +1656,14 @@ pub struct RunCommand {
     /// to 800x1280) and a name for the input device
     pub multi_touch: Vec<TouchDeviceOption>,
 
+    #[argh(option)]
+    #[merge(strategy = overwrite_option)]
+    /// optional name for the VM. This is used as the name of the crosvm
+    /// process which is helpful to distinguish multiple crosvm processes.
+    /// A name longer than 15 bytes is truncated on Linux-like OSes. This
+    /// is no-op on Windows and MacOS at the moment.
+    pub name: Option<String>,
+
     #[cfg(all(unix, feature = "net"))]
     #[argh(
         option,
@@ -1711,6 +1741,13 @@ pub struct RunCommand {
     /// don't use legacy KBD devices emulation
     pub no_i8042: Option<bool>,
 
+    #[cfg(target_arch = "aarch64")]
+    #[argh(switch)]
+    #[serde(skip)] // TODO(b/255223604)
+    #[merge(strategy = overwrite_option)]
+    /// disable Performance Monitor Unit (PMU)
+    pub no_pmu: Option<bool>,
+
     #[argh(switch)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
@@ -1749,6 +1786,21 @@ pub struct RunCommand {
     /// extra kernel or plugin command line arguments. Can be given more than once
     pub params: Vec<String>,
 
+    #[argh(option)]
+    #[serde(default)]
+    #[merge(strategy = overwrite_option)]
+    /// PCI parameters.
+    ///
+    /// Possible key values:
+    ///     mem=[start=INT,size=INT] - region for non-prefetchable PCI device memory below 4G
+    ///
+    /// Possible key values (aarch64 only):
+    ///     cam=[start=INT,size=INT] - region for PCI Configuration Access Mechanism
+    ///
+    /// Possible key values (x86_64 only):
+    ///     ecam=[start=INT,size=INT] - region for PCIe Enhanced Configuration Access Mechanism
+    pub pci: Option<PciConfig>,
+
     #[cfg(any(target_os = "android", target_os = "linux"))]
     #[argh(option, arg_name = "pci_hotplug_slots")]
     #[serde(default)]
@@ -1762,17 +1814,6 @@ pub struct RunCommand {
     #[merge(strategy = overwrite_option)]
     /// the pci mmio start address below 4G
     pub pci_start: Option<u64>,
-
-    #[cfg(target_arch = "x86_64")]
-    #[argh(
-        option,
-        arg_name = "mmio_base,mmio_length",
-        from_str_fn(parse_memory_region)
-    )]
-    #[serde(skip)] // TODO(b/255223604)
-    #[merge(strategy = overwrite_option)]
-    /// region for PCIe Enhanced Configuration Access Mechanism
-    pub pcie_ecam: Option<AddressRange>,
 
     #[argh(switch)]
     #[serde(skip)] // TODO(b/255223604)
@@ -1896,6 +1937,16 @@ pub struct RunCommand {
     ///       calculated from this value and other given parameters.
     ///       The value of `size` must be larger than (4096 *
     ///        blocks_per_group.) (default: 16777216)
+    ///     uid=UID - uid of the mkfs process in the user
+    ///       namespace created by minijail. (default: 0)
+    ///     gid=GID - gid of the mkfs process in the user
+    ///       namespace created by minijail. (default: 0)
+    ///     uidmap=UIDMAP - a uid map in the format
+    ///       "inner outer count[,inner outer count]". This format
+    ///       is same as one for minijail.
+    ///       (default: "0 <current euid> 1")
+    ///     gidmap=GIDMAP - a gid map in the same format as uidmap
+    ///       (default: "0 <current egid> 1")
     pub pmem_ext2: Vec<PmemExt2Option>,
 
     #[cfg(feature = "process-invariants")]
@@ -2091,7 +2142,10 @@ pub struct RunCommand {
     /// devices. Can be given more than once.
     /// Possible key values:
     ///     type=(stdout,syslog,sink,file) - Where to route the
-    ///        serial device
+    ///        serial device.
+    ///        Platform-specific options:
+    ///        On Unix: 'unix' (datagram) and 'unix-stream' (stream)
+    ///        On Windows: 'namedpipe'
     ///     hardware=(serial,virtio-console,debugcon,
     ///               legacy-virtio-console) - Which type of
     ///        serial hardware to emulate. Defaults to 8250 UART
@@ -2107,6 +2161,11 @@ pub struct RunCommand {
     ///        type=file
     ///     input=PATH - The path to the file to read from when not
     ///        stdin
+    ///     input-unix-stream - (Unix-only) Whether to use the given
+    ///        Unix stream socket for input as well as output.
+    ///        This flag is only valid when type=unix-stream and
+    ///        the socket path is specified with path=.
+    ///        Can't be passed when input is specified.
     ///     console - Use this serial device as the guest console.
     ///        Will default to first serial port if not provided.
     ///     earlycon - Use this serial device as the early console.
@@ -2199,7 +2258,7 @@ pub struct RunCommand {
     ///        feature(default: true). This should be set to false
     ///        in case the when the host not allowing write to
     ///        /proc/<pid>/attr/fscreate, or guest directory does
-    ///        care about the security context.
+    ///        not care about the security context.
     ///     Options uid and gid are useful when the crosvm process
     ///     has no CAP_SETGID/CAP_SETUID but an identity mapping of
     ///     the current user/group between the VM and the host is
@@ -2213,6 +2272,14 @@ pub struct RunCommand {
     ///     useless. It'd be better to create a new user namespace
     ///     and give CAP_SETUID/CAP_SETGID to the crosvm.
     pub shared_dir: Vec<SharedDir>,
+
+    #[cfg(all(unix, feature = "media"))]
+    #[argh(switch)]
+    #[serde(default)]
+    #[merge(strategy = overwrite_option)]
+    /// enable the simple virtio-media device, a virtual capture device generating a fixed pattern
+    /// for testing purposes.
+    pub simple_media_device: Option<bool>,
 
     #[argh(
         option,
@@ -2375,6 +2442,14 @@ pub struct RunCommand {
     #[merge(strategy = overwrite_option)]
     /// (EXPERIMENTAL/FOR DEBUGGING) Use VM firmware, but allow host access to guest memory
     pub unprotected_vm_with_firmware: Option<PathBuf>,
+
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(all(unix, feature = "media"))]
+    #[argh(option, arg_name = "[device]")]
+    #[serde(default)]
+    #[merge(strategy = append)]
+    /// path to a V4L2 device to expose to the guest using the virtio-media protocol.
+    pub v4l2_proxy: Vec<PathBuf>,
 
     #[argh(option, arg_name = "PATH")]
     #[serde(skip)] // TODO(b/255223604)
@@ -2562,6 +2637,17 @@ pub struct RunCommand {
     /// enable a virtual cpu freq device
     pub virt_cpufreq: Option<bool>,
 
+    #[cfg(all(
+        any(target_arch = "arm", target_arch = "aarch64"),
+        any(target_os = "android", target_os = "linux")
+    ))]
+    #[argh(switch)]
+    #[serde(skip)]
+    #[merge(strategy = overwrite_option)]
+    /// enable version of the virtual cpu freq device compatible
+    /// with the driver in upstream linux
+    pub virt_cpufreq_upstream: Option<bool>,
+
     #[cfg(feature = "audio")]
     #[argh(
         option,
@@ -2706,6 +2792,7 @@ impl TryFrom<RunCommand> for super::config::Config {
             let cpus = cmd.cpus.unwrap_or_default();
             cfg.vcpu_count = cpus.num_cores;
             cfg.boot_cpu = cpus.boot_cpu.unwrap_or_default();
+            cfg.cpu_freq_domains = cpus.freq_domains;
 
             // Only allow deprecated `--cpu-cluster` option only if `--cpu clusters=[...]` is not
             // used.
@@ -2740,6 +2827,10 @@ impl TryFrom<RunCommand> for super::config::Config {
                     }
                 }
             }
+            #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+            {
+                cfg.sve = cpus.sve;
+            }
         }
 
         cfg.vcpu_affinity = cmd.cpu_affinity;
@@ -2758,6 +2849,10 @@ impl TryFrom<RunCommand> for super::config::Config {
         ))]
         {
             cfg.virt_cpufreq = cmd.virt_cpufreq.unwrap_or_default();
+            cfg.virt_cpufreq_v2 = cmd.virt_cpufreq_upstream.unwrap_or_default();
+            if cfg.virt_cpufreq && cfg.virt_cpufreq_v2 {
+                return Err("Only one version of virt-cpufreq can be used!".to_string());
+            }
             if let Some(frequencies) = cmd.cpu_frequencies_khz {
                 cfg.cpu_frequencies_khz = frequencies;
             }
@@ -2789,6 +2884,7 @@ impl TryFrom<RunCommand> for super::config::Config {
                 );
             }
             cfg.mte = cmd.mte.unwrap_or_default();
+            cfg.no_pmu = cmd.no_pmu.unwrap_or_default();
             cfg.swiotlb = cmd.swiotlb;
         }
 
@@ -3002,12 +3098,7 @@ impl TryFrom<RunCommand> for super::config::Config {
         }
         cfg.pstore = cmd.pstore;
 
-        cfg.enable_fw_cfg = if let Some(fw) = cmd.enable_fw_cfg {
-            fw
-        } else {
-            false
-        };
-
+        cfg.enable_fw_cfg = cmd.enable_fw_cfg.unwrap_or_default();
         cfg.fw_cfg_parameters = cmd.fw_cfg;
 
         #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -3521,16 +3612,27 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.host_cpu_topology = cmd.host_cpu_topology.unwrap_or_default();
 
+        cfg.pci_config = cmd.pci.unwrap_or_default();
+
         #[cfg(target_arch = "x86_64")]
         {
             cfg.break_linux_pci_config_io = cmd.break_linux_pci_config_io.unwrap_or_default();
             cfg.enable_hwp = cmd.enable_hwp.unwrap_or_default();
             cfg.force_s2idle = cmd.s2idle.unwrap_or_default();
-            cfg.pcie_ecam = cmd.pcie_ecam;
-            cfg.pci_low_start = cmd.pci_start;
             cfg.no_i8042 = cmd.no_i8042.unwrap_or_default();
             cfg.no_rtc = cmd.no_rtc.unwrap_or_default();
             cfg.smbios = cmd.smbios.unwrap_or_default();
+
+            if let Some(pci_start) = cmd.pci_start {
+                if cfg.pci_config.mem.is_some() {
+                    return Err("--pci-start cannot be used with --pci mem=[...]".to_string());
+                }
+                log::warn!("`--pci-start` is deprecated; use `--pci mem=[start={pci_start:#?}]");
+                cfg.pci_config.mem = Some(MemoryRegionConfig {
+                    start: pci_start,
+                    size: None,
+                });
+            }
 
             if !cmd.oem_strings.is_empty() {
                 log::warn!(
@@ -3599,6 +3701,13 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         cfg.fdt_position = cmd.fdt_position;
 
+        #[cfg(any(target_os = "android", target_os = "linux"))]
+        #[cfg(all(unix, feature = "media"))]
+        {
+            cfg.v4l2_proxy = cmd.v4l2_proxy;
+            cfg.simple_media_device = cmd.simple_media_device.unwrap_or_default();
+        }
+
         cfg.file_backed_mappings = cmd.file_backed_mapping;
 
         #[cfg(target_os = "android")]
@@ -3638,6 +3747,8 @@ impl TryFrom<RunCommand> for super::config::Config {
         if cmd.disable_sandbox.unwrap_or_default() {
             cfg.jail_config = None;
         }
+
+        cfg.name = cmd.name;
 
         // Now do validation of constructed config
         super::config::validate_config(&mut cfg)?;

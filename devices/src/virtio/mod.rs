@@ -32,6 +32,8 @@ pub mod block;
 pub mod console;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+#[cfg(all(unix, feature = "media"))]
+pub mod media;
 pub mod resource_bridge;
 pub mod scsi;
 #[cfg(feature = "audio")]
@@ -98,6 +100,7 @@ pub use self::vhost_user_frontend::VhostUserFrontend;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 pub use self::video::VideoDevice;
 pub use self::virtio_device::SharedMemoryMapper;
+pub use self::virtio_device::SharedMemoryPrepareType;
 pub use self::virtio_device::SharedMemoryRegion;
 pub use self::virtio_device::VirtioDevice;
 pub use self::virtio_device::VirtioTransportType;
@@ -125,6 +128,7 @@ cfg_if::cfg_if! {
         pub use self::p9::P9;
         pub use self::pmem::Pmem;
         pub use self::pmem::PmemConfig;
+        pub use self::pmem::MemSlotConfig;
         #[cfg(feature = "audio")]
         pub use self::snd::new_sound;
         pub use self::wl::Wl;
@@ -182,6 +186,7 @@ pub enum DeviceType {
     Wl = virtio_ids::VIRTIO_ID_WL,
     Tpm = virtio_ids::VIRTIO_ID_TPM,
     Pvclock = virtio_ids::VIRTIO_ID_PVCLOCK,
+    Media = virtio_ids::VIRTIO_ID_MEDIA,
 }
 
 impl DeviceType {
@@ -212,6 +217,7 @@ impl DeviceType {
             DeviceType::Wl => 2,            // in, out
             DeviceType::Tpm => 1,           // request queue
             DeviceType::Pvclock => 1,       // request queue
+            DeviceType::Media => 2,         // commandq, eventq
         }
     }
 }
@@ -241,6 +247,7 @@ impl std::fmt::Display for DeviceType {
             DeviceType::VideoEncoder => write!(f, "video-encoder"),
             DeviceType::Mac80211HwSim => write!(f, "mac80211-hwsim"),
             DeviceType::Scmi => write!(f, "scmi"),
+            DeviceType::Media => write!(f, "media"),
         }
     }
 }

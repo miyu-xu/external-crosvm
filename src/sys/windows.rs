@@ -120,6 +120,7 @@ use devices::virtio::Console;
 #[cfg(feature = "gpu")]
 use devices::virtio::GpuParameters;
 use devices::BusDeviceObj;
+use devices::BusResumeDevice;
 #[cfg(feature = "gvm")]
 use devices::GvmIrqChip;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -211,6 +212,8 @@ use vm_control::VmResponse;
 use vm_control::VmRunMode;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
+use vmm_vhost::Connection;
+use vmm_vhost::FrontendReq;
 use win_util::ProcessType;
 #[cfg(feature = "whpx")]
 use x86_64::cpuid::adjust_cpuid;
@@ -285,11 +288,14 @@ pub enum ExitState {
 
 type DeviceResult<T = VirtioDeviceStub> = Result<T>;
 
-fn create_vhost_user_block_device(cfg: &Config, disk_device_tube: Tube) -> DeviceResult {
+fn create_vhost_user_block_device(
+    cfg: &Config,
+    connection: Connection<FrontendReq>,
+) -> DeviceResult {
     let dev = virtio::VhostUserFrontend::new(
         virtio::DeviceType::Block,
         virtio::base_features(cfg.protection_type),
-        disk_device_tube,
+        connection,
         None,
         None,
     )
@@ -323,11 +329,14 @@ fn create_block_device(cfg: &Config, disk: &DiskOption, disk_device_tube: Tube) 
 }
 
 #[cfg(feature = "gpu")]
-fn create_vhost_user_gpu_device(base_features: u64, vhost_user_tube: Tube) -> DeviceResult {
+fn create_vhost_user_gpu_device(
+    base_features: u64,
+    connection: Connection<FrontendReq>,
+) -> DeviceResult {
     let dev = virtio::VhostUserFrontend::new(
         virtio::DeviceType::Gpu,
         base_features,
-        vhost_user_tube,
+        connection,
         None,
         None,
     )
@@ -343,11 +352,14 @@ fn create_vhost_user_gpu_device(base_features: u64, vhost_user_tube: Tube) -> De
 }
 
 #[cfg(feature = "audio")]
-fn create_vhost_user_snd_device(base_features: u64, vhost_user_tube: Tube) -> DeviceResult {
+fn create_vhost_user_snd_device(
+    base_features: u64,
+    connection: Connection<FrontendReq>,
+) -> DeviceResult {
     let dev = virtio::VhostUserFrontend::new(
         virtio::DeviceType::Sound,
         base_features,
-        vhost_user_tube,
+        connection,
         None,
         None,
     )
@@ -397,19 +409,14 @@ fn create_mouse_device(cfg: &Config, event_pipe: StreamChannel, idx: u32) -> Dev
 }
 
 #[cfg(feature = "slirp")]
-fn create_vhost_user_net_device(cfg: &Config, net_device_tube: Tube) -> DeviceResult {
+fn create_vhost_user_net_device(cfg: &Config, connection: Connection<FrontendReq>) -> DeviceResult {
     let features = virtio::base_features(cfg.protection_type);
-    let dev = virtio::VhostUserFrontend::new(
-        virtio::DeviceType::Net,
-        features,
-        net_device_tube,
-        None,
-        None,
-    )
-    .exit_context(
-        Exit::VhostUserNetDeviceNew,
-        "failed to set up vhost-user net device",
-    )?;
+    let dev =
+        virtio::VhostUserFrontend::new(virtio::DeviceType::Net, features, connection, None, None)
+            .exit_context(
+            Exit::VhostUserNetDeviceNew,
+            "failed to set up vhost-user net device",
+        )?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -519,7 +526,8 @@ fn create_virtio_devices(
         info!("Starting up vhost user block backends...");
         for _disk in &cfg.disks {
             let disk_device_tube = cfg.block_vhost_user_tube.remove(0);
-            devs.push(create_vhost_user_block_device(cfg, disk_device_tube)?);
+            let connection = Connection::<FrontendReq>::from(disk_device_tube);
+            devs.push(create_vhost_user_block_device(cfg, connection)?);
         }
     }
 
@@ -560,7 +568,8 @@ fn create_virtio_devices(
 
     #[cfg(feature = "slirp")]
     if let Some(net_vhost_user_tube) = cfg.net_vhost_user_tube.take() {
-        devs.push(create_vhost_user_net_device(cfg, net_vhost_user_tube)?);
+        let connection = Connection::<FrontendReq>::from(net_vhost_user_tube);
+        devs.push(create_vhost_user_net_device(cfg, connection)?);
     }
 
     #[cfg(feature = "balloon")]
@@ -730,14 +739,14 @@ fn create_virtio_gpu_device(
     }
 
     // The GPU is always vhost-user, even if running in the main process.
-    create_vhost_user_gpu_device(
-        virtio::base_features(cfg.protection_type),
-        gpu_vmm_config
-            .main_vhost_user_tube
-            .take()
-            .expect("GPU VMM vhost-user tube should be set"),
-    )
-    .context("create vhost-user GPU device")
+    let gpu_device_tube = gpu_vmm_config
+        .main_vhost_user_tube
+        .take()
+        .expect("GPU VMM vhost-user tube should be set");
+    let connection = Connection::<FrontendReq>::from(gpu_device_tube);
+
+    create_vhost_user_gpu_device(virtio::base_features(cfg.protection_type), connection)
+        .context("create vhost-user GPU device")
 }
 
 #[cfg(feature = "audio")]
@@ -758,14 +767,14 @@ fn create_virtio_snd_device(
     }
 
     // The SND is always vhost-user, even if running in the main process.
-    create_vhost_user_snd_device(
-        virtio::base_features(cfg.protection_type),
-        snd_vmm_config
-            .main_vhost_user_tube
-            .take()
-            .expect("Snd VMM vhost-user tube should be set"),
-    )
-    .context("create vhost-user SND device")
+    let snd_device_tube = snd_vmm_config
+        .main_vhost_user_tube
+        .take()
+        .expect("Snd VMM vhost-user tube should be set");
+    let connection = Connection::<FrontendReq>::from(snd_device_tube);
+
+    create_vhost_user_snd_device(virtio::base_features(cfg.protection_type), connection)
+        .context("create vhost-user SND device")
 }
 
 fn create_devices(
@@ -880,11 +889,12 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     suspended_pvclock_state: &mut Option<hypervisor::ClockState>,
 ) -> Result<Option<ExitState>> {
     let mut execute_vm_request = |request: VmRequest, guest_os: &mut RunnableLinuxVm<V, Vcpu>| {
-        let mut run_mode_opt = None;
+        if let VmRequest::Exit = request {
+            return (VmResponse::Ok, Some(VmRunMode::Exiting));
+        }
         let vcpu_size = vcpu_boxes.lock().len();
         let resp = request.execute(
             &guest_os.vm,
-            &mut run_mode_opt,
             disk_host_tubes,
             &mut guest_os.pm,
             #[cfg(feature = "gpu")]
@@ -901,6 +911,7 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                     guest_os.irq_chip.as_ref(),
                     #[cfg(feature = "pvclock")]
                     pvclock_host_tube,
+                    &guest_os.resume_notify_devices,
                     msg,
                 );
             },
@@ -913,7 +924,7 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             || guest_os.irq_chip.as_ref().snapshot(vcpu_size),
             suspended_pvclock_state,
         );
-        (resp, run_mode_opt)
+        (resp, None)
     };
 
     match event.token {
@@ -1114,13 +1125,7 @@ fn handle_run_mode_change_for_vm_request<V: VmArch + 'static, Vcpu: VcpuArch + '
         info!("control socket changed run mode to {}", run_mode);
         match run_mode {
             VmRunMode::Exiting => return Some(ExitState::Stop),
-            other => {
-                if other == &VmRunMode::Running {
-                    for dev in &guest_os.resume_notify_devices {
-                        dev.lock().resume_imminent();
-                    }
-                }
-            }
+            _ => unreachable!(),
         }
     }
     // No exit state change.
@@ -1454,6 +1459,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                     guest_os.irq_chip.as_ref(),
                     #[cfg(feature = "pvclock")]
                     &pvclock_host_tube,
+                    &guest_os.resume_notify_devices,
                     msg,
                 )
             },
@@ -1487,6 +1493,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             guest_os.irq_chip.as_ref(),
             #[cfg(feature = "pvclock")]
             &pvclock_host_tube,
+            &guest_os.resume_notify_devices,
             // Other platforms (unix) have multiple modes they could start in (e.g. starting for
             // guest kernel debugging, etc). If/when we support those modes on Windows, we'll need
             // to enter that mode here rather than VmRunMode::Running.
@@ -1691,6 +1698,7 @@ fn kick_all_vcpus(
     vcpu_boxes: &Mutex<Vec<Box<dyn VcpuArch>>>,
     irq_chip: &dyn IrqChipArch,
     #[cfg(feature = "pvclock")] pvclock_host_tube: &Option<Tube>,
+    resume_notify_devices: &[Arc<Mutex<dyn BusResumeDevice>>],
     msg: VcpuControl,
 ) {
     // On Windows, we handle run mode switching directly rather than delegating to the VCPU thread
@@ -1707,6 +1715,9 @@ fn kick_all_vcpus(
             return;
         }
         VcpuControl::RunState(VmRunMode::Running) => {
+            for device in resume_notify_devices {
+                device.lock().resume_imminent();
+            }
             resume_all_vcpus(
                 run_mode,
                 vcpu_boxes,
@@ -2099,10 +2110,7 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         fw_cfg_parameters: cfg.fw_cfg_parameters.clone(),
         itmt: false,
         pvm_fw: None,
-        #[cfg(target_arch = "x86_64")]
-        pci_low_start: cfg.pci_low_start,
-        #[cfg(target_arch = "x86_64")]
-        pcie_ecam: cfg.pcie_ecam,
+        pci_config: cfg.pci_config,
         #[cfg(target_arch = "x86_64")]
         smbios: cfg.smbios.clone(),
         dynamic_power_coefficient: cfg.dynamic_power_coefficient.clone(),
@@ -2280,12 +2288,14 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
 
 fn create_guest_memory(
     components: &VmComponents,
+    arch_memory_layout: &<Arch as LinuxArch>::ArchMemoryLayout,
     hypervisor: &impl Hypervisor,
 ) -> Result<GuestMemory> {
-    let guest_mem_layout = Arch::guest_memory_layout(components, hypervisor).exit_context(
-        Exit::GuestMemoryLayout,
-        "failed to create guest memory layout",
-    )?;
+    let guest_mem_layout = Arch::guest_memory_layout(components, arch_memory_layout, hypervisor)
+        .exit_context(
+            Exit::GuestMemoryLayout,
+            "failed to create guest memory layout",
+        )?;
     GuestMemory::new_with_options(&guest_mem_layout)
         .exit_context(Exit::CreateGuestMemory, "failed to create guest memory")
 }
@@ -2301,6 +2311,7 @@ fn run_config_inner(
     cros_tracing::add_per_trace_callback(set_tsc_clock_snapshot);
 
     let components: VmComponents = setup_vm_components(&cfg)?;
+    let arch_memory_layout = Arch::arch_memory_layout(&components)?;
 
     #[allow(unused_mut)]
     let mut hypervisor = cfg
@@ -2322,7 +2333,7 @@ fn run_config_inner(
             }
             info!("Creating HAXM ghaxm={}", get_use_ghaxm());
             let haxm = Haxm::new()?;
-            let guest_mem = create_guest_memory(&components, &haxm)?;
+            let guest_mem = create_guest_memory(&components, &arch_memory_layout, &haxm)?;
             let vm = create_haxm_vm(haxm, guest_mem, &cfg.kernel_log_file)?;
             let (ioapic_host_tube, ioapic_device_tube) =
                 Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
@@ -2331,6 +2342,7 @@ fn run_config_inner(
             run_vm::<HaxmVcpu, HaxmVm>(
                 cfg,
                 components,
+                &arch_memory_layout,
                 vm,
                 WindowsIrqChip::Userspace(irq_chip).as_mut(),
                 Some(ioapic_host_tube),
@@ -2359,7 +2371,7 @@ fn run_config_inner(
 
             info!("Creating Whpx");
             let whpx = Whpx::new()?;
-            let guest_mem = create_guest_memory(&components, &whpx)?;
+            let guest_mem = create_guest_memory(&components, &arch_memory_layout, &whpx)?;
             let vm = create_whpx_vm(
                 whpx,
                 guest_mem,
@@ -2393,6 +2405,7 @@ fn run_config_inner(
             run_vm::<WhpxVcpu, WhpxVm>(
                 cfg,
                 components,
+                &arch_memory_layout,
                 vm,
                 irq_chip.as_mut(),
                 Some(ioapic_host_tube),
@@ -2404,7 +2417,7 @@ fn run_config_inner(
         HypervisorKind::Gvm => {
             info!("Creating GVM");
             let gvm = Gvm::new()?;
-            let guest_mem = create_guest_memory(&components, &gvm)?;
+            let guest_mem = create_guest_memory(&components, &arch_memory_layout, &gvm)?;
             let vm = create_gvm_vm(gvm, guest_mem)?;
             let ioapic_host_tube;
             let mut irq_chip = match cfg.irq_chip.unwrap_or(IrqChipKind::Kernel) {
@@ -2426,6 +2439,7 @@ fn run_config_inner(
             run_vm::<GvmVcpu, GvmVm>(
                 cfg,
                 components,
+                &arch_memory_layout,
                 vm,
                 irq_chip.as_mut(),
                 ioapic_host_tube,
@@ -2440,6 +2454,7 @@ fn run_config_inner(
 fn run_vm<Vcpu, V>(
     #[allow(unused_mut)] mut cfg: Config,
     #[allow(unused_mut)] mut components: VmComponents,
+    arch_memory_layout: &<Arch as LinuxArch>::ArchMemoryLayout,
     mut vm: V,
     irq_chip: &mut dyn IrqChipArch,
     ioapic_host_tube: Option<Tube>,
@@ -2503,7 +2518,7 @@ where
 
     let pstore_size = components.pstore.as_ref().map(|pstore| pstore.size as u64);
     let mut sys_allocator = SystemAllocator::new(
-        Arch::get_system_allocator_config(&vm),
+        Arch::get_system_allocator_config(&vm, arch_memory_layout),
         pstore_size,
         &cfg.mmio_address_ranges,
     )
@@ -2630,6 +2645,7 @@ where
     let (vwmdt_host_tube, vmwdt_device_tube) = Tube::pair().context("failed to create tube")?;
     let windows = Arch::build_vm::<V, Vcpu>(
         components,
+        arch_memory_layout,
         &vm_evt_wrtube,
         &mut sys_allocator,
         &cfg.serial_parameters,
@@ -2647,6 +2663,7 @@ where
         /* guest_suspended_cvar= */ None,
         dt_overlays,
         cfg.fdt_position,
+        cfg.no_pmu,
     )
     .exit_context(Exit::BuildVm, "the architecture failed to build the vm")?;
 

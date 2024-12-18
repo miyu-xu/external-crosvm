@@ -5,9 +5,11 @@ authors = ["The ChromiumOS Authors"]
 edition = "2021"
 
 [features]
+enable_haxm_tests = []
 haxm = []
 whpx = []
 geniezone = []
+gvm = []
 gunyah = []
 noncoherent-dma = []
 

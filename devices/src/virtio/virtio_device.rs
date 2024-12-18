@@ -28,6 +28,15 @@ pub enum VirtioTransportType {
     Mmio,
 }
 
+/// Type of Virtio device memory mapping to use.
+pub enum SharedMemoryPrepareType {
+    /// On first attempted mapping, the entire SharedMemoryRegion is configured with declared
+    /// MemCacheType.
+    SingleMappingOnFirst(MemCacheType),
+    /// No mapping preparation is performed. each mapping is handled individually
+    DynamicPerMapping,
+}
+
 #[derive(Clone)]
 pub struct SharedMemoryRegion {
     /// The id of the shared memory region. A device may have multiple regions, but each
@@ -62,6 +71,27 @@ pub trait SharedMemoryMapper: Send {
 /// and all the events, memory, and queues for device operation will be moved into the device.
 /// Optionally, a virtio device can implement device reset in which it returns said resources and
 /// resets its internal.
+///
+/// Virtio device state machine
+/// ```none
+///                           restore (inactive)
+///       ----------------------------------------------------
+///       |                                                  |
+///       |                                                  V
+///       |                       ------------         --------------
+/// ------------- restore(active) |  asleep  |         |   asleep   |   // States in this row
+/// |asleep(new)|---------------> | (active) |         | (inactive) |   // can be snapshotted
+/// -------------                 ------------         --------------
+///    ^       |                     ^    |              ^      |
+///    |       |                     |    |              |      |
+///  sleep    wake                sleep  wake         sleep   wake
+///    |       |                     |    |              |      |
+///    |       V                     |    V              |      V
+///  ------------     activate     ----------  reset   ------------
+///  |    new   | ---------------> | active | ------>  | inactive |
+///  ------------                  ---------- <------  ------------
+///                                           activate
+/// ```
 pub trait VirtioDevice: Send {
     /// Returns a label suitable for debug output.
     fn debug_label(&self) -> String {
@@ -195,6 +225,14 @@ pub trait VirtioDevice: Send {
     /// than via raw guest physical address. This function is only provided so
     /// devices can remain backwards compatible with older drivers.
     fn set_shared_memory_region_base(&mut self, _addr: GuestAddress) {}
+
+    /// Queries the implementation whether a single prepared hypervisor memory mapping with explicit
+    /// caching type should be setup lazily on first mapping request, or whether to dynamically
+    /// setup a hypervisor mapping with every request's caching type.
+    fn get_shared_memory_prepare_type(&mut self) -> SharedMemoryPrepareType {
+        // default to lazy-prepare of a single memslot with explicit caching type
+        SharedMemoryPrepareType::SingleMappingOnFirst(MemCacheType::CacheCoherent)
+    }
 
     /// Pause all processing.
     ///
@@ -360,7 +398,11 @@ macro_rules! suspendable_virtio_tests {
                 device
                     .virtio_wake(Some((mem.clone(), interrupt.clone(), sleep_result)))
                     .expect("failed to wake");
+
+                // Create a new device to restore the previously taken snapshot
                 let (_ctx2, mut device) = $dev();
+                // Sleep the device before restore
+                assert!(device.virtio_sleep().expect("failed to sleep").is_none());
                 device
                     .virtio_restore(snap.clone())
                     .expect("failed to restore");

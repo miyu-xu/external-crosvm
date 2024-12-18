@@ -526,7 +526,11 @@ pub unsafe extern "C" fn rutabaga_resource_create_blob(
     catch_unwind(AssertUnwindSafe(|| {
         let mut iovecs_opt: Option<Vec<RutabagaIovec>> = None;
         if let Some(iovs) = iovecs {
-            let slice = from_raw_parts((*iovs).iovecs, (*iovs).num_iovecs);
+            let slice = if iovs.num_iovecs != 0 {
+                from_raw_parts(iovs.iovecs, iovs.num_iovecs)
+            } else {
+                &[]
+            };
             let vecs = slice
                 .iter()
                 .map(|iov| RutabagaIovec {
@@ -689,6 +693,15 @@ pub unsafe extern "C" fn rutabaga_restore(ptr: &mut rutabaga, dir: *const c_char
 
         let file = return_on_io_error!(File::open(Path::new(directory).join("snapshot")));
         let result = ptr.restore(&mut std::io::BufReader::new(file), directory);
+        return_result(result)
+    }))
+    .unwrap_or(-ESRCH)
+}
+
+#[no_mangle]
+pub extern "C" fn rutabaga_resource_wait_sync(ptr: &mut rutabaga, resource_id: u32) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = ptr.wait_sync(resource_id);
         return_result(result)
     }))
     .unwrap_or(-ESRCH)

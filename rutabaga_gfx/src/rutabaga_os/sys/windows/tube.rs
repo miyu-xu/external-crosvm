@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::fs::File;
 use std::path::Path;
 
+use crate::rutabaga_os::AsBorrowedDescriptor;
+use crate::rutabaga_os::OwnedDescriptor;
 use crate::rutabaga_os::RawDescriptor;
-use crate::rutabaga_os::WaitTrait;
+use crate::rutabaga_os::TubeType;
 use crate::rutabaga_utils::RutabagaError;
 use crate::rutabaga_utils::RutabagaResult;
 
@@ -15,7 +16,7 @@ pub type Tube = Stub;
 pub type Listener = Stub;
 
 impl Tube {
-    pub fn new<P: AsRef<Path>>(_path: P) -> RutabagaResult<Tube> {
+    pub fn new<P: AsRef<Path>>(_path: P, _kind: TubeType) -> RutabagaResult<Tube> {
         Err(RutabagaError::Unsupported)
     }
 
@@ -27,13 +28,19 @@ impl Tube {
         Err(RutabagaError::Unsupported)
     }
 
-    pub fn receive(&self, _opaque_data: &mut [u8]) -> RutabagaResult<(usize, Vec<File>)> {
+    pub fn receive(
+        &self,
+        _opaque_data: &mut [u8],
+    ) -> RutabagaResult<(usize, Vec<OwnedDescriptor>)> {
         Err(RutabagaError::Unsupported)
     }
 }
 
-impl WaitTrait for Tube {}
-impl WaitTrait for &Tube {}
+impl AsBorrowedDescriptor for Tube {
+    fn as_borrowed_descriptor(&self) -> &OwnedDescriptor {
+        unimplemented!()
+    }
+}
 
 impl Listener {
     /// Creates a new `Listener` bound to the given path.

@@ -732,71 +732,47 @@ where
             match exit {
                 Ok(VcpuExit::Io) => {
                     let _trace_event = trace_event!(crosvm, "VcpuExit::Io");
-                    vcpu.handle_io(&mut |IoParams { address, mut size, operation}| {
+                    vcpu.handle_io(&mut |IoParams { address, operation}| {
                         match operation {
-                            IoOperation::Read => {
-                                let mut data = [0u8; 8];
-                                if size > data.len() {
-                                    error!("unsupported IoIn size of {} bytes", size);
-                                    size = data.len();
-                                }
-                                io_bus.read(address, &mut data[..size]);
-                                Some(data)
+                            IoOperation::Read(data) => {
+                                io_bus.read(address, data);
                             }
-                            IoOperation::Write { data } => {
-                                if size > data.len() {
-                                    error!("unsupported IoOut size of {} bytes", size);
-                                    size = data.len()
-                                }
-                                vm.handle_io_events(IoEventAddress::Pio(address), &data[..size])
+                            IoOperation::Write(data) => {
+                                vm.handle_io_events(IoEventAddress::Pio(address), data)
                                     .unwrap_or_else(|e| error!(
                                         "failed to handle ioevent for pio write to {} on vcpu {}: {}",
                                         address, context.cpu_id, e
                                     ));
-                                io_bus.write(address, &data[..size]);
-                                None
+                                io_bus.write(address, data);
                             }
                         }
                     }).unwrap_or_else(|e| error!("failed to handle io: {}", e));
                 }
                 Ok(VcpuExit::Mmio) => {
                     let _trace_event = trace_event!(crosvm, "VcpuExit::Mmio");
-                    vcpu.handle_mmio(&mut |IoParams { address, mut size, operation }| {
+                    vcpu.handle_mmio(&mut |IoParams { address, operation }| {
                         match operation {
-                            IoOperation::Read => {
-                                let mut data = [0u8; 8];
-                                if size > data.len() {
-                                    error!("unsupported MmioRead size of {} bytes", size);
-                                    size = data.len();
-                                }
-                                {
-                                    let data = &mut data[..size];
-                                    if !mmio_bus.read(address, data) {
-                                        info!(
-                                            "mmio read failed: {:x}; trying memory read..",
-                                            address
-                                        );
-                                        vm.get_memory()
-                                            .read_exact_at_addr(
-                                                data,
-                                                vm_memory::GuestAddress(address),
+                            IoOperation::Read(data) => {
+                                if !mmio_bus.read(address, data) {
+                                    info!(
+                                        "mmio read failed: {:x}; trying memory read..",
+                                        address
+                                    );
+                                    vm.get_memory()
+                                        .read_exact_at_addr(
+                                            data,
+                                            vm_memory::GuestAddress(address),
+                                        )
+                                        .unwrap_or_else(|e| {
+                                            error!(
+                                                "guest memory read failed at {:x}: {}",
+                                                address, e
                                             )
-                                            .unwrap_or_else(|e| {
-                                                error!(
-                                                    "guest memory read failed at {:x}: {}",
-                                                    address, e
-                                                )
-                                            });
-                                    }
+                                        });
                                 }
-                                Ok(Some(data))
+                                Ok(())
                             }
-                            IoOperation::Write { data } => {
-                                if size > data.len() {
-                                    error!("unsupported MmioWrite size of {} bytes", size);
-                                    size = data.len()
-                                }
-                                let data = &data[..size];
+                            IoOperation::Write(data) => {
                                 vm.handle_io_events(IoEventAddress::Mmio(address), data)
                                     .unwrap_or_else(|e| error!(
                                         "failed to handle ioevent for mmio write to {} on vcpu {}: {}",
@@ -814,12 +790,13 @@ where
                                             address, e
                                         ));
                                 }
-                                Ok(None)
+                                Ok(())
                             }
                         }
                     }).unwrap_or_else(|e| error!("failed to handle mmio: {}", e));
                 }
                 Ok(VcpuExit::IoapicEoi { vector }) => {
+                    let _trace_event = trace_event!(crosvm, "VcpuExit::IoapicEoi");
                     irq_chip.broadcast_eoi(vector).unwrap_or_else(|e| {
                         error!(
                             "failed to broadcast eoi {} on vcpu {}: {}",
@@ -827,7 +804,9 @@ where
                         )
                     });
                 }
-                Ok(VcpuExit::IrqWindowOpen) => {}
+                Ok(VcpuExit::IrqWindowOpen) => {
+                    let _trace_event = trace_event!(crosvm, "VcpuExit::IrqWindowOpen");
+                }
                 Ok(VcpuExit::Hlt) => irq_chip.halted(context.cpu_id),
 
                 // VcpuExit::Shutdown is always an error on Windows.  HAXM exits with
@@ -865,8 +844,14 @@ where
                 // can happen during normal operation too, when GVM's timer finds requests
                 // pending from the host.  So we set check_vm_shutdown, then below check the
                 // VmRunMode state to see if we should exit the run loop.
-                Ok(VcpuExit::Intr) => check_vm_shutdown = true,
-                Ok(VcpuExit::Canceled) => check_vm_shutdown = true,
+                Ok(VcpuExit::Intr) => {
+                    let _trace_event = trace_event!(crosvm, "VcpuExit::Intr");
+                    check_vm_shutdown = true
+                }
+                Ok(VcpuExit::Canceled) => {
+                    let _trace_event = trace_event!(crosvm, "VcpuExit::Canceled");
+                    check_vm_shutdown = true
+                }
                 #[cfg(target_arch = "x86_64")]
                 Ok(VcpuExit::Cpuid { mut entry }) => {
                     let _trace_event = trace_event!(crosvm, "VcpuExit::Cpuid");
@@ -882,8 +867,11 @@ where
                     });
                 }
                 #[cfg(target_arch = "x86_64")]
-                Ok(VcpuExit::MsrAccess) => {} // MsrAccess handled by hypervisor impl
+                Ok(VcpuExit::MsrAccess) => {
+                    let _trace_event = trace_event!(crosvm, "VcpuExit::MsrAccess");
+                } // MsrAccess handled by hypervisor impl
                 Ok(r) => {
+                    let _trace_event = trace_event!(crosvm, "VcpuExit::Unexpected");
                     error!("unexpected vcpu.run return value: {:?}", r);
                     check_vm_shutdown = true;
                 }

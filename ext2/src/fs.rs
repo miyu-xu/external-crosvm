@@ -18,27 +18,23 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use base::info;
-use base::MappedRegion;
-use base::MemoryMappingArena;
-use base::MemoryMappingBuilder;
-use base::Protection;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
 use zerocopy::FromZeroes;
 
 use crate::arena::Arena;
 use crate::arena::BlockId;
-use crate::arena::FileMappingInfo;
 use crate::blockgroup::BlockGroupDescriptor;
 use crate::blockgroup::GroupMetaData;
 use crate::blockgroup::BLOCK_SIZE;
+use crate::builder::Builder;
 use crate::inode::Inode;
 use crate::inode::InodeBlock;
 use crate::inode::InodeBlocksCount;
 use crate::inode::InodeNum;
 use crate::inode::InodeType;
-use crate::superblock::Config;
 use crate::superblock::SuperBlock;
+use crate::xattr::InlineXattrs;
 
 #[repr(C)]
 #[derive(Copy, Clone, FromZeroes, FromBytes, AsBytes, Debug)]
@@ -137,7 +133,7 @@ impl DirEntryBlock<'_> {
 }
 
 /// A struct to represent an ext2 filesystem.
-pub struct Ext2<'a> {
+pub(crate) struct Ext2<'a> {
     sb: &'a mut SuperBlock,
     cur_block_group: usize,
     cur_inode_table: usize,
@@ -148,10 +144,8 @@ pub struct Ext2<'a> {
 }
 
 impl<'a> Ext2<'a> {
-    /// Create a new ext2 filesystem.
-    fn new(cfg: &Config, arena: &'a Arena<'a>) -> Result<Self> {
-        let sb = SuperBlock::new(arena, cfg)?;
-
+    pub(crate) fn new(builder: &Builder, arena: &'a Arena<'a>) -> Result<Self> {
+        let sb = SuperBlock::new(arena, builder)?;
         let mut group_metadata = vec![];
         for i in 0..sb.num_groups() {
             group_metadata.push(GroupMetaData::new(arena, sb, i)?);
@@ -167,13 +161,18 @@ impl<'a> Ext2<'a> {
 
         // Add rootdir
         let root_inode = InodeNum::new(2)?;
-        ext2.add_reserved_dir(arena, root_inode, root_inode, OsStr::new("/"))?;
+        let root_xattr = match &builder.root_dir {
+            Some(dir) => Some(InlineXattrs::from_path(dir)?),
+            None => None,
+        };
+        ext2.add_reserved_dir(arena, root_inode, root_inode, OsStr::new("/"), root_xattr)?;
         let lost_found_inode = ext2.allocate_inode()?;
         ext2.add_reserved_dir(
             arena,
             lost_found_inode,
             root_inode,
             OsStr::new("lost+found"),
+            None,
         )?;
 
         Ok(ext2)
@@ -381,6 +380,7 @@ impl<'a> Ext2<'a> {
         inode_num: InodeNum,
         parent_inode: InodeNum,
         name: &OsStr,
+        xattr: Option<InlineXattrs>,
     ) -> Result<()> {
         let group_id = self.group_num_for_inode(inode_num);
         let inode = Inode::new(
@@ -389,6 +389,7 @@ impl<'a> Ext2<'a> {
             inode_num,
             InodeType::Directory,
             BLOCK_SIZE as u32,
+            xattr,
         )?;
         self.add_inode(inode_num, inode)?;
 
@@ -423,6 +424,7 @@ impl<'a> Ext2<'a> {
     ) -> Result<()> {
         let group_id = self.group_num_for_inode(inode_num);
 
+        let xattr = InlineXattrs::from_path(path)?;
         let inode = Inode::from_metadata(
             arena,
             &mut self.group_metadata[group_id],
@@ -432,6 +434,7 @@ impl<'a> Ext2<'a> {
             0,
             InodeBlocksCount::from_bytes_len(0),
             InodeBlock::default(),
+            Some(xattr),
         )?;
 
         self.add_inode(inode_num, inode)?;
@@ -607,6 +610,8 @@ impl<'a> Ext2<'a> {
         let blocks = InodeBlocksCount::from_bytes_len((used_blocks * BLOCK_SIZE) as u32);
         let group_id = self.group_num_for_inode(inode_num);
         let size = file_size as u32;
+
+        let xattr = InlineXattrs::from_path(path)?;
         let inode = Inode::from_metadata(
             arena,
             &mut self.group_metadata[group_id],
@@ -616,10 +621,10 @@ impl<'a> Ext2<'a> {
             1,
             blocks,
             block,
+            Some(xattr),
         )?;
 
         self.add_inode(inode_num, inode)?;
-
         self.allocate_dir_entry(arena, parent_inode, inode_num, InodeType::Regular, name)?;
 
         Ok(())
@@ -645,6 +650,7 @@ impl<'a> Ext2<'a> {
         let mut block = InodeBlock::default();
         block.set_inline_symlink(dst)?;
         let group_id = self.group_num_for_inode(inode_num);
+        let xattr = InlineXattrs::from_path(&link)?;
         let inode = Inode::from_metadata(
             arena,
             &mut self.group_metadata[group_id],
@@ -654,6 +660,7 @@ impl<'a> Ext2<'a> {
             1, //links_count,
             InodeBlocksCount::from_bytes_len(0),
             block,
+            Some(xattr),
         )?;
         self.add_inode(inode_num, inode)?;
 
@@ -685,6 +692,7 @@ impl<'a> Ext2<'a> {
         block.set_direct_blocks(&[symlink_block])?;
 
         let group_id = self.group_num_for_inode(inode_num);
+        let xattr = InlineXattrs::from_path(link)?;
         let inode = Inode::from_metadata(
             arena,
             &mut self.group_metadata[group_id],
@@ -694,6 +702,7 @@ impl<'a> Ext2<'a> {
             1, //links_count,
             InodeBlocksCount::from_bytes_len(BLOCK_SIZE as u32),
             block,
+            Some(xattr),
         )?;
         self.add_inode(inode_num, inode)?;
 
@@ -704,7 +713,11 @@ impl<'a> Ext2<'a> {
     }
 
     /// Walks through `src_dir` and copies directories and files to the new file system.
-    fn copy_dirtree<P: AsRef<Path>>(&mut self, arena: &'a Arena<'a>, src_dir: P) -> Result<()> {
+    pub(crate) fn copy_dirtree<P: AsRef<Path>>(
+        &mut self,
+        arena: &'a Arena<'a>,
+        src_dir: P,
+    ) -> Result<()> {
         // Update the root directory's metadata with the metadata of `src_dir`.
         let root_inode_num = InodeNum::new(2).expect("2 is a valid inode number");
         let group_id = self.group_num_for_inode(root_inode_num);
@@ -760,14 +773,14 @@ impl<'a> Ext2<'a> {
             } else if ftype.is_symlink() {
                 self.add_symlink(arena, parent_inode, &entry)?;
             } else {
-                panic!("unknown file type: {:?}", ftype);
+                bail!("unknown file type {:?} for {:?}", ftype, entry.file_name());
             }
         }
 
         Ok(())
     }
 
-    fn copy_backup_metadata(self, arena: &'a Arena<'a>) -> Result<()> {
+    pub(crate) fn copy_backup_metadata(self, arena: &'a Arena<'a>) -> Result<()> {
         // Copy superblock and group_metadata to every block group
         for i in 1..self.sb.num_groups() as usize {
             let super_block_id = BlockId::from(self.sb.blocks_per_group * i as u32);
@@ -782,53 +795,4 @@ impl<'a> Ext2<'a> {
         }
         Ok(())
     }
-}
-
-/// Creates a memory mapping region where an ext2 filesystem is constructed.
-pub fn create_ext2_region(cfg: &Config, src_dir: Option<&Path>) -> Result<MemoryMappingArena> {
-    let block_group_size = BLOCK_SIZE as u32 * cfg.blocks_per_group;
-    if cfg.size < block_group_size {
-        bail!(
-            "memory size {} is too small to have a block group: block_size={},  block_per_group={}",
-            cfg.size,
-            BLOCK_SIZE,
-            block_group_size
-        );
-    }
-    let mem_size = if cfg.size % block_group_size == 0 {
-        cfg.size
-    } else {
-        // Round down to the largest multiple of block_group_size that is smaller than cfg.size
-        cfg.size.next_multiple_of(block_group_size) - block_group_size
-    };
-
-    let mut mem = MemoryMappingBuilder::new(mem_size as usize).build()?;
-
-    let arena = Arena::new(BLOCK_SIZE, &mut mem)?;
-    let mut ext2 = Ext2::new(cfg, &arena)?;
-    if let Some(dir) = src_dir {
-        ext2.copy_dirtree(&arena, dir)?;
-    }
-    ext2.copy_backup_metadata(&arena)?;
-    let file_mappings = arena.into_mapping_info();
-
-    mem.msync()?;
-    let mut mmap_arena = MemoryMappingArena::from(mem);
-    for FileMappingInfo {
-        mem_offset,
-        file,
-        length,
-        file_offset,
-    } in file_mappings
-    {
-        mmap_arena.add_fd_mapping(
-            mem_offset,
-            length,
-            &file,
-            file_offset as u64, /* fd_offset */
-            Protection::read(),
-        )?;
-    }
-
-    Ok(mmap_arena)
 }

@@ -4,9 +4,7 @@
 
 use core::ffi::c_void;
 use std::arch::x86_64::CpuidResult;
-use std::cmp::min;
 use std::collections::BTreeMap;
-use std::intrinsics::copy_nonoverlapping;
 use std::mem::size_of;
 
 use base::errno_result;
@@ -177,10 +175,7 @@ impl Vcpu for HaxmVcpu {
     /// Once called, it will determine whether a mmio read or mmio write was the reason for the mmio
     /// exit, call `handle_fn` with the respective IoOperation to perform the mmio read or
     /// write, and set the return data in the vcpu so that the vcpu can resume running.
-    fn handle_mmio(
-        &self,
-        handle_fn: &mut dyn FnMut(IoParams) -> Result<Option<[u8; 8]>>,
-    ) -> Result<()> {
+    fn handle_mmio(&self, handle_fn: &mut dyn FnMut(IoParams) -> Result<()>) -> Result<()> {
         // SAFETY:
         // Safe because we know we mapped enough memory to hold the hax_tunnel struct because the
         // kernel told us how large it was.
@@ -194,39 +189,34 @@ impl Vcpu for HaxmVcpu {
             // Safe because the exit_reason (which comes from the kernel) told us which
             // union field to use.
             unsafe { ((*mmio).gpa, (*mmio).size as usize, (*mmio).direction) };
+        // SAFETY:
+        // Safe because the exit_reason (which comes from the kernel) told us which
+        // union field to use. We use `addr_of_mut!()` to get a potentially unaligned u64 pointer,
+        // but it is then cast via a u8 pointer to a u8 slice, which has no alignment requirements.
+        let data = unsafe {
+            assert!(size <= size_of::<u64>());
+            std::slice::from_raw_parts_mut(
+                std::ptr::addr_of_mut!((*mmio).__bindgen_anon_1.value) as *mut u8,
+                size,
+            )
+        };
 
         match direction {
             HAX_EXIT_DIRECTION_MMIO_READ => {
-                if let Some(data) = handle_fn(IoParams {
+                handle_fn(IoParams {
                     address,
-                    size,
-                    operation: IoOperation::Read,
+                    operation: IoOperation::Read(data),
                 })
                 // We have to unwrap/panic here because HAXM doesn't have a
                 // facility to inject a GP fault here. Once HAXM can do that, we
                 // should inject a GP fault & bubble the error.
-                .unwrap()
-                {
-                    let data = u64::from_ne_bytes(data);
-                    // SAFETY:
-                    // Safe because we know this is an mmio read, so we need to put data into the
-                    // "value" field of the hax_fastmmio.
-                    unsafe {
-                        (*mmio).__bindgen_anon_1.value = data;
-                    }
-                }
+                .unwrap();
                 Ok(())
             }
             HAX_EXIT_DIRECTION_MMIO_WRITE => {
-                // SAFETY:
-                // safe because we trust haxm to fill in the union properly.
-                let data = unsafe { (*mmio).__bindgen_anon_1.value };
                 handle_fn(IoParams {
                     address,
-                    size,
-                    operation: IoOperation::Write {
-                        data: data.to_ne_bytes(),
-                    },
+                    operation: IoOperation::Write(data),
                 })
                 // Similarly to the read direction, we MUST panic here.
                 .unwrap();
@@ -242,7 +232,7 @@ impl Vcpu for HaxmVcpu {
     /// call `handle_fn` with the respective IoOperation to perform the io in or io out,
     /// and set the return data in the vcpu so that the vcpu can resume running.
     #[allow(clippy::cast_ptr_alignment)]
-    fn handle_io(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
+    fn handle_io(&self, handle_fn: &mut dyn FnMut(IoParams)) -> Result<()> {
         // SAFETY:
         // Safe because we know we mapped enough memory to hold the hax_tunnel struct because the
         // kernel told us how large it was.
@@ -255,39 +245,33 @@ impl Vcpu for HaxmVcpu {
         // union field to use.
         let io = unsafe { (*self.tunnel).__bindgen_anon_1.io };
         let address = io.port.into();
-        let size = (io.count as usize) * (io.size as usize);
+        let size = io.size as usize;
+        let count = io.count as usize;
+        let data_len = count * size;
+        // SAFETY:
+        // Safe because the exit_reason (which comes from the kernel) told us that this is port io,
+        // where the iobuf can be treated as a *u8
+        let buffer: &mut [u8] =
+            unsafe { std::slice::from_raw_parts_mut(self.io_buffer as *mut u8, data_len) };
+        let data_chunks = buffer.chunks_mut(size);
+
         match io.direction as u32 {
             HAX_EXIT_DIRECTION_PIO_IN => {
-                if let Some(data) = handle_fn(IoParams {
-                    address,
-                    size,
-                    operation: IoOperation::Read,
-                }) {
-                    // SAFETY:
-                    // Safe because the exit_reason (which comes from the kernel) told us that
-                    // this is port io, where the iobuf can be treated as a *u8
-                    unsafe {
-                        copy_nonoverlapping(data.as_ptr(), self.io_buffer as *mut u8, size);
-                    }
+                for data in data_chunks {
+                    handle_fn(IoParams {
+                        address,
+                        operation: IoOperation::Read(data),
+                    });
                 }
                 Ok(())
             }
             HAX_EXIT_DIRECTION_PIO_OUT => {
-                let mut data = [0; 8];
-                // SAFETY:
-                // safe because we check the size, from what the kernel told us is the max to copy.
-                unsafe {
-                    copy_nonoverlapping(
-                        self.io_buffer as *const u8,
-                        data.as_mut_ptr(),
-                        min(size, data.len()),
-                    );
+                for data in data_chunks {
+                    handle_fn(IoParams {
+                        address,
+                        operation: IoOperation::Write(data),
+                    });
                 }
-                handle_fn(IoParams {
-                    address,
-                    size,
-                    operation: IoOperation::Write { data },
-                });
                 Ok(())
             }
             _ => Err(Error::new(EINVAL)),

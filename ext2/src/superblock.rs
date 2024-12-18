@@ -6,33 +6,16 @@
 
 use anyhow::Result;
 use zerocopy::AsBytes;
-use zerocopy_derive::FromBytes;
-use zerocopy_derive::FromZeroes;
+use zerocopy::FromBytes;
+use zerocopy::FromZeroes;
 
 use crate::arena::Arena;
 use crate::arena::BlockId;
 use crate::blockgroup::BLOCK_SIZE;
+use crate::builder::Builder;
 use crate::inode::Inode;
 
 /// A struct to represent the configuration of an ext2 filesystem.
-pub struct Config {
-    /// The number of blocks per group.
-    pub blocks_per_group: u32,
-    /// The number of inodes per group.
-    pub inodes_per_group: u32,
-    /// The size of the memory region.
-    pub size: u32,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            blocks_per_group: 4096,
-            inodes_per_group: 4096,
-            size: 4096 * 4096,
-        }
-    }
-}
 
 /// The ext2 superblock.
 ///
@@ -78,7 +61,7 @@ pub(crate) struct SuperBlock {
 }
 
 impl SuperBlock {
-    pub fn new<'a>(arena: &'a Arena<'a>, cfg: &Config) -> Result<&'a mut SuperBlock> {
+    pub fn new<'a>(arena: &'a Arena<'a>, cfg: &Builder) -> Result<&'a mut SuperBlock> {
         const EXT2_MAGIC_NUMBER: u16 = 0xEF53;
         const COMPAT_EXT_ATTR: u32 = 0x8;
 
@@ -115,11 +98,11 @@ impl SuperBlock {
             mtime: now,
             wtime: now,
             magic: EXT2_MAGIC_NUMBER,
-            state: 1,  // clean
-            errors: 1, // continue on errors
-            rev_level: 1,
+            state: 1,     // clean
+            errors: 1,    // continue on errors
+            rev_level: 1, // Rev 1 for variable inode sizes
             first_ino,
-            inode_size: Inode::inode_record_size(),
+            inode_size: Inode::INODE_RECORD_SIZE as u16,
             block_group_nr: 1, // super block is in block group 1
             feature_compat: COMPAT_EXT_ATTR,
             feature_incompat: 0x2, // Directory entries contain a type field

@@ -2,10 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::time::Duration;
-
+use crate::rutabaga_os::OwnedDescriptor;
 use crate::rutabaga_os::WaitEvent;
-use crate::rutabaga_os::WaitTrait;
+use crate::rutabaga_os::WaitTimeout;
 use crate::rutabaga_utils::RutabagaError;
 use crate::rutabaga_utils::RutabagaResult;
 
@@ -17,19 +16,19 @@ impl WaitContext {
         Err(RutabagaError::Unsupported)
     }
 
-    pub fn add<Waitable: WaitTrait>(
+    pub fn add(
         &mut self,
         _connection_id: u64,
-        _waitable: Waitable,
+        _descriptor: &OwnedDescriptor,
     ) -> RutabagaResult<()> {
         Err(RutabagaError::Unsupported)
     }
 
-    pub fn wait(&mut self, _duration_opt: Option<Duration>) -> RutabagaResult<Vec<WaitEvent>> {
+    pub fn wait(&mut self, _timeout: WaitTimeout) -> RutabagaResult<Vec<WaitEvent>> {
         Err(RutabagaError::Unsupported)
     }
 
-    pub fn delete<Waitable: WaitTrait>(&mut self, _waitable: Waitable) -> RutabagaResult<()> {
+    pub fn delete(&mut self, _descriptor: &OwnedDescriptor) -> RutabagaResult<()> {
         Err(RutabagaError::Unsupported)
     }
 }

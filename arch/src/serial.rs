@@ -209,7 +209,7 @@ pub fn get_serial_cmdline(
                     .insert("console", &format!("ttyS{}", num - 1))
                     .map_err(GetSerialCmdlineError::KernelCmdline)?;
             }
-            (SerialHardware::VirtioConsole, num) | (SerialHardware::LegacyVirtioConsole, num) => {
+            (SerialHardware::VirtioConsole, num) => {
                 cmdline
                     .insert("console", &format!("hvc{}", num - 1))
                     .map_err(GetSerialCmdlineError::KernelCmdline)?;
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn get_serial_cmdline_default() {
-        let mut cmdline = Cmdline::new(4096);
+        let mut cmdline = Cmdline::new();
         let mut serial_parameters = BTreeMap::new();
         let io_bus = Bus::new(BusType::Io);
         let evt1_3 = Event::new().unwrap();
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn get_serial_cmdline_virtio_console() {
-        let mut cmdline = Cmdline::new(4096);
+        let mut cmdline = Cmdline::new();
         let mut serial_parameters = BTreeMap::new();
         let io_bus = Bus::new(BusType::Io);
         let evt1_3 = Event::new().unwrap();
@@ -291,16 +291,10 @@ mod tests {
             SerialParameters {
                 type_: SerialType::Stdout,
                 hardware: SerialHardware::VirtioConsole,
-                name: None,
-                path: None,
-                input: None,
                 num: 1,
                 console: true,
-                earlycon: false,
                 stdin: true,
-                out_timestamp: false,
-                debugcon_port: 0,
-                pci_address: None,
+                ..Default::default()
             },
         );
 
@@ -325,7 +319,7 @@ mod tests {
 
     #[test]
     fn get_serial_cmdline_virtio_console_serial_earlycon() {
-        let mut cmdline = Cmdline::new(4096);
+        let mut cmdline = Cmdline::new();
         let mut serial_parameters = BTreeMap::new();
         let io_bus = Bus::new(BusType::Io);
         let evt1_3 = Event::new().unwrap();
@@ -337,16 +331,10 @@ mod tests {
             SerialParameters {
                 type_: SerialType::Stdout,
                 hardware: SerialHardware::VirtioConsole,
-                name: None,
-                path: None,
-                input: None,
                 num: 1,
                 console: true,
-                earlycon: false,
                 stdin: true,
-                out_timestamp: false,
-                debugcon_port: 0,
-                pci_address: None,
+                ..Default::default()
             },
         );
 
@@ -356,16 +344,9 @@ mod tests {
             SerialParameters {
                 type_: SerialType::Stdout,
                 hardware: SerialHardware::Serial,
-                name: None,
-                path: None,
-                input: None,
                 num: 1,
-                console: false,
                 earlycon: true,
-                stdin: false,
-                out_timestamp: false,
-                debugcon_port: 0,
-                pci_address: None,
+                ..Default::default()
             },
         );
 
@@ -391,7 +372,7 @@ mod tests {
 
     #[test]
     fn get_serial_cmdline_virtio_console_invalid_earlycon() {
-        let mut cmdline = Cmdline::new(4096);
+        let mut cmdline = Cmdline::new();
         let mut serial_parameters = BTreeMap::new();
         let io_bus = Bus::new(BusType::Io);
         let evt1_3 = Event::new().unwrap();
@@ -403,16 +384,10 @@ mod tests {
             SerialParameters {
                 type_: SerialType::Stdout,
                 hardware: SerialHardware::VirtioConsole,
-                name: None,
-                path: None,
-                input: None,
                 num: 1,
-                console: false,
                 earlycon: true,
                 stdin: true,
-                out_timestamp: false,
-                debugcon_port: 0,
-                pci_address: None,
+                ..Default::default()
             },
         );
 

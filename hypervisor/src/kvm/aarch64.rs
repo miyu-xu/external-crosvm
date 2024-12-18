@@ -375,6 +375,61 @@ impl KvmVcpu {
         let reg_list: &[u64] = unsafe { kvm_reg_list[0].reg.as_slice(n as usize) };
         Ok(reg_list.to_vec())
     }
+
+    fn get_features_bitmap(&self, features: &[VcpuFeature]) -> Result<u32> {
+        let mut all_features = 0;
+        let check_extension = |ext: u32| -> bool {
+            // SAFETY:
+            // Safe because we know self.vm is a real kvm fd
+            unsafe { ioctl_with_val(&self.vm, KVM_CHECK_EXTENSION, ext.into()) == 1 }
+        };
+
+        for f in features {
+            let shift = match f {
+                VcpuFeature::PsciV0_2 => KVM_ARM_VCPU_PSCI_0_2,
+                VcpuFeature::PmuV3 => KVM_ARM_VCPU_PMU_V3,
+                VcpuFeature::PowerOff => KVM_ARM_VCPU_POWER_OFF,
+                VcpuFeature::Sve => {
+                    if !check_extension(KVM_CAP_ARM_SVE) {
+                        return Err(Error::new(ENOTSUP));
+                    }
+                    KVM_ARM_VCPU_SVE
+                }
+            };
+            all_features |= 1 << shift;
+        }
+
+        if check_extension(KVM_CAP_ARM_PTRAUTH_ADDRESS)
+            && check_extension(KVM_CAP_ARM_PTRAUTH_GENERIC)
+        {
+            all_features |= 1 << KVM_ARM_VCPU_PTRAUTH_ADDRESS;
+            all_features |= 1 << KVM_ARM_VCPU_PTRAUTH_GENERIC;
+        }
+
+        Ok(all_features)
+    }
+
+    /// Finalize VCPU features setup. This does not affect features that do not make use of
+    /// finalize.
+    fn finalize(&self, features: u32) -> Result<()> {
+        if (features & 1 << KVM_ARM_VCPU_SVE) != 0 {
+            // SAFETY:
+            // Safe because we know that our file is a Vcpu fd and we verify the return result.
+            let ret = unsafe {
+                ioctl_with_ref(
+                    self,
+                    KVM_ARM_VCPU_FINALIZE,
+                    &std::os::raw::c_int::try_from(KVM_ARM_VCPU_SVE)
+                        .map_err(|_| Error::new(EINVAL))?,
+                )
+            };
+            if ret != 0 {
+                return errno_result();
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// KVM registers as used by the `GET_ONE_REG`/`SET_ONE_REG` ioctl API
@@ -542,36 +597,17 @@ impl VcpuAArch64 for KvmVcpu {
             return errno_result();
         }
 
-        for f in features {
-            let shift = match f {
-                VcpuFeature::PsciV0_2 => KVM_ARM_VCPU_PSCI_0_2,
-                VcpuFeature::PmuV3 => KVM_ARM_VCPU_PMU_V3,
-                VcpuFeature::PowerOff => KVM_ARM_VCPU_POWER_OFF,
-            };
-            kvi.features[0] |= 1 << shift;
-        }
-
-        let check_extension = |ext: u32| -> bool {
-            // SAFETY:
-            // Safe because we know self.vm is a real kvm fd
-            unsafe { ioctl_with_val(&self.vm, KVM_CHECK_EXTENSION, ext.into()) == 1 }
-        };
-        if check_extension(KVM_CAP_ARM_PTRAUTH_ADDRESS)
-            && check_extension(KVM_CAP_ARM_PTRAUTH_GENERIC)
-        {
-            kvi.features[0] |= 1 << KVM_ARM_VCPU_PTRAUTH_ADDRESS;
-            kvi.features[0] |= 1 << KVM_ARM_VCPU_PTRAUTH_GENERIC;
-        }
-
+        kvi.features[0] = self.get_features_bitmap(features)?;
         // SAFETY:
         // Safe because we allocated the struct and we know the kernel will read exactly the size of
         // the struct.
         let ret = unsafe { ioctl_with_ref(self, KVM_ARM_VCPU_INIT, &kvi) };
-        if ret == 0 {
-            Ok(())
-        } else {
-            errno_result()
+        if ret != 0 {
+            return errno_result();
         }
+
+        self.finalize(kvi.features[0])?;
+        Ok(())
     }
 
     fn init_pmu(&self, irq: u64) -> Result<()> {
@@ -737,24 +773,19 @@ impl VcpuAArch64 for KvmVcpu {
         let mut sys_regs = BTreeMap::new();
         for reg in reg_list {
             if (reg as u32) & KVM_REG_ARM_COPROC_MASK == KVM_REG_ARM64_SYSREG {
-                if reg as u16 == cntvct_el0 {
-                    sys_regs.insert(
-                        AArch64SysRegId::CNTV_CVAL_EL0,
-                        self.get_one_reg(VcpuRegAArch64::System(AArch64SysRegId::CNTV_CVAL_EL0))?,
-                    );
+                let r = if reg as u16 == cntvct_el0 {
+                    AArch64SysRegId::CNTV_CVAL_EL0
                 } else if reg as u16 == cntv_cval_el0 {
-                    sys_regs.insert(
-                        AArch64SysRegId::CNTVCT_EL0,
-                        self.get_one_reg(VcpuRegAArch64::System(AArch64SysRegId::CNTVCT_EL0))?,
-                    );
+                    AArch64SysRegId::CNTVCT_EL0
                 } else {
-                    sys_regs.insert(
-                        AArch64SysRegId::from_encoded((reg & 0xFFFF) as u16),
-                        self.get_one_reg(VcpuRegAArch64::System(AArch64SysRegId::from_encoded(
-                            (reg & 0xFFFF) as u16,
-                        )))?,
-                    );
-                }
+                    AArch64SysRegId::from_encoded((reg & 0xFFFF) as u16)
+                };
+                sys_regs.insert(r, self.get_one_reg(VcpuRegAArch64::System(r))?);
+                // The register representations are tricky. Double check they round trip correctly.
+                assert_eq!(
+                    Ok(reg),
+                    self.kvm_reg_id(VcpuRegAArch64::System(r)).map(u64::from),
+                );
             }
         }
         Ok(sys_regs)

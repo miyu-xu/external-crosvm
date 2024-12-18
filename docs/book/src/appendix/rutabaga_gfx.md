@@ -56,11 +56,25 @@ meson setup rutabaga-ffi-build/
 meson install -C rutabaga-ffi-build/
 ```
 
+### Install virglrenderer host
+
+Rutabaga's C API can also be built with virglrenderer enabled. To use virglrenderer feature first
+install virglrenderer on the host.
+
+```sh
+git clone https://gitlab.freedesktop.org/virgl/virglrenderer.git
+cd virglrenderer/
+git checkout virglrenderer-1.0.1
+meson setup build/
+meson install -C build/
+```
+
 ### Latest releases for potential packaging
 
 - [Rutabaga FFI v0.1.2](https://crates.io/crates/rutabaga_gfx_ffi)
 - [gfxstream v0.1.2](https://android.googlesource.com/platform/hardware/google/gfxstream/+/refs/tags/v0.1.2-gfxstream-release)
 - [AEMU v0.1.2](https://android.googlesource.com/platform/hardware/google/aemu/+/refs/tags/v0.1.2-aemu-release)
+- [virglrenderer v1.0.1](https://gitlab.freedesktop.org/virgl/virglrenderer/-/tree/virglrenderer-1.0.1)
 
 # Kumquat Media Server
 
@@ -91,11 +105,12 @@ ninja -C client-build/ install
 
 ## Build gfxstream guest
 
-The same repo as gfxstream host is used, but with a different build configuration.
+Mesa provides gfxstream vulkan guest libraries.
 
 ```sh
-cd $(gfxstream_dir)
-meson setup guest-build/ -Dgfxstream-build=guest
+git clone https://gitlab.freedesktop.org/mesa/mesa.git
+cd mesa
+meson setup guest-build/ -Dvulkan-drivers="gfxstream-experimental" -Dgallium-drivers="" -Dopengl=false
 ninja -C guest-build/
 ```
 
@@ -113,7 +128,8 @@ In another terminal, run:
 ```sh
 export MESA_LOADER_DRIVER_OVERRIDE=zink
 export VIRTGPU_KUMQUAT=1
-export VK_ICD_FILENAMES=$(gfxstream_dir)/guest-build/guest/vulkan/gfxstream_vk_devenv_icd.x86_64.json
+export VK_ICD_FILENAMES=$(mesa_dir)/guest-build/src/gfxstream/guest/vulkan/gfxstream_vk_devenv_icd.x86_64.json
+
 vkcube
 ```
 
@@ -125,19 +141,12 @@ To test gfxstream with Debian guests, make sure your display environment is head
 systemctl set-default multi-user.target
 ```
 
-Build gfxstream-vk:
-
-```sh
-cd $(gfxstream_dir)
-meson setup guest-build/ -Dgfxstream-build=guest
-ninja -C guest-build/
-```
-
-Start the compositor:
+Build gfxstream guest as previously and start the compositor. The `VIRTGPU_KUMQUAT` variable is no
+longer needed:
 
 ```sh
 export MESA_LOADER_DRIVER_OVERRIDE=zink
-export VK_ICD_FILENAMES=$(gfxstream_dir)/guest-build/guest/vulkan/gfxstream_vk_devenv_icd.x86_64.json
+export VK_ICD_FILENAMES=$(mesa_dir)/guest-build/src/gfxstream/guest/vulkan/gfxstream_vk_devenv_icd.x86_64.json
 weston --backend=drm
 ```
 
@@ -147,6 +156,7 @@ To contribute to gfxstream without an Android tree:
 
 ```sh
 git clone https://android.googlesource.com/platform/hardware/google/gfxstream
+cd gfxstream/
 git commit -a -m blah
 git push origin HEAD:refs/for/main
 ```

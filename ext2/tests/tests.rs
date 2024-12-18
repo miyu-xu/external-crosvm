@@ -4,6 +4,7 @@
 
 #![cfg(target_os = "linux")]
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
 use std::fs::create_dir;
@@ -21,9 +22,9 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use base::MappedRegion;
-use ext2::create_ext2_region;
-use ext2::Config;
+use ext2::Builder;
 use tempfile::tempdir;
+use tempfile::tempdir_in;
 use tempfile::TempDir;
 use walkdir::WalkDir;
 
@@ -64,9 +65,15 @@ fn run_debugfs_cmd(args: &[&str], disk: &PathBuf) -> String {
     stdout.trim_start().trim_end().to_string()
 }
 
-fn mkfs(td: &TempDir, cfg: &Config, src_dir: Option<&Path>) -> PathBuf {
+fn mkfs(td: &TempDir, builder: Builder) -> PathBuf {
     let path = td.path().join("empty.ext2");
-    let mem = create_ext2_region(cfg, src_dir).unwrap();
+    let mem = builder
+        .allocate_memory()
+        .unwrap()
+        .build_mmap_info()
+        .unwrap()
+        .do_mmap()
+        .unwrap();
     // SAFETY: `mem` has a valid pointer and its size.
     let buf = unsafe { std::slice::from_raw_parts(mem.as_ptr(), mem.size()) };
     let mut file = OpenOptions::new()
@@ -87,12 +94,11 @@ fn test_mkfs_empty() {
     let td = tempdir().unwrap();
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 1024,
             inodes_per_group: 1024,
             ..Default::default()
         },
-        None,
     );
 
     // Ensure the content of the generated disk image with `debugfs`.
@@ -113,12 +119,12 @@ fn test_mkfs_empty_multi_block_groups() {
     let num_groups = 2;
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group,
             inodes_per_group: 4096,
             size: 4096 * blocks_per_group * num_groups,
+            ..Default::default()
         },
-        None,
     );
     assert_eq!(
         run_debugfs_cmd(&["ls"], &disk),
@@ -151,7 +157,14 @@ fn collect_paths(dir: &Path, skip_lost_found: bool) -> BTreeSet<(String, PathBuf
         .collect()
 }
 
-fn assert_eq_dirs(td: &TempDir, dir: &Path, disk: &PathBuf) {
+fn assert_eq_dirs(
+    td: &TempDir,
+    dir: &Path,
+    disk: &PathBuf,
+    // Check the correct xattr is set and any unexpected one isn't set.
+    // Pass None to skip this check for test cases where many files are created.
+    xattr_map: Option<BTreeMap<String, Vec<(&str, &str)>>>,
+) {
     // dump the disk contents to `dump_dir`.
     let dump_dir = td.path().join("dump");
     std::fs::create_dir(&dump_dir).unwrap();
@@ -204,9 +217,27 @@ fn assert_eq_dirs(td: &TempDir, dir: &Path, disk: &PathBuf) {
         );
 
         if m1.file_type().is_file() {
+            // Check contents
             let c1 = std::fs::read_to_string(path1).unwrap();
             let c2 = std::fs::read_to_string(path2).unwrap();
             assert_eq!(c1, c2, "content mismatch: ({name1})");
+        }
+
+        // Check xattr
+        if let Some(mp) = &xattr_map {
+            match mp.get(name1) {
+                Some(expected_xattrs) if !expected_xattrs.is_empty() => {
+                    for (key, value) in expected_xattrs {
+                        let s = run_debugfs_cmd(&[&format!("ea_get -V {name1} {key}",)], disk);
+                        assert_eq!(&s, value);
+                    }
+                }
+                // If no xattr is specified, any value must not be set.
+                _ => {
+                    let s = run_debugfs_cmd(&[&format!("ea_list {}", name1,)], disk);
+                    assert_eq!(s, "");
+                }
+            }
         }
     }
 }
@@ -227,15 +258,15 @@ fn test_simple_dir() {
     File::create(dir.join("dir/c.txt")).unwrap();
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, Some(Default::default()));
 
     td.close().unwrap(); // make sure that tempdir is properly deleted.
 }
@@ -261,15 +292,15 @@ fn test_nested_dirs() {
     create_dir(dir3).unwrap();
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, Some(Default::default()));
 }
 
 #[test]
@@ -290,15 +321,15 @@ fn test_file_contents() {
 
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, Some(Default::default()));
 }
 
 #[test]
@@ -313,15 +344,15 @@ fn test_max_file_name() {
 
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, Some(Default::default()));
 }
 
 #[test]
@@ -342,15 +373,15 @@ fn test_mkfs_indirect_block() {
 
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 4096,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, Some(Default::default()));
 }
 
 #[test]
@@ -379,15 +410,15 @@ fn test_mkfs_symlink() {
 
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, Some(Default::default()));
 }
 
 #[test]
@@ -410,15 +441,15 @@ fn test_mkfs_abs_symlink() {
 
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, Some(Default::default()));
 }
 
 #[test]
@@ -436,15 +467,15 @@ fn test_mkfs_symlink_to_deleted() {
 
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, Some(Default::default()));
 }
 
 #[test]
@@ -477,15 +508,15 @@ fn test_mkfs_long_symlink() {
 
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, Some(Default::default()));
 }
 
 #[test]
@@ -511,12 +542,12 @@ fn test_ignore_lost_found() {
 
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
     // dump the disk contents to `dump_dir`.
@@ -563,21 +594,21 @@ fn test_multiple_block_directory_entry() {
     std::fs::create_dir(&dir).unwrap();
 
     for i in 0..1000 {
-        let path = dir.join(&format!("{i}.txt"));
+        let path = dir.join(format!("{i}.txt"));
         File::create(&path).unwrap();
     }
 
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group: 2048,
             inodes_per_group: 4096,
+            root_dir: Some(dir.clone()),
             ..Default::default()
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, None); // skip xattr check
 }
 
 // Test a case where the inode tables spans multiple block groups.
@@ -608,15 +639,15 @@ fn test_multiple_bg_multi_inode_bitmap() {
     let num_groups = 2;
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group,
             inodes_per_group,
             size: BLOCK_SIZE * blocks_per_group * num_groups,
+            root_dir: Some(dir.clone()),
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, None);
 }
 
 /// Test a case where the block tables spans multiple block groups.
@@ -647,15 +678,15 @@ fn test_multiple_bg_multi_block_bitmap() {
     let num_groups = 4;
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group,
             inodes_per_group,
             size: BLOCK_SIZE * blocks_per_group * num_groups,
+            root_dir: Some(dir.clone()),
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, None);
 }
 
 // Test a case where a file spans multiple block groups.
@@ -674,7 +705,7 @@ fn test_multiple_bg_big_files() {
     // Prepare a large data.
     let data = vec!["0123456789"; 5000 * 20].concat();
     for i in 0..10 {
-        let path = dir.join(&format!("{i}.txt"));
+        let path = dir.join(format!("{i}.txt"));
         let mut f = File::create(&path).unwrap();
         f.write_all(data.as_bytes()).unwrap();
     }
@@ -682,16 +713,72 @@ fn test_multiple_bg_big_files() {
     // Set `blocks_per_group` to a value smaller than |size of a file| / 4K.
     // So, each file spans multiple block groups.
     let blocks_per_group = 128;
-    let num_groups = 30;
+    let num_groups = 50;
     let disk = mkfs(
         &td,
-        &Config {
+        Builder {
             blocks_per_group,
             inodes_per_group: 1024,
             size: BLOCK_SIZE * blocks_per_group * num_groups,
+            root_dir: Some(dir.clone()),
         },
-        Some(&dir),
     );
 
-    assert_eq_dirs(&td, &dir, &disk);
+    assert_eq_dirs(&td, &dir, &disk, Some(Default::default()));
+}
+
+#[test]
+fn test_mkfs_xattr() {
+    // Since tmpfs doesn't support xattr, use the current directory.
+    let td = tempdir_in(".").unwrap();
+    let dir = td.path().join("testdata");
+    // testdata
+    // ├── a.txt ("user.foo"="a", "user.bar"="0123456789")
+    // ├── b.txt ("security.selinux"="unconfined_u:object_r:user_home_t:s0")
+    // ├── c.txt (no xattr)
+    // └── dir/ ("user.foo"="directory")
+    //     └─ d.txt ("user.foo"="in_directory")
+    std::fs::create_dir(&dir).unwrap();
+
+    let dir_xattrs = vec![("dir".to_string(), vec![("user.foo", "directory")])];
+    let file_xattrs = vec![
+        (
+            "a.txt".to_string(),
+            vec![("user.foo", "a"), ("user.number", "0123456789")],
+        ),
+        (
+            "b.txt".to_string(),
+            vec![("security.selinux", "unconfined_u:object_r:user_home_t:s0")],
+        ),
+        ("c.txt".to_string(), vec![]),
+        ("dir/d.txt".to_string(), vec![("user.foo", "in_directory")]),
+    ];
+
+    // Create dirs
+    for (fname, xattrs) in &dir_xattrs {
+        let f_path = dir.join(fname);
+        std::fs::create_dir(&f_path).unwrap();
+        for (key, value) in xattrs {
+            ext2::set_xattr(&f_path, key, value).unwrap();
+        }
+    }
+    // Create files
+    for (fname, xattrs) in &file_xattrs {
+        let f_path = dir.join(fname);
+        File::create(&f_path).unwrap();
+        for (key, value) in xattrs {
+            ext2::set_xattr(&f_path, key, value).unwrap();
+        }
+    }
+
+    let xattr_map: BTreeMap<String, Vec<(&str, &str)>> =
+        file_xattrs.into_iter().chain(dir_xattrs).collect();
+
+    let builder = Builder {
+        root_dir: Some(dir.clone()),
+        ..Default::default()
+    };
+    let disk = mkfs(&td, builder);
+
+    assert_eq_dirs(&td, &dir, &disk, Some(xattr_map));
 }

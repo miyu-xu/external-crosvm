@@ -15,6 +15,7 @@ use anyhow::Context;
 use argh::FromArgs;
 use base::AsRawDescriptor;
 use base::Event;
+use base::RawDescriptor;
 use base::SafeDescriptor;
 use cros_async::Executor;
 use data_model::Le64;
@@ -38,13 +39,12 @@ use vmm_vhost::Result;
 use vmm_vhost::VHOST_USER_F_PROTOCOL_FEATURES;
 use zerocopy::AsBytes;
 
+use super::BackendConnection;
 use crate::virtio::device_constants::vsock::NUM_QUEUES;
 use crate::virtio::vhost::user::device::handler::vmm_va_to_gpa;
 use crate::virtio::vhost::user::device::handler::MappingInfo;
 use crate::virtio::vhost::user::device::handler::VhostUserRegularOps;
 use crate::virtio::vhost::user::VhostUserDeviceBuilder;
-use crate::virtio::vhost::user::VhostUserListener;
-use crate::virtio::vhost::user::VhostUserListenerTrait;
 use crate::virtio::Queue;
 use crate::virtio::QueueConfig;
 
@@ -438,25 +438,24 @@ impl vmm_vhost::Backend for VsockBackend {
     fn get_shared_memory_regions(&mut self) -> Result<Vec<VhostSharedMemoryRegion>> {
         Ok(vec![])
     }
-
-    fn snapshot(&mut self) -> Result<Vec<u8>> {
-        base::warn!("snapshot not implemented for vsock.");
-        Ok(Vec::new())
-    }
-
-    fn restore(&mut self, _data_bytes: &[u8]) -> Result<()> {
-        base::warn!("restore not implemented for vsock.");
-        Ok(())
-    }
 }
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "vsock")]
 /// Vsock device
 pub struct Options {
+    #[argh(option, arg_name = "PATH", hidden_help)]
+    /// deprecated - please use --socket-path instead
+    socket: Option<String>,
     #[argh(option, arg_name = "PATH")]
-    /// path to bind a listening vhost-user socket
-    socket: String,
+    /// path to the vhost-user socket to bind to.
+    /// If this flag is set, --fd cannot be specified.
+    socket_path: Option<String>,
+    #[argh(option, arg_name = "FD")]
+    /// file descriptor of a connected vhost-user socket.
+    /// If this flag is set, --socket-path cannot be specified.
+    fd: Option<RawDescriptor>,
+
     #[argh(option, arg_name = "INT")]
     /// the vsock context id for this device
     cid: u64,
@@ -473,9 +472,10 @@ pub struct Options {
 pub fn run_vsock_device(opts: Options) -> anyhow::Result<()> {
     let ex = Executor::new().context("failed to create executor")?;
 
-    let listener = VhostUserListener::new_socket(&opts.socket, None)?;
+    let conn =
+        BackendConnection::from_opts(opts.socket.as_deref(), opts.socket_path.as_deref(), opts.fd)?;
 
     let vsock_device = Box::new(VhostUserVsockDevice::new(opts.cid, opts.vhost_socket)?);
 
-    listener.run_device(ex, vsock_device)
+    conn.run_device(ex, vsock_device)
 }

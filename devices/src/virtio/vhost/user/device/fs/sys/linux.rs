@@ -8,16 +8,18 @@ use std::path::PathBuf;
 use anyhow::bail;
 use anyhow::Context;
 use base::linux::max_open_files;
+use base::AsRawDescriptor;
+use base::AsRawDescriptors;
 use base::RawDescriptor;
 use cros_async::Executor;
 use jail::create_base_minijail;
+use jail::create_base_minijail_without_pivot_root;
 use jail::set_embedded_bpf_program;
 use minijail::Minijail;
 
 use crate::virtio::vhost::user::device::fs::FsBackend;
 use crate::virtio::vhost::user::device::fs::Options;
-use crate::virtio::vhost::user::device::listener::sys::VhostUserListener;
-use crate::virtio::vhost::user::device::listener::VhostUserListenerTrait;
+use crate::virtio::vhost::user::device::BackendConnection;
 
 fn default_uidmap() -> String {
     // SAFETY: trivially safe
@@ -40,11 +42,18 @@ fn jail_and_fork(
     uid_map: Option<String>,
     gid_map: Option<String>,
     disable_sandbox: bool,
+    pivot_root: bool,
 ) -> anyhow::Result<i32> {
-    let limit = max_open_files().context("failed to get max open files")?;
+    let limit = max_open_files()
+        .context("failed to get max open files")?
+        .rlim_max;
     // Create new minijail sandbox
     let jail = if disable_sandbox {
-        create_base_minijail(dir_path.as_path(), limit)?
+        if pivot_root {
+            create_base_minijail(dir_path.as_path(), limit)
+        } else {
+            create_base_minijail_without_pivot_root(dir_path.as_path(), limit)
+        }?
     } else {
         let mut j: Minijail = Minijail::new()?;
         j.namespace_pids();
@@ -105,17 +114,40 @@ fn jail_and_fork(
 
 /// Starts a vhost-user fs device.
 /// Returns an error if the given `args` is invalid or the device fails to run.
-pub fn start_device(opts: Options) -> anyhow::Result<()> {
+#[allow(unused_mut)]
+pub fn start_device(mut opts: Options) -> anyhow::Result<()> {
+    #[allow(unused_mut)]
+    let mut is_pivot_root_required = true;
+    #[cfg(feature = "fs_runtime_ugid_map")]
+    if let Some(ref mut cfg) = opts.cfg {
+        if !cfg.ugid_map.is_empty() && (!opts.disable_sandbox || !opts.skip_pivot_root) {
+            bail!("uid_gid_map can only be set with disable sandbox and skip_pivot_root option");
+        }
+
+        if opts.skip_pivot_root {
+            is_pivot_root_required = false;
+        }
+    }
     let ex = Executor::new().context("Failed to create executor")?;
-    let fs_device = FsBackend::new(&ex, &opts.tag, opts.cfg)?;
+    let fs_device = FsBackend::new(
+        &opts.tag,
+        opts.shared_dir
+            .to_str()
+            .expect("Failed to convert opts.shared_dir to str()"),
+        opts.skip_pivot_root,
+        opts.cfg,
+    )?;
 
     let mut keep_rds = fs_device.keep_rds.clone();
-    let listener = VhostUserListener::new_socket(&opts.socket, Some(&mut keep_rds))?;
+    keep_rds.append(&mut ex.as_raw_descriptors());
+
+    let conn =
+        BackendConnection::from_opts(opts.socket.as_deref(), opts.socket_path.as_deref(), opts.fd)?;
+    keep_rds.push(conn.as_raw_descriptor());
 
     base::syslog::push_descriptors(&mut keep_rds);
     cros_tracing::push_descriptors!(&mut keep_rds);
     metrics::push_descriptors(&mut keep_rds);
-
     let pid = jail_and_fork(
         keep_rds,
         opts.shared_dir,
@@ -124,6 +156,7 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         opts.uid_map,
         opts.gid_map,
         opts.disable_sandbox,
+        is_pivot_root_required,
     )?;
 
     // Parent, nothing to do but wait and then exit
@@ -133,29 +166,6 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // TODO(crbug.com/1199487): Remove this once libc provides the wrapper for all targets.
-    #[cfg(target_os = "linux")]
-    {
-        // We need to set the no setuid fixup secure bit so that we don't drop capabilities when
-        // changing the thread uid/gid. Without this, creating new entries can fail in some corner
-        // cases.
-        const SECBIT_NO_SETUID_FIXUP: i32 = 1 << 2;
-
-        // SAFETY:
-        // Safe because this doesn't modify any memory and we check the return value.
-        let mut securebits = unsafe { libc::prctl(libc::PR_GET_SECUREBITS) };
-        if securebits < 0 {
-            bail!(std::io::Error::last_os_error());
-        }
-        securebits |= SECBIT_NO_SETUID_FIXUP;
-        // SAFETY:
-        // Safe because this doesn't modify any memory and we check the return value.
-        let ret = unsafe { libc::prctl(libc::PR_SET_SECUREBITS, securebits) };
-        if ret < 0 {
-            bail!(std::io::Error::last_os_error());
-        }
-    }
-
     // run_until() returns an Result<Result<..>> which the ? operator lets us flatten.
-    ex.run_until(listener.run_backend(fs_device, &ex))?
+    ex.run_until(conn.run_backend(fs_device, &ex))?
 }

@@ -139,6 +139,15 @@ balloon = ["devices/balloon", "vm_control/balloon"]
 ## concatenate large file system images into a single disk image.
 composite-disk = ["protos/composite-disk", "protobuf", "disk/composite-disk"]
 
+## Enables support for using a seekable zstd archive of a raw disk image as a read-only disk.
+## See [Format Specs](https://github.com/facebook/zstd/tree/v1.5.6/contrib/seekable_format) for
+## more information.
+zstd-disk = ["disk/zstd-disk"]
+
+## Enables virtiofs uid-gid mapping from the host side through command line when user-namespace
+## isn't available for non-root users. This format is supported only for vhost-user-fs.
+fs_runtime_ugid_map = ["devices/fs_runtime_ugid_map"]
+
 ## Enables support for JSON configuration files that can be specified using `--cfg`. See
 ## [Configuration Files](https://crosvm.dev/book/running_crosvm/options.html#configuration-files)
 ## for more information.
@@ -244,6 +253,9 @@ ffmpeg = ["devices/ffmpeg"]
 # Enables the VAAPI backend of video devices.
 vaapi = ["devices/vaapi"]
 
+## Enables the virtio-media device.
+media = ["devices/media"]
+
 #! ### Linux-specific feature flags
 
 ## Enables the use of the GenieZone hypervisor
@@ -278,6 +290,15 @@ whpx = ["devices/whpx", "hypervisor/whpx"]
 
 ## Enables a libslirp based network device. Currently only supported on Windows.
 slirp = ["devices/slirp", "net_util/slirp"]
+
+## Enables slirp debugging.
+slirp-debug = ["net_util/slirp-debug"]
+
+## Enables slirp capture.
+slirp-ring-capture = [
+    "net_util/slirp-ring-capture",
+    "devices/slirp-ring-capture",
+]
 
 #! ### Non-additive feature flags
 #!
@@ -341,6 +362,12 @@ vtpm = ["devices/vtpm"]
 ## Enables reporting of crosvm crashes
 crash-report = ["broker_ipc/crash-report", "crash_report"]
 
+gvm = []
+perfetto = []
+process-invariants = []
+prod-build = []
+sandbox = []
+
 #! ### Platform Feature Sets
 #!
 #! These feature flags enable all features that are supported for a given platform.
@@ -356,11 +383,13 @@ all-default = [
     "crash-report",
     "default",
     "ffmpeg",
+    "fs_runtime_ugid_map",
     "gdb",
     "geniezone",
     "gfxstream",
     "gfxstream_stub",
     "libvda-stub",
+    "media",
     "net",
     "noncoherent-dma",
     "pci-hotplug",
@@ -378,6 +407,7 @@ all-default = [
     "vtpm",
     "wl-dmabuf",
     "x",
+    "zstd-disk"
 ]
 
 ## All features that are compiled and tested for aarch64
@@ -427,6 +457,7 @@ all-mingw64 = [
     "haxm",
     "net",
     "slirp",
+    "slirp-debug",
     "stats",
     "vulkan_display",
     "pvclock",
@@ -437,21 +468,22 @@ all-msvc64 = [ "all-mingw64" ]
 
 ## All features that are compiled and tested for android builds
 all-android = [
-        "android-sparse",
-        "audio",
-        "audio_aaudio",
-        "balloon",
-        "config-file",
-        "gdb",
-        "gdbstub",
-        "gdbstub_arch",
-        "geniezone",
-        "gunyah",
-        "libaaudio_stub",
-        "net",
-        "qcow",
-        "usb",
-        "composite-disk",
+    "android-sparse",
+    "audio",
+    "audio_aaudio",
+    "balloon",
+    "composite-disk",
+    "config-file",
+    "fs_runtime_ugid_map",
+    "gdb",
+    "gdbstub",
+    "gdbstub_arch",
+    "geniezone",
+    "gunyah",
+    "libaaudio_stub",
+    "net",
+    "qcow",
+    "usb",
 ]
 
 [dependencies]
@@ -508,6 +540,7 @@ thiserror = { version = "1.0.20" }
 vm_control = { path = "vm_control" }
 acpi_tables = { path = "acpi_tables" }
 vm_memory = { path = "vm_memory" }
+vmm_vhost = { path = "third_party/vmm_vhost" }
 uuid = { version = "1", features = ["v4"] }
 zerocopy = { version = "0.7", features = ["derive"] }
 

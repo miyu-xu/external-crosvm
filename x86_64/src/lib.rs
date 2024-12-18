@@ -41,10 +41,10 @@ pub mod smbios;
 
 use std::arch::x86_64::CpuidResult;
 use std::collections::BTreeMap;
-use std::ffi::CStr;
-use std::ffi::CString;
+use std::fmt;
 use std::fs::File;
 use std::io;
+use std::io::Write;
 use std::mem;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -60,11 +60,13 @@ use arch::CpuSet;
 use arch::DtbOverlay;
 use arch::FdtPosition;
 use arch::GetSerialCmdlineError;
+use arch::MemoryRegionConfig;
+use arch::PciConfig;
 use arch::RunnableLinuxVm;
 use arch::VmComponents;
 use arch::VmImage;
-#[cfg(feature = "seccomp_trace")]
 use base::debug;
+use base::info;
 use base::warn;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use base::AsRawDescriptors;
@@ -121,7 +123,6 @@ use jail::read_jail_addr;
 use jail::FakeMinijailStub as Minijail;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
-use once_cell::sync::OnceCell;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use remain::sorted;
@@ -137,11 +138,13 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
 use vm_memory::MemoryRegionOptions;
+use vm_memory::MemoryRegionPurpose;
 use zerocopy::AsBytes;
 use zerocopy::FromBytes;
 use zerocopy::FromZeroes;
 
 use crate::bootparam::boot_params;
+use crate::bootparam::setup_header;
 use crate::bootparam::XLF_CAN_BE_LOADED_ABOVE_4G;
 use crate::cpuid::EDX_HYBRID_CPU_SHIFT;
 
@@ -165,8 +168,16 @@ pub enum Error {
     CloneTube(TubeError),
     #[error("the given kernel command line was invalid: {0}")]
     Cmdline(kernel_cmdline::Error),
+    #[error("failed writing command line to guest memory")]
+    CommandLineCopy,
+    #[error("command line overflowed guest memory")]
+    CommandLineOverflow,
     #[error("failed to configure hotplugged pci device: {0}")]
     ConfigurePciDevice(arch::DeviceRegistrationError),
+    #[error("bad PCI ECAM configuration: {0}")]
+    ConfigurePciEcam(String),
+    #[error("bad PCI mem configuration: {0}")]
+    ConfigurePciMem(String),
     #[error("failed to configure segment registers: {0}")]
     ConfigureSegments(regs::Error),
     #[error("error configuring the system")]
@@ -222,8 +233,8 @@ pub enum Error {
     LoadBios(io::Error),
     #[error("error loading kernel bzImage: {0}")]
     LoadBzImage(bzimage::Error),
-    #[error("error loading command line: {0}")]
-    LoadCmdline(kernel_loader::Error),
+    #[error("error loading custom pVM firmware: {0}")]
+    LoadCustomPvmFw(arch::LoadImageError),
     #[error("error loading initrd: {0}")]
     LoadInitrd(arch::LoadImageError),
     #[error("error loading Kernel: {0}")]
@@ -232,6 +243,10 @@ pub enum Error {
     LoadPflash(io::Error),
     #[error("error translating address: Page not present")]
     PageNotPresent,
+    #[error("pci mmio overlaps with pVM firmware memory")]
+    PciMmioOverlapPvmFw,
+    #[error("pVM firmware not supported when bios is used on x86_64")]
+    PvmFwBiosUnsupported,
     #[error("error reading guest memory {0}")]
     ReadingGuestMemory(vm_memory::GuestMemoryError),
     #[error("single register read not supported on x86_64")]
@@ -321,9 +336,17 @@ pub struct SetupData {
     pub type_: SetupDataType,
 }
 
+#[derive(Copy, Clone, Debug)]
 enum E820Type {
     Ram = 0x01,
     Reserved = 0x2,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct E820Entry {
+    pub address: GuestAddress,
+    pub len: u64,
+    pub mem_type: E820Type,
 }
 
 const MB: u64 = 1 << 20;
@@ -333,6 +356,16 @@ pub const BOOT_STACK_POINTER: u64 = 0x8000;
 const START_OF_RAM_32BITS: u64 = 0;
 const FIRST_ADDR_PAST_20BITS: u64 = 1 << 20;
 const FIRST_ADDR_PAST_32BITS: u64 = 1 << 32;
+// Make sure it align to 256MB for MTRR convenient
+const MEM_32BIT_GAP_SIZE: u64 = 768 * MB;
+const END_ADDR_BEFORE_32BITS: u64 = FIRST_ADDR_PAST_32BITS - MEM_32BIT_GAP_SIZE;
+// Reserved memory for nand_bios/LAPIC/IOAPIC/HPET/.....
+const RESERVED_MEM_SIZE: u64 = 0x800_0000;
+const DEFAULT_PCI_MEM_END: u64 = FIRST_ADDR_PAST_32BITS - RESERVED_MEM_SIZE - 1;
+// Reserve 64MB for pcie enhanced configuration
+const DEFAULT_PCIE_CFG_MMIO_SIZE: u64 = 0x400_0000;
+const DEFAULT_PCIE_CFG_MMIO_END: u64 = FIRST_ADDR_PAST_32BITS - RESERVED_MEM_SIZE - 1;
+const DEFAULT_PCIE_CFG_MMIO_START: u64 = DEFAULT_PCIE_CFG_MMIO_END - DEFAULT_PCIE_CFG_MMIO_SIZE + 1;
 // Linux (with 4-level paging) has a physical memory limit of 46 bits (64 TiB).
 const HIGH_MMIO_MAX_END: u64 = (1u64 << 46) - 1;
 pub const KERNEL_32BIT_ENTRY_OFFSET: u64 = 0x0;
@@ -359,6 +392,12 @@ pub const X86_64_SCI_IRQ: u32 = 5;
 pub const X86_64_IRQ_BASE: u32 = 9;
 const ACPI_HI_RSDP_WINDOW_BASE: u64 = 0x000E_0000;
 
+// pVM firmware memory. Should be within the low 4GB, so that it is identity-mapped
+// by setup_page_tables() when a protected VM boots in long mode, since the pVM firmware is
+// the VM entry point.
+const PROTECTED_VM_FW_MAX_SIZE: u64 = 0x40_0000;
+const PROTECTED_VM_FW_START: u64 = END_ADDR_BEFORE_32BITS - PROTECTED_VM_FW_MAX_SIZE;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum CpuManufacturer {
     Intel,
@@ -370,61 +409,95 @@ pub fn get_cpu_manufacturer() -> CpuManufacturer {
     cpuid::cpu_manufacturer()
 }
 
-// Memory layout below 4G
-struct LowMemoryLayout {
+pub struct ArchMemoryLayout {
     // the pci mmio range below 4G
-    pci_mmio: AddressRange,
+    pci_mmio_before_32bit: AddressRange,
     // the pcie cfg mmio range
     pcie_cfg_mmio: AddressRange,
+    // the pVM firmware memory (if running a protected VM)
+    pvmfw_mem: Option<AddressRange>,
 }
 
-static LOW_MEMORY_LAYOUT: OnceCell<LowMemoryLayout> = OnceCell::new();
-
-pub fn init_low_memory_layout(pcie_ecam: Option<AddressRange>, pci_low_start: Option<u64>) {
-    LOW_MEMORY_LAYOUT.get_or_init(|| {
-        // Make sure it align to 256MB for MTRR convenient
-        const MEM_32BIT_GAP_SIZE: u64 = 768 * MB;
-        // Reserved memory for nand_bios/LAPIC/IOAPIC/HPET/.....
-        const RESERVED_MEM_SIZE: u64 = 0x800_0000;
-        const PCI_MMIO_END: u64 = FIRST_ADDR_PAST_32BITS - RESERVED_MEM_SIZE - 1;
-        // Reserve 64MB for pcie enhanced configuration
-        const DEFAULT_PCIE_CFG_MMIO_SIZE: u64 = 0x400_0000;
-        const DEFAULT_PCIE_CFG_MMIO_END: u64 = FIRST_ADDR_PAST_32BITS - RESERVED_MEM_SIZE - 1;
-        const DEFAULT_PCIE_CFG_MMIO_START: u64 =
-            DEFAULT_PCIE_CFG_MMIO_END - DEFAULT_PCIE_CFG_MMIO_SIZE + 1;
-        const DEFAULT_PCIE_CFG_MMIO: AddressRange = AddressRange {
-            start: DEFAULT_PCIE_CFG_MMIO_START,
-            end: DEFAULT_PCIE_CFG_MMIO_END,
-        };
-
-        let pcie_cfg_mmio = pcie_ecam.unwrap_or(DEFAULT_PCIE_CFG_MMIO);
-
-        let pci_mmio = if let Some(pci_low) = pci_low_start {
-            AddressRange {
-                start: pci_low,
-                end: PCI_MMIO_END,
-            }
-        } else {
-            AddressRange {
-                start: pcie_cfg_mmio
-                    .start
-                    .min(FIRST_ADDR_PAST_32BITS - MEM_32BIT_GAP_SIZE),
-                end: PCI_MMIO_END,
-            }
-        };
-
-        LowMemoryLayout {
-            pci_mmio,
-            pcie_cfg_mmio,
+pub fn create_arch_memory_layout(
+    pci_config: &PciConfig,
+    has_protected_vm_firmware: bool,
+) -> Result<ArchMemoryLayout> {
+    // the max bus number is 256 and each bus occupy 1MB, so the max pcie cfg mmio size = 256M
+    const MAX_PCIE_ECAM_SIZE: u64 = 256 * MB;
+    let pcie_cfg_mmio = match pci_config.ecam {
+        Some(MemoryRegionConfig {
+            start,
+            size: Some(size),
+        }) => AddressRange::from_start_and_size(start, size.min(MAX_PCIE_ECAM_SIZE)).unwrap(),
+        Some(MemoryRegionConfig { start, size: None }) => {
+            AddressRange::from_start_and_end(start, DEFAULT_PCIE_CFG_MMIO_END)
         }
-    });
+        None => {
+            AddressRange::from_start_and_end(DEFAULT_PCIE_CFG_MMIO_START, DEFAULT_PCIE_CFG_MMIO_END)
+        }
+    };
+    if pcie_cfg_mmio.start % pcie_cfg_mmio.len().unwrap() != 0
+        || pcie_cfg_mmio.start % MB != 0
+        || pcie_cfg_mmio.len().unwrap() % MB != 0
+    {
+        return Err(Error::ConfigurePciEcam(
+            "base and len must be aligned to 1MB and base must be a multiple of len".to_string(),
+        ));
+    }
+    if pcie_cfg_mmio.end >= 0x1_0000_0000 {
+        return Err(Error::ConfigurePciEcam(
+            "end address can't go beyond 4G".to_string(),
+        ));
+    }
+
+    let pci_mmio_before_32bit = match pci_config.mem {
+        Some(MemoryRegionConfig {
+            start,
+            size: Some(size),
+        }) => AddressRange::from_start_and_size(start, size)
+            .ok_or(Error::ConfigurePciMem("region overflowed".to_string()))?,
+        Some(MemoryRegionConfig { start, size: None }) => {
+            AddressRange::from_start_and_end(start, DEFAULT_PCI_MEM_END)
+        }
+        None => AddressRange::from_start_and_end(
+            pcie_cfg_mmio
+                .start
+                .min(FIRST_ADDR_PAST_32BITS - MEM_32BIT_GAP_SIZE),
+            DEFAULT_PCI_MEM_END,
+        ),
+    };
+
+    let pvmfw_mem = if has_protected_vm_firmware {
+        let range = AddressRange {
+            start: PROTECTED_VM_FW_START,
+            end: PROTECTED_VM_FW_START + PROTECTED_VM_FW_MAX_SIZE - 1,
+        };
+        if !pci_mmio_before_32bit.intersect(range).is_empty() {
+            return Err(Error::PciMmioOverlapPvmFw);
+        }
+
+        Some(range)
+    } else {
+        None
+    };
+
+    Ok(ArchMemoryLayout {
+        pci_mmio_before_32bit,
+        pcie_cfg_mmio,
+        pvmfw_mem,
+    })
 }
 
-pub fn read_pci_mmio_before_32bit() -> AddressRange {
-    LOW_MEMORY_LAYOUT.get().unwrap().pci_mmio
-}
-pub fn read_pcie_cfg_mmio() -> AddressRange {
-    LOW_MEMORY_LAYOUT.get().unwrap().pcie_cfg_mmio
+fn max_ram_end_before_32bit(
+    arch_memory_layout: &ArchMemoryLayout,
+    has_protected_vm_firmware: bool,
+) -> u64 {
+    let pci_start = arch_memory_layout.pci_mmio_before_32bit.start;
+    if has_protected_vm_firmware {
+        pci_start.min(PROTECTED_VM_FW_START)
+    } else {
+        pci_start
+    }
 }
 
 /// The x86 reset vector for i386+ and x86_64 puts the processor into an "unreal mode" where it
@@ -452,10 +525,10 @@ fn tss_addr_end() -> GuestAddress {
 fn configure_system(
     guest_mem: &GuestMemory,
     cmdline_addr: GuestAddress,
-    cmdline_size: usize,
     setup_data: Option<GuestAddress>,
     initrd: Option<(GuestAddress, usize)>,
     mut params: boot_params,
+    e820_entries: &[E820Entry],
 ) -> Result<()> {
     const KERNEL_BOOT_FLAG_MAGIC: u16 = 0xaa55;
     const KERNEL_HDR_MAGIC: u32 = 0x5372_6448;
@@ -467,7 +540,6 @@ fn configure_system(
     params.hdr.header = KERNEL_HDR_MAGIC;
     params.hdr.cmd_line_ptr = cmdline_addr.offset() as u32;
     params.ext_cmd_line_ptr = (cmdline_addr.offset() >> 32) as u32;
-    params.hdr.cmdline_size = cmdline_size as u32;
     params.hdr.kernel_alignment = KERNEL_MIN_ALIGNMENT_BYTES;
     if let Some(setup_data) = setup_data {
         params.hdr.setup_data = setup_data.offset();
@@ -479,49 +551,16 @@ fn configure_system(
         params.ext_ramdisk_size = (initrd_size as u64 >> 32) as u32;
     }
 
-    // Some guest kernels expect a typical PC memory layout where the region between 640 KB and 1 MB
-    // is reserved for device memory/ROMs and get confused if there is a RAM region spanning this
-    // area, so we provide the traditional 640 KB low memory and 1 MB+ high memory regions.
-    let ram_below_1m_end = 640 * 1024;
-    let ram_below_1m = AddressRange {
-        start: START_OF_RAM_32BITS,
-        end: ram_below_1m_end - 1,
-    };
-    // GuestMemory::end_addr() returns the first address past the end, so subtract 1 to get the
-    // inclusive end.
-    let guest_mem_end = guest_mem.end_addr().offset() - 1;
-    let ram_below_4g = AddressRange {
-        start: FIRST_ADDR_PAST_20BITS,
-        end: guest_mem_end.min(read_pci_mmio_before_32bit().start - 1),
-    };
-    let ram_above_4g = AddressRange {
-        start: FIRST_ADDR_PAST_32BITS,
-        end: guest_mem_end,
-    };
-    add_e820_entry(&mut params, ram_below_1m, E820Type::Ram)?;
-    add_e820_entry(&mut params, ram_below_4g, E820Type::Ram)?;
-    if !ram_above_4g.is_empty() {
-        add_e820_entry(&mut params, ram_above_4g, E820Type::Ram)?
+    if e820_entries.len() >= params.e820_table.len() {
+        return Err(Error::E820Configuration);
     }
 
-    let pcie_cfg_mmio_range = read_pcie_cfg_mmio();
-    add_e820_entry(&mut params, pcie_cfg_mmio_range, E820Type::Reserved)?;
-
-    add_e820_entry(
-        &mut params,
-        X8664arch::get_pcie_vcfg_mmio_range(guest_mem, &pcie_cfg_mmio_range),
-        E820Type::Reserved,
-    )?;
-
-    // Reserve memory section for Identity map and TSS
-    add_e820_entry(
-        &mut params,
-        AddressRange {
-            start: identity_map_addr_start().offset(),
-            end: tss_addr_end().offset() - 1,
-        },
-        E820Type::Reserved,
-    )?;
+    for (src, dst) in e820_entries.iter().zip(params.e820_table.iter_mut()) {
+        dst.addr = src.address.offset();
+        dst.size = src.len;
+        dst.type_ = src.mem_type as u32;
+    }
+    params.e820_entries = e820_entries.len() as u8;
 
     let zero_page_addr = GuestAddress(ZERO_PAGE_OFFSET);
     if !guest_mem.is_valid_range(zero_page_addr, mem::size_of::<boot_params>() as u64) {
@@ -613,20 +652,65 @@ fn setup_data_rng_seed() -> SetupData {
 }
 
 /// Add an e820 region to the e820 map.
-/// Returns Ok(()) if successful, or an error if there is no space left in the map.
-fn add_e820_entry(params: &mut boot_params, range: AddressRange, mem_type: E820Type) -> Result<()> {
-    if params.e820_entries >= params.e820_table.len() as u8 {
-        return Err(Error::E820Configuration);
-    }
-
-    let size = range.len().ok_or(Error::E820Configuration)?;
-
-    params.e820_table[params.e820_entries as usize].addr = range.start;
-    params.e820_table[params.e820_entries as usize].size = size;
-    params.e820_table[params.e820_entries as usize].type_ = mem_type as u32;
-    params.e820_entries += 1;
+fn add_e820_entry(
+    e820_entries: &mut Vec<E820Entry>,
+    range: AddressRange,
+    mem_type: E820Type,
+) -> Result<()> {
+    e820_entries.push(E820Entry {
+        address: GuestAddress(range.start),
+        len: range.len().ok_or(Error::E820Configuration)?,
+        mem_type,
+    });
 
     Ok(())
+}
+
+/// Generate a memory map in INT 0x15 AX=0xE820 format.
+fn generate_e820_memory_map(
+    arch_memory_layout: &ArchMemoryLayout,
+    guest_mem: &GuestMemory,
+    ram_below_1m: AddressRange,
+    ram_below_4g: AddressRange,
+    ram_above_4g: AddressRange,
+    has_protected_vm_firmware: bool,
+) -> Result<Vec<E820Entry>> {
+    let mut e820_entries = Vec::new();
+
+    add_e820_entry(&mut e820_entries, ram_below_1m, E820Type::Ram)?;
+    add_e820_entry(&mut e820_entries, ram_below_4g, E820Type::Ram)?;
+    if !ram_above_4g.is_empty() {
+        add_e820_entry(&mut e820_entries, ram_above_4g, E820Type::Ram)?
+    }
+
+    if has_protected_vm_firmware {
+        // After the pVM firmware jumped to the guest, the pVM firmware itself
+        // is no longer running, so its memory is reusable by the guest OS.
+        // So add this memory as RAM rather than Reserved.
+        let pvmfw_range = arch_memory_layout.pvmfw_mem.unwrap();
+        add_e820_entry(&mut e820_entries, pvmfw_range, E820Type::Ram)?;
+    }
+
+    let pcie_cfg_mmio_range = arch_memory_layout.pcie_cfg_mmio;
+    add_e820_entry(&mut e820_entries, pcie_cfg_mmio_range, E820Type::Reserved)?;
+
+    add_e820_entry(
+        &mut e820_entries,
+        X8664arch::get_pcie_vcfg_mmio_range(guest_mem, &pcie_cfg_mmio_range),
+        E820Type::Reserved,
+    )?;
+
+    // Reserve memory section for Identity map and TSS
+    add_e820_entry(
+        &mut e820_entries,
+        AddressRange {
+            start: identity_map_addr_start().offset(),
+            end: tss_addr_end().offset() - 1,
+        },
+        E820Type::Reserved,
+    )?;
+
+    Ok(e820_entries)
 }
 
 /// Returns a Vec of the valid memory addresses.
@@ -634,25 +718,47 @@ fn add_e820_entry(params: &mut boot_params, range: AddressRange, mem_type: E820T
 /// For x86_64 all addresses are valid from the start of the kernel except a
 /// carve out at the end of 32bit address space.
 pub fn arch_memory_regions(
+    arch_memory_layout: &ArchMemoryLayout,
     size: u64,
     bios_size: Option<u64>,
+    has_protected_vm_firmware: bool,
 ) -> Vec<(GuestAddress, u64, MemoryRegionOptions)> {
+    let mut mem_size = size;
+    let mut regions = Vec::new();
+
+    if has_protected_vm_firmware {
+        regions.push((
+            GuestAddress(PROTECTED_VM_FW_START),
+            PROTECTED_VM_FW_MAX_SIZE,
+            MemoryRegionOptions::new().purpose(MemoryRegionPurpose::ProtectedFirmwareRegion),
+        ));
+
+        // pVM firmware memory is a part of normal guest memory, since it is reusable
+        // by the guest OS once the pVM firmware jumped to the guest. So count its size
+        // as a part of the total guest memory size.
+        if mem_size > PROTECTED_VM_FW_MAX_SIZE {
+            mem_size -= PROTECTED_VM_FW_MAX_SIZE;
+        }
+    }
+
     let mem_start = START_OF_RAM_32BITS;
-    let mem_end = GuestAddress(size + mem_start);
+    let mem_end = GuestAddress(mem_size + mem_start);
 
     let first_addr_past_32bits = GuestAddress(FIRST_ADDR_PAST_32BITS);
-    let end_32bit_gap_start = GuestAddress(read_pci_mmio_before_32bit().start);
+    let max_end_32bits = GuestAddress(max_ram_end_before_32bit(
+        arch_memory_layout,
+        has_protected_vm_firmware,
+    ));
 
-    let mut regions = Vec::new();
-    if mem_end <= end_32bit_gap_start {
-        regions.push((GuestAddress(mem_start), size, Default::default()));
+    if mem_end <= max_end_32bits {
+        regions.push((GuestAddress(mem_start), mem_size, Default::default()));
         if let Some(bios_size) = bios_size {
             regions.push((bios_start(bios_size), bios_size, Default::default()));
         }
     } else {
         regions.push((
             GuestAddress(mem_start),
-            end_32bit_gap_start.offset() - mem_start,
+            max_end_32bits.offset() - mem_start,
             Default::default(),
         ));
         if let Some(bios_size) = bios_size {
@@ -660,7 +766,7 @@ pub fn arch_memory_regions(
         }
         regions.push((
             first_addr_past_32bits,
-            mem_end.offset_from(end_32bit_gap_start),
+            mem_end.offset_from(max_end_32bits),
             Default::default(),
         ));
     }
@@ -670,29 +776,48 @@ pub fn arch_memory_regions(
 
 impl arch::LinuxArch for X8664arch {
     type Error = Error;
+    type ArchMemoryLayout = ArchMemoryLayout;
+
+    fn arch_memory_layout(
+        components: &VmComponents,
+    ) -> std::result::Result<Self::ArchMemoryLayout, Self::Error> {
+        create_arch_memory_layout(
+            &components.pci_config,
+            components.hv_cfg.protection_type.runs_firmware(),
+        )
+    }
 
     fn guest_memory_layout(
         components: &VmComponents,
+        arch_memory_layout: &Self::ArchMemoryLayout,
         _hypervisor: &impl Hypervisor,
     ) -> std::result::Result<Vec<(GuestAddress, u64, MemoryRegionOptions)>, Self::Error> {
-        init_low_memory_layout(components.pcie_ecam, components.pci_low_start);
+        let has_protected_vm_firmware = components.hv_cfg.protection_type.runs_firmware();
 
         let bios_size = match &components.vm_image {
             VmImage::Bios(bios_file) => Some(bios_file.metadata().map_err(Error::LoadBios)?.len()),
             VmImage::Kernel(_) => None,
         };
 
-        Ok(arch_memory_regions(components.memory_size, bios_size))
+        Ok(arch_memory_regions(
+            arch_memory_layout,
+            components.memory_size,
+            bios_size,
+            has_protected_vm_firmware,
+        ))
     }
 
-    fn get_system_allocator_config<V: Vm>(vm: &V) -> SystemAllocatorConfig {
+    fn get_system_allocator_config<V: Vm>(
+        vm: &V,
+        arch_memory_layout: &Self::ArchMemoryLayout,
+    ) -> SystemAllocatorConfig {
         SystemAllocatorConfig {
             io: Some(AddressRange {
                 start: 0xc000,
                 end: 0xffff,
             }),
-            low_mmio: read_pci_mmio_before_32bit(),
-            high_mmio: Self::get_high_mmio_range(vm),
+            low_mmio: arch_memory_layout.pci_mmio_before_32bit,
+            high_mmio: Self::get_high_mmio_range(vm, arch_memory_layout),
             platform_mmio: None,
             first_irq: X86_64_IRQ_BASE,
         }
@@ -700,6 +825,7 @@ impl arch::LinuxArch for X8664arch {
 
     fn build_vm<V, Vcpu>(
         mut components: VmComponents,
+        arch_memory_layout: &Self::ArchMemoryLayout,
         vm_evt_wrtube: &SendTube,
         system_allocator: &mut SystemAllocator,
         serial_parameters: &BTreeMap<(SerialHardware, u8), SerialParameters>,
@@ -718,15 +844,12 @@ impl arch::LinuxArch for X8664arch {
         guest_suspended_cvar: Option<Arc<(Mutex<bool>, Condvar)>>,
         device_tree_overlays: Vec<DtbOverlay>,
         _fdt_position: Option<FdtPosition>,
+        _no_pmu: bool,
     ) -> std::result::Result<RunnableLinuxVm<V, Vcpu>, Self::Error>
     where
         V: VmX86_64,
         Vcpu: VcpuX86_64,
     {
-        if components.hv_cfg.protection_type != ProtectionType::Unprotected {
-            return Err(Error::UnsupportedProtectionType);
-        }
-
         let mem = vm.get_memory().clone();
 
         let vcpu_count = components.vcpu_count;
@@ -743,7 +866,7 @@ impl arch::LinuxArch for X8664arch {
 
         // punch pcie config mmio from pci low mmio, so that it couldn't be
         // allocated to any device.
-        let pcie_cfg_mmio_range = read_pcie_cfg_mmio();
+        let pcie_cfg_mmio_range = arch_memory_layout.pcie_cfg_mmio;
         system_allocator
             .reserve_mmio(pcie_cfg_mmio_range)
             .map_err(Error::ReservePcieCfgMmio)?;
@@ -863,8 +986,15 @@ impl arch::LinuxArch for X8664arch {
             let (host_tube, device_tube) = Tube::pair()
                 .context("create tube")
                 .map_err(Error::SetupCmos)?;
-            Self::setup_legacy_cmos_device(&io_bus, irq_chip, device_tube, components.memory_size)
-                .map_err(Error::SetupCmos)?;
+            Self::setup_legacy_cmos_device(
+                arch_memory_layout,
+                &io_bus,
+                irq_chip,
+                device_tube,
+                components.memory_size,
+                components.hv_cfg.protection_type.runs_firmware(),
+            )
+            .map_err(Error::SetupCmos)?;
             Some(host_tube)
         } else {
             None
@@ -913,6 +1043,7 @@ impl arch::LinuxArch for X8664arch {
         // each bus occupy 1MB mmio for pcie enhanced configuration
         let max_bus = (pcie_cfg_mmio_len / 0x100000 - 1) as u8;
         let (mut acpi_dev_resource, bat_control) = Self::setup_acpi_devices(
+            arch_memory_layout,
             pci.clone(),
             &mem,
             &io_bus,
@@ -996,44 +1127,85 @@ impl arch::LinuxArch for X8664arch {
                 .map_err(Error::Cmdline)?;
         }
 
-        let pci_start = read_pci_mmio_before_32bit().start;
+        let pci_start = arch_memory_layout.pci_mmio_before_32bit.start;
 
         let mut vcpu_init = vec![VcpuInitX86_64::default(); vcpu_count];
         let mut msrs = BTreeMap::new();
 
+        let protection_type = components.hv_cfg.protection_type;
+
         match components.vm_image {
             VmImage::Bios(ref mut bios) => {
+                if protection_type.runs_firmware() {
+                    return Err(Error::PvmFwBiosUnsupported);
+                }
+
                 // Allow a bios to hardcode CMDLINE_OFFSET and read the kernel command line from it.
-                kernel_loader::load_cmdline(
+                Self::load_cmdline(
                     &mem,
                     GuestAddress(CMDLINE_OFFSET),
-                    &CString::new(cmdline).unwrap(),
-                )
-                .map_err(Error::LoadCmdline)?;
+                    cmdline,
+                    CMDLINE_MAX_SIZE as usize - 1,
+                )?;
                 Self::load_bios(&mem, bios)?;
                 regs::set_default_msrs(&mut msrs);
                 // The default values for `Regs` and `Sregs` already set up the reset vector.
             }
             VmImage::Kernel(ref mut kernel_image) => {
-                let (params, kernel_end, kernel_entry, cpu_mode) =
+                let (params, kernel_end, kernel_entry, cpu_mode, kernel_type) =
                     Self::load_kernel(&mem, kernel_image)?;
 
+                info!("Loaded {} kernel", kernel_type);
+
                 Self::setup_system_memory(
+                    arch_memory_layout,
                     &mem,
-                    &CString::new(cmdline).unwrap(),
+                    cmdline,
                     components.initrd_image,
                     components.android_fstab,
                     kernel_end,
                     params,
                     dump_device_tree_blob,
                     device_tree_overlays,
+                    protection_type.runs_firmware(),
                 )?;
 
-                // Configure the bootstrap VCPU for the Linux/x86 64-bit boot protocol.
-                // <https://www.kernel.org/doc/html/latest/x86/boot.html>
-                vcpu_init[0].regs.rip = kernel_entry.offset();
-                vcpu_init[0].regs.rsp = BOOT_STACK_POINTER;
-                vcpu_init[0].regs.rsi = ZERO_PAGE_OFFSET;
+                if protection_type.needs_firmware_loaded() {
+                    arch::load_image(
+                        &mem,
+                        &mut components
+                            .pvm_fw
+                            .expect("pvmfw must be available if ProtectionType loads it"),
+                        GuestAddress(PROTECTED_VM_FW_START),
+                        PROTECTED_VM_FW_MAX_SIZE,
+                    )
+                    .map_err(Error::LoadCustomPvmFw)?;
+                }
+
+                let entry_addr = if protection_type.runs_firmware() {
+                    PROTECTED_VM_FW_START
+                } else {
+                    kernel_entry.offset()
+                };
+
+                vcpu_init[0].regs.rip = entry_addr;
+
+                match kernel_type {
+                    KernelType::BzImage | KernelType::Elf => {
+                        // Configure the bootstrap VCPU for the Linux/x86 boot protocol.
+                        // <https://www.kernel.org/doc/html/latest/x86/boot.html>
+                        vcpu_init[0].regs.rsp = BOOT_STACK_POINTER;
+                        vcpu_init[0].regs.rsi = ZERO_PAGE_OFFSET;
+                    }
+                }
+
+                if protection_type.runs_firmware() {
+                    // Pass pVM payload entry address to pVM firmware.
+                    // NOTE: this ABI is subject to change. Possibly we will pass
+                    // all the needed info (payload entry, start and size) in in-memory
+                    // structures (e.g. DTB) instead.
+                    vcpu_init[0].regs.rdi = kernel_entry.offset();
+                }
 
                 match cpu_mode {
                     CpuMode::LongMode => {
@@ -1084,8 +1256,6 @@ impl arch::LinuxArch for X8664arch {
             rt_cpus: components.rt_cpus,
             delay_rt: components.delay_rt,
             bat_control,
-            #[cfg(feature = "gdb")]
-            gdb: components.gdb,
             pm: Some(acpi_dev_resource.pm),
             root_config: pci,
             #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -1277,6 +1447,21 @@ pub enum CpuMode {
     LongMode,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum KernelType {
+    BzImage,
+    Elf,
+}
+
+impl fmt::Display for KernelType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            KernelType::BzImage => write!(f, "bzImage"),
+            KernelType::Elf => write!(f, "ELF"),
+        }
+    }
+}
+
 impl X8664arch {
     /// Loads the bios from an open file.
     ///
@@ -1344,6 +1529,37 @@ impl X8664arch {
         Ok(())
     }
 
+    /// Writes the command line string to the given memory slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `guest_mem` - A u8 slice that will be partially overwritten by the command line.
+    /// * `guest_addr` - The address in `guest_mem` at which to load the command line.
+    /// * `cmdline` - The kernel command line.
+    /// * `kernel_max_cmdline_len` - The maximum command line length (without NUL terminator)
+    ///   supported by the kernel.
+    fn load_cmdline(
+        guest_mem: &GuestMemory,
+        guest_addr: GuestAddress,
+        cmdline: kernel_cmdline::Cmdline,
+        kernel_max_cmdline_len: usize,
+    ) -> Result<()> {
+        let mut cmdline_guest_mem_slice = guest_mem
+            .get_slice_at_addr(guest_addr, CMDLINE_MAX_SIZE as usize)
+            .map_err(|_| Error::CommandLineOverflow)?;
+
+        let mut cmdline_bytes: Vec<u8> = cmdline
+            .into_bytes_with_max_len(kernel_max_cmdline_len)
+            .map_err(Error::Cmdline)?;
+        cmdline_bytes.push(0u8); // Add NUL terminator.
+
+        cmdline_guest_mem_slice
+            .write_all(&cmdline_bytes)
+            .map_err(|_| Error::CommandLineOverflow)?;
+
+        Ok(())
+    }
+
     /// Loads the kernel from an open file.
     ///
     /// # Arguments
@@ -1354,21 +1570,29 @@ impl X8664arch {
     /// # Returns
     ///
     /// On success, returns the Linux x86_64 boot protocol parameters, the first address past the
-    /// end of the kernel, the entry point (initial `RIP` value), and the initial CPU mode.
+    /// end of the kernel, the entry point (initial `RIP` value), the initial CPU mode, and the type
+    /// of kernel.
     fn load_kernel(
         mem: &GuestMemory,
         kernel_image: &mut File,
-    ) -> Result<(boot_params, u64, GuestAddress, CpuMode)> {
+    ) -> Result<(boot_params, u64, GuestAddress, CpuMode, KernelType)> {
         let kernel_start = GuestAddress(KERNEL_START_OFFSET);
         match kernel_loader::load_elf64(mem, kernel_start, kernel_image, 0) {
             Ok(loaded_kernel) => {
                 // ELF kernels don't contain a `boot_params` structure, so synthesize a default one.
-                let boot_params = Default::default();
+                let boot_params = boot_params {
+                    hdr: setup_header {
+                        cmdline_size: CMDLINE_MAX_SIZE as u32 - 1,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
                 Ok((
                     boot_params,
                     loaded_kernel.address_range.end,
                     loaded_kernel.entry,
                     CpuMode::LongMode,
+                    KernelType::Elf,
                 ))
             }
             Err(kernel_loader::Error::InvalidMagicNumber) => {
@@ -1376,7 +1600,13 @@ impl X8664arch {
                 let (boot_params, bzimage_end, bzimage_entry, cpu_mode) =
                     bzimage::load_bzimage(mem, kernel_start, kernel_image)
                         .map_err(Error::LoadBzImage)?;
-                Ok((boot_params, bzimage_end, bzimage_entry, cpu_mode))
+                Ok((
+                    boot_params,
+                    bzimage_end,
+                    bzimage_entry,
+                    cpu_mode,
+                    KernelType::BzImage,
+                ))
             }
             Err(e) => Err(Error::LoadKernel(e)),
         }
@@ -1391,25 +1621,84 @@ impl X8664arch {
     /// * `cmdline` - the kernel commandline
     /// * `initrd_file` - an initial ramdisk image
     pub fn setup_system_memory(
+        arch_memory_layout: &ArchMemoryLayout,
         mem: &GuestMemory,
-        cmdline: &CStr,
+        cmdline: kernel_cmdline::Cmdline,
         initrd_file: Option<File>,
         android_fstab: Option<File>,
         kernel_end: u64,
         params: boot_params,
         dump_device_tree_blob: Option<PathBuf>,
         device_tree_overlays: Vec<DtbOverlay>,
+        has_protected_vm_firmware: bool,
     ) -> Result<()> {
-        kernel_loader::load_cmdline(mem, GuestAddress(CMDLINE_OFFSET), cmdline)
-            .map_err(Error::LoadCmdline)?;
+        // Some guest kernels expect a typical PC memory layout where the region between 640 KB and
+        // 1 MB is reserved for device memory/ROMs and get confused if there is a RAM region
+        // spanning this area, so we provide the traditional 640 KB low memory and 1 MB+
+        // high memory regions.
+        let ram_below_1m_end = 640 * 1024;
+        let ram_below_1m = AddressRange {
+            start: START_OF_RAM_32BITS,
+            end: ram_below_1m_end - 1,
+        };
+
+        // GuestMemory::end_addr() returns the first address past the end, so subtract 1 to get the
+        // inclusive end.
+        let guest_mem_end = mem.end_addr().offset() - 1;
+
+        // Find the end of the part of guest memory below 4G that is not pVM firmware memory.
+        // This part of guest memory includes just one region, so just find the end of this region.
+        let max_ram_end_below_4g =
+            max_ram_end_before_32bit(arch_memory_layout, has_protected_vm_firmware) - 1;
+        let guest_mem_end_below_4g = mem
+            .regions()
+            .map(|r| r.guest_addr.offset() + r.size as u64 - 1)
+            .find(|&addr| addr <= max_ram_end_below_4g)
+            .expect("no memory region below 4G");
+
+        let ram_below_4g = AddressRange {
+            start: FIRST_ADDR_PAST_20BITS,
+            end: guest_mem_end_below_4g,
+        };
+        let ram_above_4g = AddressRange {
+            start: FIRST_ADDR_PAST_32BITS,
+            end: guest_mem_end,
+        };
+
+        let e820_entries = generate_e820_memory_map(
+            arch_memory_layout,
+            mem,
+            ram_below_1m,
+            ram_below_4g,
+            ram_above_4g,
+            has_protected_vm_firmware,
+        )?;
+
+        let kernel_max_cmdline_len = if params.hdr.cmdline_size == 0 {
+            // Old kernels have a maximum length of 255 bytes, not including the NUL.
+            255
+        } else {
+            params.hdr.cmdline_size as usize
+        };
+        debug!("kernel_max_cmdline_len={kernel_max_cmdline_len}");
+        Self::load_cmdline(
+            mem,
+            GuestAddress(CMDLINE_OFFSET),
+            cmdline,
+            kernel_max_cmdline_len,
+        )?;
 
         let mut setup_data = Vec::<SetupData>::new();
-        if let Some(android_fstab) = android_fstab {
-            setup_data.push(
+        if android_fstab.is_some() || !device_tree_overlays.is_empty() {
+            let device_tree_blob =
                 fdt::create_fdt(android_fstab, dump_device_tree_blob, device_tree_overlays)
-                    .map_err(Error::CreateFdt)?,
-            );
+                    .map_err(Error::CreateFdt)?;
+            setup_data.push(SetupData {
+                data: device_tree_blob,
+                type_: SetupDataType::Dtb,
+            });
         }
+
         setup_data.push(setup_data_rng_seed());
 
         let setup_data = write_setup_data(
@@ -1435,6 +1724,9 @@ impl X8664arch {
                     &mut initrd_file,
                     GuestAddress(kernel_end),
                     GuestAddress(initrd_addr_max),
+                    Some(|region| {
+                        region.options.purpose != MemoryRegionPurpose::ProtectedFirmwareRegion
+                    }),
                     base::pagesize() as u64,
                 )
                 .map_err(Error::LoadInitrd)?;
@@ -1446,10 +1738,10 @@ impl X8664arch {
         configure_system(
             mem,
             GuestAddress(CMDLINE_OFFSET),
-            cmdline.to_bytes().len() + 1,
             setup_data,
             initrd,
             params,
+            &e820_entries,
         )?;
         Ok(())
     }
@@ -1465,9 +1757,9 @@ impl X8664arch {
     }
 
     /// Returns the high mmio range
-    fn get_high_mmio_range<V: Vm>(vm: &V) -> AddressRange {
+    fn get_high_mmio_range<V: Vm>(vm: &V, arch_memory_layout: &ArchMemoryLayout) -> AddressRange {
         let mem = vm.get_memory();
-        let start = Self::get_pcie_vcfg_mmio_range(mem, &read_pcie_cfg_mmio()).end + 1;
+        let start = Self::get_pcie_vcfg_mmio_range(mem, &arch_memory_layout.pcie_cfg_mmio).end + 1;
 
         let phys_mem_end = (1u64 << vm.get_guest_phys_addr_bits()) - 1;
         let high_mmio_end = std::cmp::min(phys_mem_end, HIGH_MMIO_MAX_END);
@@ -1480,7 +1772,7 @@ impl X8664arch {
 
     /// This returns a minimal kernel command for this architecture
     pub fn get_base_linux_cmdline() -> kernel_cmdline::Cmdline {
-        let mut cmdline = kernel_cmdline::Cmdline::new(CMDLINE_MAX_SIZE as usize);
+        let mut cmdline = kernel_cmdline::Cmdline::new();
         cmdline.insert_str("panic=-1").unwrap();
 
         cmdline
@@ -1489,9 +1781,9 @@ impl X8664arch {
     /// Sets up fw_cfg device.
     ///  # Arguments
     ///
-    /// * - `io_bus` - the IO bus object
-    /// * - `fw_cfg_parameters` - command-line specified data to add to device. May contain
-    /// all None fields if user did not specify data to add to the device
+    /// * `io_bus` - the IO bus object
+    /// * `fw_cfg_parameters` - command-line specified data to add to device. May contain all None
+    ///   fields if user did not specify data to add to the device
     fn setup_fw_cfg_device(
         io_bus: &Bus,
         fw_cfg_parameters: Vec<FwCfgParameters>,
@@ -1586,12 +1878,19 @@ impl X8664arch {
     /// * - `io_bus` - the IO bus object
     /// * - `mem_size` - the size in bytes of physical ram for the guest
     pub fn setup_legacy_cmos_device(
+        arch_memory_layout: &ArchMemoryLayout,
         io_bus: &Bus,
         irq_chip: &mut dyn IrqChipX86_64,
         vm_control: Tube,
         mem_size: u64,
+        has_protected_vm_firmware: bool,
     ) -> anyhow::Result<()> {
-        let mem_regions = arch_memory_regions(mem_size, None);
+        let mem_regions = arch_memory_regions(
+            arch_memory_layout,
+            mem_size,
+            None,
+            has_protected_vm_firmware,
+        );
 
         let mem_below_4g = mem_regions
             .iter()
@@ -1634,16 +1933,17 @@ impl X8664arch {
     ///
     /// # Arguments
     ///
-    /// * - `io_bus` the I/O bus to add the devices to
-    /// * - `resources` the SystemAllocator to allocate IO and MMIO for acpi devices.
-    /// * - `suspend_tube` the tube object which used to suspend/resume the VM.
-    /// * - `sdts` ACPI system description tables
-    /// * - `irq_chip` the IrqChip object for registering irq events
-    /// * - `battery` indicate whether to create the battery
-    /// * - `mmio_bus` the MMIO bus to add the devices to
-    /// * - `pci_irqs` IRQ assignment of PCI devices. Tuples of (PCI address, gsi, PCI interrupt
-    ///   pin). Note that this matches one of the return values of generate_pci_root.
+    /// * `io_bus` the I/O bus to add the devices to
+    /// * `resources` the SystemAllocator to allocate IO and MMIO for acpi devices.
+    /// * `suspend_tube` the tube object which used to suspend/resume the VM.
+    /// * `sdts` ACPI system description tables
+    /// * `irq_chip` the IrqChip object for registering irq events
+    /// * `battery` indicate whether to create the battery
+    /// * `mmio_bus` the MMIO bus to add the devices to
+    /// * `pci_irqs` IRQ assignment of PCI devices. Tuples of (PCI address, gsi, PCI interrupt pin).
+    ///   Note that this matches one of the return values of generate_pci_root.
     pub fn setup_acpi_devices(
+        arch_memory_layout: &ArchMemoryLayout,
         pci_root: Arc<Mutex<PciRoot>>,
         mem: &GuestMemory,
         io_bus: &Bus,
@@ -1710,7 +2010,7 @@ impl X8664arch {
 
         let pcie_vcfg = aml::Name::new(
             "VCFG".into(),
-            &Self::get_pcie_vcfg_mmio_range(mem, &read_pcie_cfg_mmio()).start,
+            &Self::get_pcie_vcfg_mmio_range(mem, &arch_memory_layout.pcie_cfg_mmio).start,
         );
         pcie_vcfg.to_aml_bytes(&mut amls);
 
@@ -1845,8 +2145,9 @@ impl X8664arch {
         .to_aml_bytes(&mut amls);
 
         if let (Some(start), Some(len)) = (
-            u32::try_from(read_pcie_cfg_mmio().start).ok(),
-            read_pcie_cfg_mmio()
+            u32::try_from(arch_memory_layout.pcie_cfg_mmio.start).ok(),
+            arch_memory_layout
+                .pcie_cfg_mmio
                 .len()
                 .and_then(|l| u32::try_from(l).ok()),
         ) {
@@ -2089,16 +2390,29 @@ mod tests {
 
     const TEST_MEMORY_SIZE: u64 = 2 * GB;
 
-    fn setup() {
-        let pcie_ecam = Some(AddressRange::from_start_and_size(3 * GB, 256 * MB).unwrap());
-        let pci_start = Some(2 * GB);
-        init_low_memory_layout(pcie_ecam, pci_start);
+    fn setup() -> ArchMemoryLayout {
+        let pci_config = PciConfig {
+            ecam: Some(MemoryRegionConfig {
+                start: 3 * GB,
+                size: Some(256 * MB),
+            }),
+            mem: Some(MemoryRegionConfig {
+                start: 2 * GB,
+                size: None,
+            }),
+        };
+        create_arch_memory_layout(&pci_config, false).unwrap()
     }
 
     #[test]
     fn regions_lt_4gb_nobios() {
-        setup();
-        let regions = arch_memory_regions(512 * MB, /* bios_size */ None);
+        let arch_memory_layout = setup();
+        let regions = arch_memory_regions(
+            &arch_memory_layout,
+            512 * MB,
+            /* bios_size */ None,
+            /* has_protected_vm_firmware */ false,
+        );
         assert_eq!(1, regions.len());
         assert_eq!(GuestAddress(START_OF_RAM_32BITS), regions[0].0);
         assert_eq!(1u64 << 29, regions[0].1);
@@ -2106,9 +2420,14 @@ mod tests {
 
     #[test]
     fn regions_gt_4gb_nobios() {
-        setup();
+        let arch_memory_layout = setup();
         let size = 4 * GB + 0x8000;
-        let regions = arch_memory_regions(size, /* bios_size */ None);
+        let regions = arch_memory_regions(
+            &arch_memory_layout,
+            size,
+            /* bios_size */ None,
+            /* has_protected_vm_firmware */ false,
+        );
         assert_eq!(2, regions.len());
         assert_eq!(GuestAddress(START_OF_RAM_32BITS), regions[0].0);
         assert_eq!(GuestAddress(4 * GB), regions[1].0);
@@ -2117,9 +2436,14 @@ mod tests {
 
     #[test]
     fn regions_lt_4gb_bios() {
-        setup();
+        let arch_memory_layout = setup();
         let bios_len = 1 * MB;
-        let regions = arch_memory_regions(512 * MB, Some(bios_len));
+        let regions = arch_memory_regions(
+            &arch_memory_layout,
+            512 * MB,
+            Some(bios_len),
+            /* has_protected_vm_firmware */ false,
+        );
         assert_eq!(2, regions.len());
         assert_eq!(GuestAddress(START_OF_RAM_32BITS), regions[0].0);
         assert_eq!(512 * MB, regions[0].1);
@@ -2132,9 +2456,14 @@ mod tests {
 
     #[test]
     fn regions_gt_4gb_bios() {
-        setup();
+        let arch_memory_layout = setup();
         let bios_len = 1 * MB;
-        let regions = arch_memory_regions(4 * GB + 0x8000, Some(bios_len));
+        let regions = arch_memory_regions(
+            &arch_memory_layout,
+            4 * GB + 0x8000,
+            Some(bios_len),
+            /* has_protected_vm_firmware */ false,
+        );
         assert_eq!(3, regions.len());
         assert_eq!(GuestAddress(START_OF_RAM_32BITS), regions[0].0);
         assert_eq!(
@@ -2147,11 +2476,13 @@ mod tests {
 
     #[test]
     fn regions_eq_4gb_nobios() {
-        setup();
+        let arch_memory_layout = setup();
         // Test with exact size of 4GB - the overhead.
         let regions = arch_memory_regions(
+            &arch_memory_layout,
             TEST_MEMORY_SIZE - START_OF_RAM_32BITS,
             /* bios_size */ None,
+            /* has_protected_vm_firmware */ false,
         );
         dbg!(&regions);
         assert_eq!(1, regions.len());
@@ -2161,10 +2492,15 @@ mod tests {
 
     #[test]
     fn regions_eq_4gb_bios() {
-        setup();
+        let arch_memory_layout = setup();
         // Test with exact size of 4GB - the overhead.
         let bios_len = 1 * MB;
-        let regions = arch_memory_regions(TEST_MEMORY_SIZE - START_OF_RAM_32BITS, Some(bios_len));
+        let regions = arch_memory_regions(
+            &arch_memory_layout,
+            TEST_MEMORY_SIZE - START_OF_RAM_32BITS,
+            Some(bios_len),
+            /* has_protected_vm_firmware */ false,
+        );
         assert_eq!(2, regions.len());
         assert_eq!(GuestAddress(START_OF_RAM_32BITS), regions[0].0);
         assert_eq!(TEST_MEMORY_SIZE - START_OF_RAM_32BITS, regions[0].1);
@@ -2177,18 +2513,21 @@ mod tests {
 
     #[test]
     fn check_pci_mmio_layout() {
-        setup();
+        let arch_memory_layout = setup();
 
-        assert_eq!(read_pci_mmio_before_32bit().start, 2 * GB);
-        assert_eq!(read_pcie_cfg_mmio().start, 3 * GB);
-        assert_eq!(read_pcie_cfg_mmio().len().unwrap(), 256 * MB);
+        assert_eq!(arch_memory_layout.pci_mmio_before_32bit.start, 2 * GB);
+        assert_eq!(arch_memory_layout.pcie_cfg_mmio.start, 3 * GB);
+        assert_eq!(arch_memory_layout.pcie_cfg_mmio.len().unwrap(), 256 * MB);
     }
 
     #[test]
     fn check_32bit_gap_size_alignment() {
-        setup();
-        // pci_low_start is 256 MB aligned to be friendly for MTRR mappings.
-        assert_eq!(read_pci_mmio_before_32bit().start % (256 * MB), 0);
+        let arch_memory_layout = setup();
+        // pci_mmio_before_32bit is 256 MB aligned to be friendly for MTRR mappings.
+        assert_eq!(
+            arch_memory_layout.pci_mmio_before_32bit.start % (256 * MB),
+            0
+        );
     }
 
     #[test]
@@ -2266,5 +2605,43 @@ mod tests {
             mem.read_obj_from_addr::<[u8; 9]>(entry2_data_addr).unwrap(),
             entry2_data
         );
+    }
+
+    #[test]
+    fn cmdline_overflow() {
+        const MEM_SIZE: u64 = 0x1000;
+        let gm = GuestMemory::new(&[(GuestAddress(0x0), MEM_SIZE)]).unwrap();
+        let mut cmdline = kernel_cmdline::Cmdline::new();
+        cmdline.insert_str("12345").unwrap();
+        let cmdline_address = GuestAddress(MEM_SIZE - 5);
+        let err =
+            X8664arch::load_cmdline(&gm, cmdline_address, cmdline, CMDLINE_MAX_SIZE as usize - 1)
+                .unwrap_err();
+        assert!(matches!(err, Error::CommandLineOverflow));
+    }
+
+    #[test]
+    fn cmdline_write_end() {
+        const MEM_SIZE: u64 = 0x1000;
+        let gm = GuestMemory::new(&[(GuestAddress(0x0), MEM_SIZE)]).unwrap();
+        let mut cmdline = kernel_cmdline::Cmdline::new();
+        cmdline.insert_str("1234").unwrap();
+        let mut cmdline_address = GuestAddress(45);
+        X8664arch::load_cmdline(&gm, cmdline_address, cmdline, CMDLINE_MAX_SIZE as usize - 1)
+            .unwrap();
+        let val: u8 = gm.read_obj_from_addr(cmdline_address).unwrap();
+        assert_eq!(val, b'1');
+        cmdline_address = cmdline_address.unchecked_add(1);
+        let val: u8 = gm.read_obj_from_addr(cmdline_address).unwrap();
+        assert_eq!(val, b'2');
+        cmdline_address = cmdline_address.unchecked_add(1);
+        let val: u8 = gm.read_obj_from_addr(cmdline_address).unwrap();
+        assert_eq!(val, b'3');
+        cmdline_address = cmdline_address.unchecked_add(1);
+        let val: u8 = gm.read_obj_from_addr(cmdline_address).unwrap();
+        assert_eq!(val, b'4');
+        cmdline_address = cmdline_address.unchecked_add(1);
+        let val: u8 = gm.read_obj_from_addr(cmdline_address).unwrap();
+        assert_eq!(val, b'\0');
     }
 }
