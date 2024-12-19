@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "766826bd_75761772",
+        "filename": "OWNERS",
+        "patchSetId": 1
+      },
+      "lineNbr": 35,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2024-12-19T13:54:44Z",
+      "side": 1,
+      "message": "This should have a blank line then a comment explaining what it is for.",
+      "revId": "d796cb186eb2c87840ff888bf9a0d6401c452253",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
