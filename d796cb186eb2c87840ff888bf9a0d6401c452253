@@ -16,6 +16,24 @@
       "message": "This should have a blank line then a comment explaining what it is for.",
       "revId": "d796cb186eb2c87840ff888bf9a0d6401c452253",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ae0aad81_1465ccef",
+        "filename": "OWNERS",
+        "patchSetId": 1
+      },
+      "lineNbr": 35,
+      "author": {
+        "id": 1003224
+      },
+      "writtenOn": "2024-12-20T17:04:29Z",
+      "side": 1,
+      "message": "it\u0027s a requirement of go/android-3p ... https://android-review.git.corp.google.com/c/platform/system/core/+/3427972 hopefully makes that a bit less unclear. (but, yes, it would have been a better idea to have this in the auto-generated commit message for all the hundreds of changes!)",
+      "parentUuid": "766826bd_75761772",
+      "revId": "d796cb186eb2c87840ff888bf9a0d6401c452253",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
