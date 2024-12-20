@@ -34,6 +34,24 @@
       "parentUuid": "766826bd_75761772",
       "revId": "d796cb186eb2c87840ff888bf9a0d6401c452253",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b6023d36_03201256",
+        "filename": "OWNERS",
+        "patchSetId": 1
+      },
+      "lineNbr": 35,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2024-12-20T17:10:18Z",
+      "side": 1,
+      "message": "Sure, please add that link to the comment then, and a blank line before it. Otherwise it looks like it it\u0027s part of the `Cargo.lock` crosvm council review section above.",
+      "parentUuid": "ae0aad81_1465ccef",
+      "revId": "d796cb186eb2c87840ff888bf9a0d6401c452253",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
