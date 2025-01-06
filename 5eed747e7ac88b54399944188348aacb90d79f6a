@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9c48859b_8c051a31",
+        "filename": "devices/src/virtio/input/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1042,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-01-06T21:40:45Z",
+      "side": 1,
+      "message": "looks like the build error is caused by this env var not existing in the android build system\n\nthis technique is recommended upstream at https://crosvm.dev/book/testing/index.html#file-access-in-unit-tests. it has a second suggestion to use `include_str!` instead, which might work better in Soong",
+      "range": {
+        "startLine": 1039,
+        "startChar": 0,
+        "endLine": 1042,
+        "endChar": 11
+      },
+      "revId": "5eed747e7ac88b54399944188348aacb90d79f6a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
