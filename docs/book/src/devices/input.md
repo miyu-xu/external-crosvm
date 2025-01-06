@@ -186,6 +186,7 @@ crosvm run \
 Add a custom virtio-input device.
 
 - `path` (required): path to event source socket
+<<<<<<< HEAD   (a0c80f Prepare for thiserror 2.0.)
 - `config_path` (required): path to file configuring device
 
 ```sh
@@ -236,4 +237,29 @@ Here is an example of event config file:
     }
   ]
 }
+||||||| BASE
+=======
+- `config-path` (required): path to file configuring device
+
+```sh
+crosvm run \
+  --input custom[path=/tmp/keyboard-socket,config-path=/tmp/custom-keyboard-config.json] \
+  ...
+```
+
+This config_path requires a JSON-formatted configuration file. "events" configures the supported
+events. "name" defines the customized device name, "serial" defines customized serial name. The
+properties and axis info are yet to be supported.
+
+You can find an example config JSON from
+[`/devices/tests/data/input/example_custom_input_config.json`](https://chromium.googlesource.com/crosvm/crosvm/+/refs/heads/main/devices/tests/data/input/example_custom_input_config.json).
+It configs the same supported events as keyboard's supported events(`default_keyboard_events` in
+[`devices/src/virtio/input/defaults.rs`](https://chromium.googlesource.com/crosvm/crosvm/+/refs/heads/main/devices/src/virtio/input/defaults.rs#320)).
+Here is a portion of the example config file:
+
+```
+{{#include ../../../../devices/tests/data/input/example_custom_input_config.json::11}}
+          ...
+{{#include ../../../../devices/tests/data/input/example_custom_input_config.json:115:}}
+>>>>>>> BRANCH (95425c Roll recipe dependencies (trivial).)
 ```

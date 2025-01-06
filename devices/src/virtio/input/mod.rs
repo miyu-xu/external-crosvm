@@ -954,6 +954,7 @@ fn parse_input_config_file(config_path: &PathBuf, device_idx: u32) -> Result<Cus
 
 #[cfg(test)]
 mod tests {
+<<<<<<< HEAD   (a0c80f Prepare for thiserror 2.0.)
     use tempfile::TempDir;
 
     use super::*;
@@ -1026,5 +1027,100 @@ mod tests {
         let ev_led_bitmap = ev_led_events.unwrap();
         let expected_ev_led_bitmap = &virtio_input_bitmap::from_bits(&[0, 1, 2]);
         assert_eq!(ev_led_bitmap, expected_ev_led_bitmap);
+||||||| BASE
+=======
+    use defaults::new_keyboard_config;
+    use tempfile::TempDir;
+
+    use super::*;
+    #[test]
+    fn parse_keyboard_like_input_config_file_success() {
+        pub const EV_KEY: u16 = 0x01;
+        pub const EV_LED: u16 = 0x11;
+        pub const EV_REP: u16 = 0x14;
+        // Create a sample JSON file for testing
+        let temp_file = TempDir::new().unwrap();
+        let path = temp_file.path().join("test.json");
+        let test_json = r#"
+        {
+          "name": "Virtio Custom Test",
+          "serial_name": "virtio-custom-test",
+          "events": [
+            {
+              "event_type": "EV_KEY",
+              "event_type_code": 1,
+              "supported_events": {
+                "KEY_ESC": 1,
+                "KEY_1": 2,
+                "KEY_2": 3,
+                "KEY_A": 30,
+                "KEY_B": 48,
+                "KEY_SPACE": 57
+              }
+            },
+            {
+              "event_type": "EV_REP",
+              "event_type_code": 20,
+              "supported_events": {
+                "REP_DELAY": 0,
+                "REP_PERIOD": 1
+            }
+            },
+            {
+              "event_type": "EV_LED",
+              "event_type_code": 17,
+              "supported_events": {
+                "LED_NUML": 0,
+                "LED_CAPSL": 1,
+                "LED_SCROLLL": 2
+              }
+            }
+          ]
+        }"#;
+        fs::write(&path, test_json).expect("Unable to write test file");
+
+        // Call the function and assert the result
+        let result = parse_input_config_file(&path, 0);
+        assert!(result.is_ok());
+
+        let supported_event = result.unwrap().supported_events;
+        // EV_KEY type
+        let ev_key_events = supported_event.get(&EV_KEY);
+        assert!(ev_key_events.is_some());
+        let ev_key_bitmap = ev_key_events.unwrap();
+        let expected_ev_key_bitmap = &virtio_input_bitmap::from_bits(&[1, 2, 3, 30, 48, 57]);
+        assert_eq!(ev_key_bitmap, expected_ev_key_bitmap);
+        // EV_REP type
+        let ev_rep_events = supported_event.get(&EV_REP);
+        assert!(ev_rep_events.is_some());
+        let ev_rep_bitmap = ev_rep_events.unwrap();
+        let expected_ev_rep_bitmap = &virtio_input_bitmap::from_bits(&[0, 1]);
+        assert_eq!(ev_rep_bitmap, expected_ev_rep_bitmap);
+        // EV_LED type
+        let ev_led_events = supported_event.get(&EV_LED);
+        assert!(ev_led_events.is_some());
+        let ev_led_bitmap = ev_led_events.unwrap();
+        let expected_ev_led_bitmap = &virtio_input_bitmap::from_bits(&[0, 1, 2]);
+        assert_eq!(ev_led_bitmap, expected_ev_led_bitmap);
+    }
+
+    // Test the example custom device config file
+    // (tests/data/input/example_custom_input_config.json) provides the same supported events as
+    // default keyboard's supported events.
+    #[test]
+    fn example_custom_config_file_events_eq_default_keyboard_events() {
+        let temp_file = TempDir::new().unwrap();
+        let path = temp_file.path().join("test.json");
+        let test_json = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/data/input/example_custom_input_config.json"
+        ));
+        fs::write(&path, test_json).expect("Unable to write test file");
+
+        let keyboard_supported_events = new_keyboard_config(0).supported_events;
+        let custom_supported_events = parse_input_config_file(&path, 0).unwrap().supported_events;
+
+        assert_eq!(keyboard_supported_events, custom_supported_events);
+>>>>>>> BRANCH (95425c Roll recipe dependencies (trivial).)
     }
 }
