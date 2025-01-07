@@ -46,6 +46,30 @@
       },
       "revId": "5eed747e7ac88b54399944188348aacb90d79f6a",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "62a6705d_f9ac922e",
+        "filename": "devices/src/virtio/input/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1042,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2025-01-07T00:40:33Z",
+      "side": 1,
+      "message": "Actually I looked into `include_str!` more because of your comment and it might be OK, so I reopened that bug to see if we can make it work.",
+      "parentUuid": "984f2e99_e730ab83",
+      "range": {
+        "startLine": 1039,
+        "startChar": 0,
+        "endLine": 1042,
+        "endChar": 11
+      },
+      "revId": "5eed747e7ac88b54399944188348aacb90d79f6a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
