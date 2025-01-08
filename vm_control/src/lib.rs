@@ -27,6 +27,7 @@ use base::MemoryMappingBuilderWindows;
 use hypervisor::BalloonEvent;
 use hypervisor::MemCacheType;
 use hypervisor::MemRegion;
+use snapshot::AnySnapshot;
 
 #[cfg(feature = "balloon")]
 mod balloon_tube;
@@ -1788,7 +1789,7 @@ impl VmRequest {
         device_control_tube: &Tube,
         vcpu_size: usize,
         irq_handler_control: &Tube,
-        snapshot_irqchip: impl Fn() -> anyhow::Result<serde_json::Value>,
+        snapshot_irqchip: impl Fn() -> anyhow::Result<AnySnapshot>,
         suspended_pvclock_state: &mut Option<hypervisor::ClockState>,
     ) -> VmResponse {
         match self {
@@ -2221,7 +2222,7 @@ fn do_snapshot(
     irq_handler_control: &Tube,
     device_control_tube: &Tube,
     vcpu_size: usize,
-    snapshot_irqchip: impl Fn() -> anyhow::Result<serde_json::Value>,
+    snapshot_irqchip: impl Fn() -> anyhow::Result<AnySnapshot>,
     compress_memory: bool,
     encrypt: bool,
     suspended_pvclock_state: &mut Option<hypervisor::ClockState>,
@@ -2275,7 +2276,7 @@ fn do_snapshot(
     let snapshot_writer = SnapshotWriter::new(snapshot_path, encrypt)?;
 
     // Snapshot hypervisor's paravirtualized clock.
-    snapshot_writer.write_fragment("pvclock", &serde_json::to_value(suspended_pvclock_state)?)?;
+    snapshot_writer.write_fragment("pvclock", &AnySnapshot::to_any(suspended_pvclock_state)?)?;
 
     // Snapshot Vcpus
     info!("VCPUs snapshotting...");
@@ -2330,7 +2331,7 @@ pub fn do_restore(
     irq_handler_control: &Tube,
     device_control_tube: &Tube,
     vcpu_size: usize,
-    mut restore_irqchip: impl FnMut(serde_json::Value) -> anyhow::Result<()>,
+    mut restore_irqchip: impl FnMut(AnySnapshot) -> anyhow::Result<()>,
     require_encrypted: bool,
     suspended_pvclock_state: &mut Option<hypervisor::ClockState>,
 ) -> anyhow::Result<()> {
@@ -2343,7 +2344,7 @@ pub fn do_restore(
     *suspended_pvclock_state = snapshot_reader.read_fragment("pvclock")?;
 
     // Restore IrqChip
-    let irq_snapshot: serde_json::Value = snapshot_reader.read_fragment("irqchip")?;
+    let irq_snapshot: AnySnapshot = snapshot_reader.read_fragment("irqchip")?;
     restore_irqchip(irq_snapshot)?;
 
     // Restore Vcpu(s)

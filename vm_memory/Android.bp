@@ -32,6 +32,7 @@ rust_library {
         "liblz4_flex",
         "libserde",
         "libserde_json",
+        "libsnapshot_rust",
         "libthiserror",
         "libzerocopy-0.7.35",
     ],
