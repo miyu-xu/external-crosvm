@@ -54,7 +54,7 @@ rust_library {
         "libvm_memory",
     ],
     proc_macros: ["libremain"],
-    aliases: ["crypto_generic:crypto"],
+    aliases: ["snapshot_rust:snapshot", "crypto_generic:crypto"],
 }
 
 rust_test {
