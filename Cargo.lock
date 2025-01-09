@@ -1080,6 +1080,7 @@ dependencies = [
  "serde_json",
  "serde_keyvalue",
  "smallvec",
+ "snapshot",
  "swap",
  "sync",
  "system_api",
@@ -2805,6 +2806,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fd0db749597d91ff862fd1d55ea87f7855a744a8425a64695b6fca237d1dad1"
 
 [[package]]
+name = "snapshot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base",
+ "crypto_generic",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "socket2"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3251,7 +3263,6 @@ dependencies = [
  "balloon_control",
  "base",
  "cfg-if",
- "crypto_generic",
  "gdbstub",
  "gdbstub_arch",
  "hypervisor",
@@ -3264,6 +3275,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_keyvalue",
+ "snapshot",
  "swap",
  "sync",
  "thiserror",
