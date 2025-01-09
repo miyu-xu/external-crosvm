@@ -82,12 +82,9 @@ impl SnapshotFile {
     }
 
     fn read(&mut self) -> anyhow::Result<AnySnapshot> {
-        let data: AnySnapshot = {
-            let mut reader = BufReader::new(&self.file);
-
-            serde_json::from_reader(&mut reader)
-                .context("failed to read snapshot data from snapshot temp file")?
-        };
+        // NOTE: No BufReader because ciborium::from_reader has an internal buffer.
+        let data: AnySnapshot = ciborium::from_reader(&mut self.file)
+            .context("failed to read snapshot data from snapshot temp file")?;
 
         self.file
             .rewind()
@@ -100,7 +97,7 @@ impl SnapshotFile {
         {
             let mut writer = BufWriter::new(&self.file);
 
-            serde_json::to_writer(&mut writer, &data)
+            ciborium::into_writer(&data, &mut writer)
                 .context("failed to write data to snasphot temp file")?;
 
             writer
