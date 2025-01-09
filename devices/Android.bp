@@ -246,6 +246,7 @@ rust_library {
         "libbit_field_crosvm",
         "libcfg_if",
         "libchrono",
+        "libciborium",
         "libcros_async",
         "libcros_tracing",
         "libcrosvm_cli",
