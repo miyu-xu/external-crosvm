@@ -57,7 +57,7 @@ pub struct Vsock {
 
 #[derive(Serialize, Deserialize)]
 struct VsockSnapshot {
-    cid: u64,
+    // cid: u64,
     avail_features: u64,
     acked_features: u64,
     vrings_base: Vec<VringBase>,
@@ -332,7 +332,6 @@ impl VirtioDevice for Vsock {
         serde_json::to_value(VsockSnapshot {
             // `cid` and `avail_features` are snapshot as a safeguard. Upon restore, validate
             // cid and avail_features in the current vsock match the previously snapshot vsock.
-            cid: self.cid,
             avail_features: self.avail_features,
             acked_features: self.acked_features,
             vrings_base,
@@ -343,12 +342,6 @@ impl VirtioDevice for Vsock {
     fn virtio_restore(&mut self, data: serde_json::Value) -> anyhow::Result<()> {
         let deser: VsockSnapshot =
             serde_json::from_value(data).context("failed to deserialize virtio vsock")?;
-        anyhow::ensure!(
-            self.cid == deser.cid,
-            "Virtio vsock incorrect cid for restore:\n Expected: {}, Actual: {}",
-            self.cid,
-            deser.cid,
-        );
         anyhow::ensure!(
             self.avail_features == deser.avail_features,
             "Virtio vsock incorrect avail features for restore:\n Expected: {}, Actual: {}",

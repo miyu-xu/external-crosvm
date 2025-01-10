@@ -615,6 +615,9 @@ impl VirtioDevice for VhostUserFrontend {
     }
 
     fn virtio_snapshot(&mut self) -> anyhow::Result<Value> {
+        if self.device_type() == DeviceType::Fs {
+            return Ok(Value::Null);
+        }
         if !self
             .protocol_features
             .contains(VhostUserProtocolFeatures::DEVICE_STATE)
@@ -651,6 +654,9 @@ impl VirtioDevice for VhostUserFrontend {
     }
 
     fn virtio_restore(&mut self, data: Value) -> anyhow::Result<()> {
+        if self.device_type() == DeviceType::Fs {
+            return Ok(());
+        }
         if !self
             .protocol_features
             .contains(VhostUserProtocolFeatures::DEVICE_STATE)

@@ -284,7 +284,6 @@ dependencies = [
  "log",
  "once_cell",
  "protobuf",
- "protos",
  "rand",
  "remain",
  "serde",
@@ -1982,9 +1981,8 @@ dependencies = [
 
 [[package]]
 name = "minijail-sys"
-version = "0.0.14"
+version = "0.0.13"
 dependencies = [
- "bindgen 0.63.0",
  "libc",
  "pkg-config",
  "which",

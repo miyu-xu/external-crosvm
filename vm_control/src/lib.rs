@@ -348,6 +348,9 @@ pub enum DeviceControlCommand {
     RestoreDevices {
         snapshot_reader: SnapshotReader,
     },
+    RestoreMemory {
+        snapshot_reader: SnapshotReader,
+    },
     GetDevicesState,
     Exit,
 }
@@ -2392,6 +2395,13 @@ pub fn do_restore(
 
     // Restore hypervisor's paravirtualized clock.
     *suspended_pvclock_state = snapshot_reader.read_fragment("pvclock")?;
+
+    // Restore Memory
+    device_control_tube
+        .send(&DeviceControlCommand::RestoreMemory {
+            snapshot_reader: snapshot_reader.clone(),
+        })
+        .context("send command to devices control socket")?;
 
     // Restore IrqChip
     let irq_snapshot: serde_json::Value = snapshot_reader.read_fragment("irqchip")?;

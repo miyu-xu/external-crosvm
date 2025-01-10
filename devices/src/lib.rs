@@ -289,8 +289,22 @@ async fn snapshot_handler(
 
 async fn restore_handler(
     snapshot_reader: vm_control::SnapshotReader,
-    guest_memory: &GuestMemory,
     buses: &[&Bus],
+) -> anyhow::Result<()> {
+    for (i, bus) in buses.iter().enumerate() {
+        bus.restore_devices(&snapshot_reader.namespace(&format!("bus{i}"))?)
+            .context("failed to restore bus devices")?;
+        debug!(
+            "Devices restore successfully for {:?} Bus",
+            bus.get_bus_type()
+        );
+    }
+    Ok(())
+}
+
+async fn restore_memory_handler(
+    snapshot_reader: vm_control::SnapshotReader,
+    guest_memory: &GuestMemory,
 ) -> anyhow::Result<()> {
     let guest_memory_metadata = snapshot_reader.read_fragment("mem_metadata")?;
     // SAFETY:
@@ -301,14 +315,6 @@ async fn restore_handler(
             &mut snapshot_reader.raw_fragment("mem")?,
         )?
     };
-    for (i, bus) in buses.iter().enumerate() {
-        bus.restore_devices(&snapshot_reader.namespace(&format!("bus{i}"))?)
-            .context("failed to restore bus devices")?;
-        debug!(
-            "Devices restore successfully for {:?} Bus",
-            bus.get_bus_type()
-        );
-    }
     Ok(())
 }
 
@@ -395,8 +401,26 @@ async fn handle_command_tube(
                             "devices must be sleeping to restore"
                         );
                         if let Err(e) =
-                            restore_handler(snapshot_reader, &guest_memory, &[&*io_bus, &*mmio_bus])
+                            restore_handler(snapshot_reader, &[&*io_bus, &*mmio_bus]).await
+                        {
+                            error!("failed to restore: {:#}", e);
+                            command_tube
+                                .send(VmResponse::ErrString(e.to_string()))
                                 .await
+                                .context("Failed to send response")?;
+                            continue;
+                        }
+                        command_tube
+                            .send(VmResponse::Ok)
+                            .await
+                            .context("Failed to send response")?;
+                    }
+                    DeviceControlCommand::RestoreMemory { snapshot_reader } => {
+                        assert!(
+                            matches!(devices_state, DevicesState::Sleep),
+                            "devices must be sleeping to restore"
+                        );
+                        if let Err(e) = restore_memory_handler(snapshot_reader, &guest_memory).await
                         {
                             error!("failed to restore: {:#}", e);
                             command_tube
