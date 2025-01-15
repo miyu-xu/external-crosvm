@@ -539,6 +539,7 @@ fn create_pci_nodes(
     pci_node.set_prop("interrupt-map", interrupts)?;
     pci_node.set_prop("interrupt-map-mask", masks)?;
     pci_node.set_prop("dma-coherent", ())?;
+    pci_node.set_prop("linux,pci-probe-only", 1u32)?;
     if let Some(dma_pool_phandle) = dma_pool_phandle {
         pci_node.set_prop("memory-region", dma_pool_phandle)?;
     }
