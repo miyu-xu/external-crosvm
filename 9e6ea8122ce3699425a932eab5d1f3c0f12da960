@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4f14fae1_2275a376",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-01-21T22:05:24Z",
+      "side": 1,
+      "message": "https://r.android.com/3460461 has this and is pending",
+      "revId": "9e6ea8122ce3699425a932eab5d1f3c0f12da960",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
