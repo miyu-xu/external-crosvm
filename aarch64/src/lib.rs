@@ -202,6 +202,7 @@ impl PayloadType {
         }
     }
 
+    #[allow(dead_code)]
     fn address_range(&self) -> AddressRange {
         match self {
             Self::Bios { entry, image_size } => {
@@ -968,7 +969,7 @@ impl arch::LinuxArch for AArch64 {
             cmdline
                 .as_str_with_max_len(AARCH64_CMDLINE_MAX_SIZE - 1)
                 .map_err(Error::Cmdline)?,
-            payload.address_range(),
+            (payload.entry(), payload.size() as usize),
             initrd,
             components.android_fstab,
             irq_chip.get_vgic_version() == DeviceKind::ArmVgicV3,
