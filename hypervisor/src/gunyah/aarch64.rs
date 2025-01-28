@@ -11,6 +11,7 @@ use cros_fdt::Fdt;
 use cros_fdt::FdtNode;
 use libc::ENOENT;
 use libc::ENOTSUP;
+use libc::ENOTTY;
 use vm_memory::GuestAddress;
 use vm_memory::MemoryRegionPurpose;
 
@@ -182,11 +183,19 @@ impl VmAArch64 for GunyahVm {
             panic!("DTB and payload are not part of same memory region.");
         }
 
-        if payload_offset != 0 {
-            panic!("Payload offset must be zero");
-        }
-
         self.set_dtb_config(fdt_address, fdt_size)?;
+
+        if let Err(e) = self.set_boot_pc(payload_entry_address.offset()) {
+            if e.errno() == ENOTTY {
+                // GH_VM_SET_BOOT_CONTEXT ioctl is not supported, but returning success
+                // for backward compatibility when the offset is zero.
+                if payload_offset != 0 {
+                    panic!("Payload offset must be zero");
+                }
+            } else {
+                return Err(e);
+            }
+        }
 
         self.start()?;
 
