@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a831d4d9_a2d9cda1",
+        "filename": "android-merge-1-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 86,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2025-01-28T18:25:47Z",
+      "side": 1,
+      "message": "I feel weird this script is still called \u0027setup\u0027 even though it does more, but it\u0027s the entry point.",
+      "range": {
+        "startLine": 78,
+        "startChar": 1,
+        "endLine": 86,
+        "endChar": 69
+      },
+      "revId": "b8f5c54c4e028ce56433ecce6b67e1263605c983",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
