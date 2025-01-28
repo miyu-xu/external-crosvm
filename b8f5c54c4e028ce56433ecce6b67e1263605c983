@@ -1,6 +1,29 @@
 {
   "comments": [
     {
+      "unresolved": true,
+      "key": {
+        "uuid": "e6b8a099_689e1f01",
+        "filename": "android-merge-1-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 54,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-01-28T20:55:45Z",
+      "side": 1,
+      "message": "my vote would to be remove `repo sync` from this script. getting an android checkout into the right state is its own task that i prefer to do before i run this, e.g. i often need to switch off local branches first\n\nsame for `source $ANDROID_BUILD_TOP/build/envsetup.sh`. that isn\u0027t enough by itself, you also need to `lunch`",
+      "range": {
+        "startLine": 53,
+        "startChar": 0,
+        "endLine": 54,
+        "endChar": 61
+      },
+      "revId": "b8f5c54c4e028ce56433ecce6b67e1263605c983",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": false,
       "key": {
         "uuid": "a831d4d9_a2d9cda1",
