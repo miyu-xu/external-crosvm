@@ -30,8 +30,7 @@
     "libaaudio_stub",
     "net",
     "qcow",
-    "usb",
-    "virgl_renderer"
+    "usb"
   ],
   "workspace": true,
   "workspace_excludes": [

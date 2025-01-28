@@ -23,7 +23,10 @@ rust_library {
     edition: "2021",
     features: [
         "gfxstream",
-        "virgl_renderer",
+    ],
+    cfgs: [
+        "fence_passing_option1",
+        "gfxstream_unstable",
     ],
     rustlibs: [
         "libcfg_if",
@@ -36,9 +39,6 @@ rust_library {
         "libzerocopy-0.7.35",
     ],
     proc_macros: ["libremain"],
-    cfgs: [
-        "gfxstream_unstable",
-    ],
     shared_libs: [
         "libc++",
         "libbase",
@@ -59,9 +59,7 @@ rust_library {
         },
     },
     static_libs: [
-        "libepoxy",
         "libgfxstream_backend",
-        "libvirglrenderer",
     ],
 }
 
@@ -128,8 +126,8 @@ rust_test {
     edition: "2021",
     features: [
         "gfxstream",
-        "virgl_renderer",
     ],
+    cfgs: ["fence_passing_option1"],
     rustlibs: [
         "libcfg_if",
         "liblibc",
@@ -142,8 +140,6 @@ rust_test {
     ],
     proc_macros: ["libremain"],
     shared_libs: [
-        "libepoxy",
         "libgfxstream_backend",
-        "libvirglrenderer",
-    ],
+    ]
 }

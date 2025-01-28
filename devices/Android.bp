@@ -41,7 +41,6 @@ rust_test {
         "gunyah",
         "net",
         "usb",
-        "virgl_renderer",
     ],
     rustlibs: [
         "libacpi_tables",
@@ -137,7 +136,6 @@ rust_test {
         "gunyah",
         "net",
         "usb",
-        "virgl_renderer",
     ],
     rustlibs: [
         "libacpi_tables",
@@ -229,7 +227,6 @@ rust_library {
         "gunyah",
         "net",
         "usb",
-        "virgl_renderer",
     ],
     rustlibs: [
         "libacpi_tables",
