@@ -16,6 +16,7 @@ rust_library {
     name: "libprotos",
     defaults: ["crosvm_inner_defaults"],
     host_supported: true,
+    vendor_available: true,
     crate_name: "protos",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",
@@ -38,6 +39,7 @@ rust_protobuf {
     protos: ["src/cdisk_spec.proto"],
     source_stem: "cdisk_spec",
     host_supported: true,
+    vendor_available: true,
     apex_available: [
         "com.android.virt",
     ],

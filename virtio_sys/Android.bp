@@ -16,6 +16,7 @@ rust_library {
     name: "libvirtio_sys",
     defaults: ["crosvm_inner_defaults"],
     host_supported: true,
+    vendor_available: true,
     crate_name: "virtio_sys",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",

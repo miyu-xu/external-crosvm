@@ -17,6 +17,7 @@ rust_library {
     name: "libvmm_vhost",
     defaults: ["crosvm_inner_defaults"],
     host_supported: true,
+    vendor_available: true,
     crate_name: "vmm_vhost",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",

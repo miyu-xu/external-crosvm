@@ -11,6 +11,7 @@ rust_library {
     name: "libaudio_util",
     defaults: ["crosvm_inner_defaults"],
     host_supported: true,
+    vendor_available: true,
     crate_name: "audio_util",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",

@@ -36,6 +36,7 @@ rust_library {
     name: "libacpi_tables",
     defaults: ["crosvm_inner_defaults"],
     host_supported: true,
+    vendor_available: true,
     crate_name: "acpi_tables",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",
