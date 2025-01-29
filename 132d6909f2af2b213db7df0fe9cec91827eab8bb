@@ -16,6 +16,24 @@
       "message": "LGTM, but send upstream first?",
       "revId": "132d6909f2af2b213db7df0fe9cec91827eab8bb",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a03e2bbb_1799fb8d",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2025-01-29T22:31:37Z",
+      "side": 1,
+      "message": "That is a cherry-pick - https://chromium-review.googlesource.com/c/crosvm/crosvm/+/6215250\n\nshould I mark is CHERRY-PICK:?",
+      "parentUuid": "93fd649b_2aeb8e38",
+      "revId": "132d6909f2af2b213db7df0fe9cec91827eab8bb",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
