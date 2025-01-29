@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7320d369_1150108e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2025-01-29T23:24:45Z",
+      "side": 1,
+      "message": "libdevices is unstable. What\u0027s the reason behind wanting to make it vendor_available?",
+      "revId": "43257ecd6720673a0e4e4a69a276fc8bf508ef82",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
