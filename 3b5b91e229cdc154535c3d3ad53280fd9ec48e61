@@ -1,0 +1,73 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "9f04708e_b47d2b0a",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 156,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2025-01-29T22:41:29Z",
+      "side": 1,
+      "message": "nit: `if !self.logged_once`",
+      "range": {
+        "startLine": 156,
+        "startChar": 12,
+        "endLine": 156,
+        "endChar": 37
+      },
+      "revId": "3b5b91e229cdc154535c3d3ad53280fd9ec48e61",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "06174a28_8cbdc4a0",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 172,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2025-01-29T22:41:29Z",
+      "side": 1,
+      "message": "should we fail if there are permission issues? What are the repercussions of such issues?",
+      "range": {
+        "startLine": 172,
+        "startChar": 66,
+        "endLine": 172,
+        "endChar": 97
+      },
+      "revId": "3b5b91e229cdc154535c3d3ad53280fd9ec48e61",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0a04cfbc_a8c997dc",
+        "filename": "devices/src/virtcpufreq.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 173,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2025-01-29T22:41:29Z",
+      "side": 1,
+      "message": "nit: same",
+      "range": {
+        "startLine": 173,
+        "startChar": 16,
+        "endLine": 173,
+        "endChar": 41
+      },
+      "revId": "3b5b91e229cdc154535c3d3ad53280fd9ec48e61",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
