@@ -20,6 +20,24 @@
     {
       "unresolved": false,
       "key": {
+        "uuid": "3b57a2a2_87a70178",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 2059657
+      },
+      "writtenOn": "2025-01-29T05:51:46Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "f53191c6_f4d3aa27",
+      "revId": "06f383f605cbffef2367345daa7e83507e3e21ac",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
         "uuid": "cd967880_af4c74a5",
         "filename": "/PATCHSET_LEVEL",
         "patchSetId": 1
@@ -48,6 +66,24 @@
       "writtenOn": "2025-01-29T03:46:05Z",
       "side": 1,
       "message": "NIT: all functions in this module are interpreting 0 as success. lets do the same here. Thats the usual ioctl return code checking.",
+      "revId": "06f383f605cbffef2367345daa7e83507e3e21ac",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "57133fb4_13745867",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 426,
+      "author": {
+        "id": 2059657
+      },
+      "writtenOn": "2025-01-29T05:51:46Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "6fea98fe_e6298e2a",
       "revId": "06f383f605cbffef2367345daa7e83507e3e21ac",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
