@@ -26,6 +26,30 @@
     {
       "unresolved": false,
       "key": {
+        "uuid": "2eeae7fa_ae3e9c2f",
+        "filename": "android-merge-1-setup.sh",
+        "patchSetId": 1
+      },
+      "lineNbr": 54,
+      "author": {
+        "id": 1120458
+      },
+      "writtenOn": "2025-01-29T01:05:45Z",
+      "side": 1,
+      "message": "+1, good idea, actually, though maybe we also need to check if the parent branch diverged from upstream, because you might also be redoing last week\u0027s merge if you hadn\u0027t synced again. I\u0027ll put a note in the next bug.",
+      "parentUuid": "e6b8a099_689e1f01",
+      "range": {
+        "startLine": 53,
+        "startChar": 0,
+        "endLine": 54,
+        "endChar": 61
+      },
+      "revId": "b8f5c54c4e028ce56433ecce6b67e1263605c983",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
         "uuid": "a831d4d9_a2d9cda1",
         "filename": "android-merge-1-setup.sh",
         "patchSetId": 1
