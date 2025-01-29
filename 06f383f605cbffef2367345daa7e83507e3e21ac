@@ -1,0 +1,55 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f53191c6_f4d3aa27",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1851199
+      },
+      "writtenOn": "2025-01-29T03:46:05Z",
+      "side": 1,
+      "message": "Pls add Bug: XXX\n\nAlso, update this gerrit information in the buganizer and request for a review.",
+      "revId": "06f383f605cbffef2367345daa7e83507e3e21ac",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "cd967880_af4c74a5",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1851199
+      },
+      "writtenOn": "2025-01-29T03:46:05Z",
+      "side": 1,
+      "message": "LGTM, Thanks.",
+      "revId": "06f383f605cbffef2367345daa7e83507e3e21ac",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6fea98fe_e6298e2a",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 426,
+      "author": {
+        "id": 1851199
+      },
+      "writtenOn": "2025-01-29T03:46:05Z",
+      "side": 1,
+      "message": "NIT: all functions in this module are interpreting 0 as success. lets do the same here. Thats the usual ioctl return code checking.",
+      "revId": "06f383f605cbffef2367345daa7e83507e3e21ac",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
