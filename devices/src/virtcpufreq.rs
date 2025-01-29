@@ -41,6 +41,7 @@ pub struct VirtCpufreq {
     vcpu_relative_capacity: u32,
     pcpu: u32,
     util_factor: u32,
+    logged_once: bool,
 }
 
 fn get_cpu_info(cpu_id: u32, property: &str) -> Result<u32, Error> {
@@ -96,6 +97,7 @@ impl VirtCpufreq {
             vcpu_relative_capacity,
             pcpu,
             util_factor,
+            logged_once: false,
         }
     }
 }
@@ -145,11 +147,18 @@ impl BusDevice for VirtCpufreq {
 
         // Util margin depends on the cpufreq governor on the host
         let cpu_cap_scaled = self.vcpu_capacity * self.util_factor / CPUFREQ_GOV_SCALE_FACTOR_DEFAULT;
-        let util = u32::try_from(u64::from(cpu_cap_scaled) * u64::from(freq) / u64::from(self.vcpu_fmax)).unwrap();
+        let mut util = u32::try_from(u64::from(cpu_cap_scaled) * u64::from(freq) / u64::from(self.vcpu_fmax)).unwrap();
 
         let mut sched_attr = sched_attr::default();
         sched_attr.sched_flags =
             SCHED_FLAG_KEEP_ALL | SCHED_FLAG_UTIL_CLAMP_MIN | SCHED_FLAG_UTIL_CLAMP_MAX | SCHED_FLAG_RESET_ON_FORK;
+
+        if (self.logged_once == false && util > 1024) {
+            warn!("{}: Out of range util value: {}, freq:{}, fmax:{}", self.debug_label(), util, freq, self.vcpu_fmax);
+            util = 1024;
+            self.logged_once = true;
+        }
+
         sched_attr.sched_util_min = util;
 
         if self.vcpu_fmax != self.pcpu_fmax {
@@ -159,7 +168,12 @@ impl BusDevice for VirtCpufreq {
         }
 
         if let Err(e) = sched_setattr(0, &mut sched_attr, 0) {
-            panic!("{}: Error setting util value: {}", self.debug_label(), e);
+            // The logging above should catch out of range util values, if we're still unable
+            // to successfully call sched_setattr, there might be intermittent permission issues.
+            if (self.logged_once == false) {
+                warn!("{}: Error setting util:{}, Error: {}", self.debug_label(), util, e);
+                self.logged_once = true;
+            }
         }
     }
 }
