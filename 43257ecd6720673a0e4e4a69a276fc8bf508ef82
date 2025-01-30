@@ -16,6 +16,24 @@
       "message": "libdevices is unstable. What\u0027s the reason behind wanting to make it vendor_available?",
       "revId": "43257ecd6720673a0e4e4a69a276fc8bf508ef82",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f8fb7d12_31170327",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-01-30T00:19:52Z",
+      "side": 1,
+      "message": "for some more context: we aren\u0027t talking about ABI stability (which isn\u0027t needed for vendor_available AFAIK). these are considered internal libraries of the crosvm projects and they tend to be very unstable, so i don\u0027t want even AOSP code from the `system` partitions to depend on them",
+      "parentUuid": "7320d369_1150108e",
+      "revId": "43257ecd6720673a0e4e4a69a276fc8bf508ef82",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
