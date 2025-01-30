@@ -93,6 +93,64 @@
       },
       "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "25e7ac6c_b53a3b39",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 224,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2025-01-30T22:34:15Z",
+      "side": 1,
+      "message": "Agreed, implementing set_one_reg seems like a nicer long-term idea, but the proposed implementation in this patch is fine for now IMO.",
+      "parentUuid": "42b466a3_608bed1e",
+      "range": {
+        "startLine": 224,
+        "startChar": 8,
+        "endLine": 224,
+        "endChar": 24
+      },
+      "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7bd0bb47_b1eb1808",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 414,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2025-01-30T22:34:15Z",
+      "side": 1,
+      "message": "nit: I guess `reg_idx` is not really meaningful for some register types like `PC` or `SP`, since there is only one of each; this is probably fine for a gunyah-internal API, but it might also be nice to have a higher-level function that accepts `VcpuRegAArch64` (which represents roughly the same kind of thing as reg_type + reg_idx) and converts it into the appropriate type/idx values for this ioctl (see comment thread about `set_one_reg()` elsewhere for one potential way to expose that in the generic `hypervisor` API).\n\nThis can all be deferred to a later cleanup if we want to get this in as-is, though.",
+      "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "819ce2ce_e13df5a3",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 424,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2025-01-30T22:34:15Z",
+      "side": 1,
+      "message": "nit: wrap long lines at 100 chars",
+      "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
