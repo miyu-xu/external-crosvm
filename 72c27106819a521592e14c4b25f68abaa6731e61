@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c07b7623_4ccddc78",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 202,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-01-30T00:46:38Z",
+      "side": 1,
+      "message": "nit: it is a bit more idiomatic to write it like\n\n```\nif let Err(e) \u003d self.set_boot_pc(payload_entry_address.offset()) {\n    if e.errno() \u003d\u003d ENOTTY {\n        // GH_VM_SET_BOOT_CONTEXT ioctl is not supported, but returning success\n        // for backward compatibility when the offset is zero.\n        if payload_offset !\u003d 0 {\n            panic!(\"Payload offset must be zero\");\n        }\n    } else {\n        return Err(e)\n    }\n}\n\n```",
+      "range": {
+        "startLine": 188,
+        "startChar": 0,
+        "endLine": 202,
+        "endChar": 11
+      },
+      "revId": "72c27106819a521592e14c4b25f68abaa6731e61",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2fe55c12_f8889926",
+        "filename": "hypervisor/src/gunyah/gunyah_sys.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 37,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-01-30T00:46:38Z",
+      "side": 1,
+      "message": "is this ioctl in upstream linux or ACK yet? we want crosvm to only use stable UAPIs",
+      "range": {
+        "startLine": 32,
+        "startChar": 0,
+        "endLine": 37,
+        "endChar": 2
+      },
+      "revId": "72c27106819a521592e14c4b25f68abaa6731e61",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
