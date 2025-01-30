@@ -154,6 +154,9 @@ pub struct Options {
     )]
     /// a JSON object of virtio-gpu parameters
     params: GpuParameters,
+    #[argh(option, arg_name = "PATH")]
+    /// move all vGPU server threads to this Cgroup (default: nothing moves)
+    gpu_cgroup_path: Option<PathBuf>,
 }
 
 pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
@@ -165,6 +168,7 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         socket_path,
         fd,
         wayland_sock,
+        gpu_cgroup_path,
     } = opts;
 
     let channels: BTreeMap<_, _> = wayland_sock.into_iter().collect();
@@ -248,8 +252,7 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
         event_devices,
         base_features,
         &channels,
-        /* gpu_cgroup_path */
-        None,
+        gpu_cgroup_path.as_ref(),
     )));
 
     let (platform_worker_tx, platform_worker_rx) = futures::channel::mpsc::unbounded();

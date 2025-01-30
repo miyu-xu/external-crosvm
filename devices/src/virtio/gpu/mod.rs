@@ -26,6 +26,8 @@ use base::error;
 use base::info;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use base::linux::move_task_to_cgroup;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+use base::linux::move_proc_to_cgroup;
 use base::warn;
 use base::AsRawDescriptor;
 use base::Event;
@@ -1639,8 +1641,14 @@ impl Gpu {
         let worker_thread = WorkerThread::start("v_gpu", move |kill_evt| {
             #[cfg(any(target_os = "android", target_os = "linux"))]
             if let Some(cgroup_path) = gpu_cgroup_path {
-                move_task_to_cgroup(cgroup_path, base::gettid())
-                    .expect("Failed to move v_gpu into requested cgroup");
+                if Path::new(cgroup_path.join("tasks")) {
+                    move_task_to_cgroup(cgroup_path, base::gettid())
+                        .expect("Failed to move v_gpu into requested cgroup");
+                } else {
+                    // Try CgroupV2 if V1 isn't available and move the entire proc.
+                    move_proc_to_cgroup(cgroup_path, base::getpid())
+                        .expect("Failed to move v_gpu into requested V2 cgroup");
+                }
             }
 
             let mut worker = Worker::new(
