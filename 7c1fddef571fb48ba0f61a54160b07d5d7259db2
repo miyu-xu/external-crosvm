@@ -26,6 +26,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "217759c8_38e9ac97",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 167,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-01-30T21:58:59Z",
+      "side": 1,
+      "message": "Gunyah only supports protected VMs AFAIK, so we should probably delete this parenthetical statement\n\n+1 to updating the `assumes that the image is loaded at the beginning of the \"primary\" memory parcel (region)` part",
+      "parentUuid": "08ca0f58_1b6ecf44",
+      "range": {
+        "startLine": 167,
+        "startChar": 61,
+        "endLine": 167,
+        "endChar": 87
+      },
+      "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "cfbc8716_58e3b376",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 3
@@ -37,6 +61,30 @@
       "writtenOn": "2025-01-30T14:28:01Z",
       "side": 1,
       "message": "AFAIU, it might be cleaner to wrap your new ioctl in this standard method, instead of (only) adding a hypervisor-specific one?",
+      "range": {
+        "startLine": 224,
+        "startChar": 8,
+        "endLine": 224,
+        "endChar": 24
+      },
+      "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "42b466a3_608bed1e",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 224,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-01-30T21:58:59Z",
+      "side": 1,
+      "message": "yeah, it would be nice if we could switch gunyah to use this instead of the custom `HypervisorCap::HypervisorInitializedBootContext` style. you could error if crosvm tries to set an unexpected register. i\u0027m not sure how you\u0027d really implement it though, maybe could accumulate the supported register values and then do the `init_arch` logic in a deferred manner, but it could be ugly because `set_one_reg` is done per-vcpu and much later than `init_arch` is currently called\n\nit would be non-trivial to refactor, so not a blocker for this CL IMO",
+      "parentUuid": "cfbc8716_58e3b376",
       "range": {
         "startLine": 224,
         "startChar": 8,

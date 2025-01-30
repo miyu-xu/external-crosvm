@@ -16,6 +16,24 @@
       "message": "Isn\u0027t this what you\u0027re trying to support?",
       "revId": "2f011c6b4e02c4db17d94864cc180c054909041f",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "0845a2b8_37399325",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 1430,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-01-30T21:58:59Z",
+      "side": 0,
+      "message": "yeah, but this is skipped for gunyah because it advertises `HypervisorCap::HypervisorInitializedBootContext`\n\nhttps://cs.android.com/android/platform/superproject/main/+/main:external/crosvm/aarch64/src/lib.rs;l\u003d636-643;drc\u003d132d6909f2af2b213db7df0fe9cec91827eab8bb",
+      "parentUuid": "8e6500c0_537b0b24",
+      "revId": "2f011c6b4e02c4db17d94864cc180c054909041f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
