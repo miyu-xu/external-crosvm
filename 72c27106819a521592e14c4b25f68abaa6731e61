@@ -24,6 +24,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "4d5e145f_33dc2f1b",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 202,
+      "author": {
+        "id": 2059657
+      },
+      "writtenOn": "2025-01-30T09:56:43Z",
+      "side": 1,
+      "message": "Thanks @fmayle@google.com for suggestion.",
+      "parentUuid": "c07b7623_4ccddc78",
+      "range": {
+        "startLine": 188,
+        "startChar": 0,
+        "endLine": 202,
+        "endChar": 11
+      },
+      "revId": "72c27106819a521592e14c4b25f68abaa6731e61",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "2fe55c12_f8889926",
