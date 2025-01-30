@@ -93,6 +93,30 @@
       },
       "revId": "72c27106819a521592e14c4b25f68abaa6731e61",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4c010c64_d0a275da",
+        "filename": "hypervisor/src/gunyah/gunyah_sys.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 37,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-01-30T21:29:48Z",
+      "side": 1,
+      "message": "Do you have a reference? I can\u0027t find it in ACK using code search",
+      "parentUuid": "ef64fd09_a4fbe016",
+      "range": {
+        "startLine": 32,
+        "startChar": 0,
+        "endLine": 37,
+        "endChar": 2
+      },
+      "revId": "72c27106819a521592e14c4b25f68abaa6731e61",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
