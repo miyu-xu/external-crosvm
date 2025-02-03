@@ -3311,6 +3311,7 @@ dependencies = [
  "remain",
  "serde",
  "serde_json",
+ "serde_keyvalue",
  "snapshot",
  "tempfile",
  "thiserror",

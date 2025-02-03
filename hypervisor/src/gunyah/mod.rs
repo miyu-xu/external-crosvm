@@ -210,6 +210,7 @@ impl GunyahVm {
             let lend = if cfg.protection_type.isolates_memory() {
                 match region.options.purpose {
                     MemoryRegionPurpose::Bios => true,
+                    MemoryRegionPurpose::GuestMemoryFileBackedRegion => true,
                     MemoryRegionPurpose::GuestMemoryRegion => true,
                     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
                     MemoryRegionPurpose::ProtectedFirmwareRegion => true,

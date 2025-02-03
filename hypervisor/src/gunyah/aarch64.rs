@@ -81,7 +81,8 @@ impl VmAArch64 for GunyahVm {
         let mut firmware_set = false;
         for region in self.guest_mem.regions() {
             match region.options.purpose {
-                MemoryRegionPurpose::GuestMemoryRegion => {
+                MemoryRegionPurpose::GuestMemoryFileBackedRegion
+                | MemoryRegionPurpose::GuestMemoryRegion => {
                     // Assume first GuestMemoryRegion contains the payload
                     if !base_set {
                         base_set = true;
@@ -133,7 +134,8 @@ impl VmAArch64 for GunyahVm {
         for region in self.guest_mem.regions() {
             let create_shm_node = match region.options.purpose {
                 MemoryRegionPurpose::Bios => false,
-                MemoryRegionPurpose::GuestMemoryRegion => {
+                MemoryRegionPurpose::GuestMemoryFileBackedRegion
+                | MemoryRegionPurpose::GuestMemoryRegion => {
                     // Assume first GuestMemoryRegion contains the payload
                     // This memory region is described by the "base-address" property
                     // and doesn't get re-described as a separate shm node.

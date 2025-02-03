@@ -40,7 +40,6 @@ use std::iter;
 use std::mem;
 #[cfg(target_arch = "x86_64")]
 use std::ops::RangeInclusive;
-use std::os::unix::prelude::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -186,16 +185,17 @@ use sync::Condvar;
 use sync::Mutex;
 use vm_control::api::VmMemoryClient;
 use vm_control::*;
+use vm_memory::FileBackedMappingParameters;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 use vm_memory::MemoryPolicy;
 use vm_memory::MemoryRegionOptions;
+use vm_memory::MemoryRegionPurpose;
 #[cfg(target_arch = "x86_64")]
 use x86_64::X8664arch as Arch;
 
 use crate::crosvm::config::Config;
 use crate::crosvm::config::Executable;
-use crate::crosvm::config::FileBackedMappingParameters;
 use crate::crosvm::config::HypervisorKind;
 use crate::crosvm::config::InputDeviceOption;
 use crate::crosvm::config::IrqChipKind;
@@ -1136,17 +1136,14 @@ fn create_devices(
     Ok(devices)
 }
 
-fn create_file_backed_mappings(
+fn create_mmio_file_backed_mappings(
     cfg: &Config,
     vm: &mut impl Vm,
     resources: &mut SystemAllocator,
 ) -> Result<()> {
-    for mapping in &cfg.file_backed_mappings {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(mapping.writable)
-            .custom_flags(if mapping.sync { libc::O_SYNC } else { 0 })
-            .open(&mapping.path)
+    for mapping in &cfg.file_backed_mappings_mmio {
+        let file = mapping
+            .open()
             .context("failed to open file for file-backed mapping")?;
         let prot = if mapping.writable {
             Protection::read_write()
@@ -1586,20 +1583,34 @@ pub enum ExitState {
     GuestPanic,
     WatchdogReset,
 }
-// Remove ranges in `guest_mem_layout` that overlap with ranges in `file_backed_mappings`.
+
+// Replaces ranges in `guest_mem_layout` that overlap with ranges in `file_backed_mappings`.
 // Returns the updated guest memory layout.
 fn punch_holes_in_guest_mem_layout_for_mappings(
     guest_mem_layout: Vec<(GuestAddress, u64, MemoryRegionOptions)>,
-    file_backed_mappings: &[FileBackedMappingParameters],
-) -> Vec<(GuestAddress, u64, MemoryRegionOptions)> {
+    file_backed_mappings_ram: &[FileBackedMappingParameters],
+) -> Result<Vec<(GuestAddress, u64, MemoryRegionOptions)>> {
     // Create a set containing (start, end) pairs with exclusive end (end = start + size; the byte
     // at end is not included in the range).
     let mut layout_set = BTreeSet::new();
     for (addr, size, options) in &guest_mem_layout {
-        layout_set.insert((addr.offset(), addr.offset() + size, *options));
+        layout_set.insert((addr.offset(), addr.offset() + size, options.clone()));
     }
 
-    for mapping in file_backed_mappings {
+    // Make sure the RAM mappings are a subset of the RAM memory layout.
+    // For simplicity, we currently require each mapping to be fully contained within a single
+    // region of the input layout.
+    for mapping in file_backed_mappings_ram {
+        anyhow::ensure!(
+            layout_set
+                .iter()
+                .any(|(addr, size, _)| *addr <= mapping.address
+                    && mapping.address + mapping.size <= *addr + *size),
+            "RAM file-backed-mapping must be a subset of a RAM region"
+        );
+    }
+
+    for mapping in file_backed_mappings_ram.iter().cloned() {
         let mapping_start = mapping.address;
         let mapping_end = mapping_start + mapping.size;
 
@@ -1611,22 +1622,29 @@ fn punch_holes_in_guest_mem_layout_for_mappings(
             })
             .cloned()
         {
-            layout_set.remove(&(range_start, range_end, options));
+            layout_set.remove(&(range_start, range_end, options.clone()));
 
             if range_start < mapping_start {
-                layout_set.insert((range_start, mapping_start, options));
+                layout_set.insert((range_start, mapping_start, options.clone()));
             }
             if range_end > mapping_end {
                 layout_set.insert((mapping_end, range_end, options));
             }
         }
+        layout_set.insert((
+            mapping_start,
+            mapping_end,
+            MemoryRegionOptions::new()
+                .purpose(MemoryRegionPurpose::GuestMemoryFileBackedRegion)
+                .file_backed(mapping),
+        ));
     }
 
     // Build the final guest memory layout from the modified layout_set.
-    layout_set
-        .iter()
-        .map(|(start, end, options)| (GuestAddress(*start), end - start, *options))
-        .collect()
+    Ok(layout_set
+        .into_iter()
+        .map(|(start, end, options)| (GuestAddress(start), end - start, options))
+        .collect())
 }
 
 fn create_guest_memory(
@@ -1638,8 +1656,10 @@ fn create_guest_memory(
     let guest_mem_layout = Arch::guest_memory_layout(components, arch_memory_layout, hypervisor)
         .context("failed to create guest memory layout")?;
 
-    let guest_mem_layout =
-        punch_holes_in_guest_mem_layout_for_mappings(guest_mem_layout, &cfg.file_backed_mappings);
+    let guest_mem_layout = punch_holes_in_guest_mem_layout_for_mappings(
+        guest_mem_layout,
+        &cfg.file_backed_mappings_ram,
+    )?;
 
     let mut guest_mem = GuestMemory::new_with_options(&guest_mem_layout)
         .context("failed to create guest memory")?;
@@ -2063,7 +2083,7 @@ where
         None => None,
     };
 
-    create_file_backed_mappings(&cfg, &mut vm, &mut sys_allocator)?;
+    create_mmio_file_backed_mappings(&cfg, &mut vm, &mut sys_allocator)?;
 
     #[cfg(feature = "gpu")]
     // Hold on to the render server jail so it keeps running until we exit run_vm()
@@ -5067,6 +5087,7 @@ mod tests {
             writable: false,
             sync: false,
             align: false,
+            ram: true,
         }
     }
 
@@ -5080,11 +5101,12 @@ mod tests {
                     (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
                 ],
                 &[]
-            ),
+            )
+            .unwrap(),
             vec![
                 (GuestAddress(0), 0xD000_0000, Default::default()),
                 (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
-            ]
+            ],
         );
 
         // File mapping that does not overlap guest memory.
@@ -5095,11 +5117,10 @@ mod tests {
                     (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
                 ],
                 &[test_file_backed_mapping(0xD000_0000, 0x1000)]
-            ),
-            vec![
-                (GuestAddress(0), 0xD000_0000, Default::default()),
-                (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
-            ]
+            )
+            .unwrap_err()
+            .to_string(),
+            "RAM file-backed-mapping must be a subset of a RAM region",
         );
 
         // File mapping at the start of the low address space region.
@@ -5110,15 +5131,23 @@ mod tests {
                     (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
                 ],
                 &[test_file_backed_mapping(0, 0x2000)]
-            ),
+            )
+            .unwrap(),
             vec![
+                (
+                    GuestAddress(0),
+                    0x2000,
+                    MemoryRegionOptions::new()
+                        .purpose(MemoryRegionPurpose::GuestMemoryFileBackedRegion)
+                        .file_backed(test_file_backed_mapping(0, 0x2000)),
+                ),
                 (
                     GuestAddress(0x2000),
                     0xD000_0000 - 0x2000,
                     Default::default()
                 ),
                 (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
-            ]
+            ],
         );
 
         // File mapping at the end of the low address space region.
@@ -5129,11 +5158,19 @@ mod tests {
                     (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
                 ],
                 &[test_file_backed_mapping(0xD000_0000 - 0x2000, 0x2000)]
-            ),
+            )
+            .unwrap(),
             vec![
                 (GuestAddress(0), 0xD000_0000 - 0x2000, Default::default()),
+                (
+                    GuestAddress(0xD000_0000 - 0x2000),
+                    0x2000,
+                    MemoryRegionOptions::new()
+                        .purpose(MemoryRegionPurpose::GuestMemoryFileBackedRegion)
+                        .file_backed(test_file_backed_mapping(0xD000_0000 - 0x2000, 0x2000)),
+                ),
                 (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
-            ]
+            ],
         );
 
         // File mapping fully contained within the middle of the low address space region.
@@ -5144,16 +5181,24 @@ mod tests {
                     (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
                 ],
                 &[test_file_backed_mapping(0x1000, 0x2000)]
-            ),
+            )
+            .unwrap(),
             vec![
                 (GuestAddress(0), 0x1000, Default::default()),
+                (
+                    GuestAddress(0x1000),
+                    0x2000,
+                    MemoryRegionOptions::new()
+                        .purpose(MemoryRegionPurpose::GuestMemoryFileBackedRegion)
+                        .file_backed(test_file_backed_mapping(0x1000, 0x2000)),
+                ),
                 (
                     GuestAddress(0x3000),
                     0xD000_0000 - 0x3000,
                     Default::default()
                 ),
                 (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
-            ]
+            ],
         );
 
         // File mapping at the start of the high address space region.
@@ -5164,15 +5209,23 @@ mod tests {
                     (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
                 ],
                 &[test_file_backed_mapping(0x1_0000_0000, 0x2000)]
-            ),
+            )
+            .unwrap(),
             vec![
                 (GuestAddress(0), 0xD000_0000, Default::default()),
+                (
+                    GuestAddress(0x1_0000_0000),
+                    0x2000,
+                    MemoryRegionOptions::new()
+                        .purpose(MemoryRegionPurpose::GuestMemoryFileBackedRegion)
+                        .file_backed(test_file_backed_mapping(0x1_0000_0000, 0x2000)),
+                ),
                 (
                     GuestAddress(0x1_0000_2000),
                     0x8_0000 - 0x2000,
                     Default::default()
                 ),
-            ]
+            ],
         );
 
         // File mapping at the end of the high address space region.
@@ -5183,7 +5236,8 @@ mod tests {
                     (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
                 ],
                 &[test_file_backed_mapping(0x1_0008_0000 - 0x2000, 0x2000)]
-            ),
+            )
+            .unwrap(),
             vec![
                 (GuestAddress(0), 0xD000_0000, Default::default()),
                 (
@@ -5191,7 +5245,14 @@ mod tests {
                     0x8_0000 - 0x2000,
                     Default::default()
                 ),
-            ]
+                (
+                    GuestAddress(0x1_0008_0000 - 0x2000),
+                    0x2000,
+                    MemoryRegionOptions::new()
+                        .purpose(MemoryRegionPurpose::GuestMemoryFileBackedRegion)
+                        .file_backed(test_file_backed_mapping(0x1_0008_0000 - 0x2000, 0x2000)),
+                ),
+            ],
         );
 
         // File mapping fully contained within the middle of the high address space region.
@@ -5202,16 +5263,24 @@ mod tests {
                     (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
                 ],
                 &[test_file_backed_mapping(0x1_0000_1000, 0x2000)]
-            ),
+            )
+            .unwrap(),
             vec![
                 (GuestAddress(0), 0xD000_0000, Default::default()),
                 (GuestAddress(0x1_0000_0000), 0x1000, Default::default()),
+                (
+                    GuestAddress(0x1_0000_1000),
+                    0x2000,
+                    MemoryRegionOptions::new()
+                        .purpose(MemoryRegionPurpose::GuestMemoryFileBackedRegion)
+                        .file_backed(test_file_backed_mapping(0x1_0000_1000, 0x2000)),
+                ),
                 (
                     GuestAddress(0x1_0000_3000),
                     0x8_0000 - 0x3000,
                     Default::default()
                 ),
-            ]
+            ],
         );
 
         // File mapping overlapping two guest memory regions.
@@ -5222,15 +5291,10 @@ mod tests {
                     (GuestAddress(0x1_0000_0000), 0x8_0000, Default::default()),
                 ],
                 &[test_file_backed_mapping(0xA000_0000, 0x60002000)]
-            ),
-            vec![
-                (GuestAddress(0), 0xA000_0000, Default::default()),
-                (
-                    GuestAddress(0x1_0000_2000),
-                    0x8_0000 - 0x2000,
-                    Default::default()
-                ),
-            ]
+            )
+            .unwrap_err()
+            .to_string(),
+            "RAM file-backed-mapping must be a subset of a RAM region",
         );
     }
 

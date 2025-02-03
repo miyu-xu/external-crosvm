@@ -602,6 +602,7 @@ impl GeniezoneVm {
         for region in guest_mem.regions() {
             let flags = match region.options.purpose {
                 MemoryRegionPurpose::Bios => GZVM_USER_MEM_REGION_GUEST_MEM,
+                MemoryRegionPurpose::GuestMemoryFileBackedRegion => GZVM_USER_MEM_REGION_GUEST_MEM,
                 MemoryRegionPurpose::GuestMemoryRegion => GZVM_USER_MEM_REGION_GUEST_MEM,
                 MemoryRegionPurpose::ProtectedFirmwareRegion => GZVM_USER_MEM_REGION_PROTECT_FW,
                 MemoryRegionPurpose::ReservedMemory => GZVM_USER_MEM_REGION_GUEST_MEM,
