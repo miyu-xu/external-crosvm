@@ -27,6 +27,7 @@ rust_library {
     ],
     rustlibs: [
         "libcfg_if",
+        "libciborium",
         "liblibc",
         "liblog_rust",
         "libnix",
@@ -76,6 +77,7 @@ rust_library {
     edition: "2021",
     rustlibs: [
         "libcfg_if",
+        "libciborium",
         "liblibc",
         "liblog_rust",
         "libnix",
@@ -132,6 +134,7 @@ rust_test {
     ],
     rustlibs: [
         "libcfg_if",
+        "libciborium",
         "liblibc",
         "liblog_rust",
         "libnix",
