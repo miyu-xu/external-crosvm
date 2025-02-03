@@ -7,6 +7,7 @@ use std::collections::BTreeMap as Map;
 use std::collections::BTreeSet as Set;
 use std::io::IoSliceMut;
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::result::Result;
 use std::sync::atomic::AtomicBool;
@@ -458,6 +459,7 @@ pub struct VirtioGpu {
     external_blob: bool,
     fixed_blob_mapping: bool,
     udmabuf_driver: Option<UdmabufDriver>,
+    snapshot_scratch_directory: Option<PathBuf>,
     deferred_snapshot_load: Option<VirtioGpuSnapshot>,
 }
 
@@ -533,6 +535,7 @@ impl VirtioGpu {
         external_blob: bool,
         fixed_blob_mapping: bool,
         udmabuf: bool,
+        snapshot_scratch_directory: Option<PathBuf>,
     ) -> Option<VirtioGpu> {
         let mut udmabuf_driver = None;
         if udmabuf {
@@ -567,6 +570,7 @@ impl VirtioGpu {
             fixed_blob_mapping,
             udmabuf_driver,
             deferred_snapshot_load: None,
+            snapshot_scratch_directory,
         })
     }
 
