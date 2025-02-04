@@ -141,6 +141,30 @@
       },
       "revId": "72c27106819a521592e14c4b25f68abaa6731e61",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8b1648c8_d091dfd1",
+        "filename": "hypervisor/src/gunyah/gunyah_sys.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 37,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-02-04T19:12:34Z",
+      "side": 1,
+      "message": "Thanks. Looks good then.\n\n+1 to aligning the names. As further cleanup, we ought to generate these bindings from the real headers if possible, as done for KVM",
+      "parentUuid": "9f8f0a60_f408f079",
+      "range": {
+        "startLine": 32,
+        "startChar": 0,
+        "endLine": 37,
+        "endChar": 2
+      },
+      "revId": "72c27106819a521592e14c4b25f68abaa6731e61",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
