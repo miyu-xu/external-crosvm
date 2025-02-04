@@ -99,8 +99,6 @@ impl Hypervisor for Gunyah {
             HypervisorCap::S390UserSigp | HypervisorCap::TscDeadlineTimer => false,
             #[cfg(target_arch = "x86_64")]
             HypervisorCap::Xcrs | HypervisorCap::CalibratedTscLeafRequired => false,
-            #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-            HypervisorCap::Sve => false,
         }
     }
 }
@@ -215,6 +213,7 @@ impl GunyahVm {
                     MemoryRegionPurpose::GuestMemoryRegion => true,
                     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
                     MemoryRegionPurpose::ProtectedFirmwareRegion => true,
+                    MemoryRegionPurpose::ReservedMemory => true,
                     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
                     MemoryRegionPurpose::StaticSwiotlbRegion => false,
                 }
@@ -442,6 +441,8 @@ impl Vm for GunyahVm {
             VmCap::BusLockDetect => false,
             VmCap::ReadOnlyMemoryRegion => false,
             VmCap::MemNoncoherentDma => false,
+            #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+            VmCap::Sve => false,
         }
     }
 
