@@ -8,6 +8,7 @@ use std::convert::TryInto;
 use std::io::IoSliceMut;
 use std::io::Read;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -16,6 +17,8 @@ use serde::Serialize;
 use crate::cross_domain::CrossDomain;
 #[cfg(feature = "gfxstream")]
 use crate::gfxstream::Gfxstream;
+use crate::snapshot::RutabagaSnapshotReader;
+use crate::snapshot::RutabagaSnapshotWriter;
 use crate::rutabaga_2d::Rutabaga2D;
 use crate::rutabaga_os::MemoryMapping;
 use crate::rutabaga_os::OwnedDescriptor;
@@ -302,13 +305,13 @@ pub trait RutabagaComponent {
         Ok(())
     }
 
-    /// Implementations must snapshot to the specified directory
-    fn snapshot(&self, _directory: &str) -> RutabagaResult<()> {
+    /// Implementations must snapshot to the specified writer.
+    fn snapshot(&self,  _writer: RutabagaSnapshotWriter) -> RutabagaResult<()> {
         Err(RutabagaError::Unsupported)
     }
 
-    /// Implementations must restore from the specified directory
-    fn restore(&self, _directory: &str) -> RutabagaResult<()> {
+    /// Implementations must restore from the specified reader.
+    fn restore(&self, _reader: RutabagaSnapshotReader) -> RutabagaResult<()> {
         Err(RutabagaError::Unsupported)
     }
 
@@ -505,13 +508,16 @@ impl Rutabaga {
 
     /// Take a snapshot of Rutabaga's current state. The snapshot is serialized into an opaque byte
     /// stream and written to `w`.
-    pub fn snapshot(&self, w: &mut impl Write, directory: &str) -> RutabagaResult<()> {
+    pub fn snapshot(&self, directory: &str) -> RutabagaResult<()> {
+        let snapshot_writer = RutabagaSnapshotWriter::from_existing(PathBuf::from(directory));
+
         let component = self
             .components
             .get(&self.default_component)
             .ok_or(RutabagaError::InvalidComponent)?;
 
-        component.snapshot(directory)?;
+        let component_snapshot_writer = snapshot_writer.add_namespace(self.default_component.as_str())?;
+        component.snapshot(component_snapshot_writer)?;
 
         let snapshot = RutabagaSnapshot {
             resources: self
@@ -525,8 +531,7 @@ impl Rutabaga {
                 .map(|(i, c)| Ok((*i, c.snapshot()?)))
                 .collect::<RutabagaResult<_>>()?,
         };
-
-        serde_json::to_writer(w, &snapshot).map_err(|e| RutabagaError::IoError(e.into()))
+        snapshot_writer.add_fragment("rutabaga_snapshot", &snapshot)
     }
 
     fn destroy_objects(&mut self) -> RutabagaResult<()> {
@@ -561,18 +566,20 @@ impl Rutabaga {
     /// to translate to/from stable guest physical addresses, but it is unclear how well that
     /// approach would scale to support 3D modes, which have others problems that require VMM help,
     /// like resource handles.
-    pub fn restore(&mut self, r: &mut impl Read, directory: &str) -> RutabagaResult<()> {
+    pub fn restore(&mut self, directory: &str) -> RutabagaResult<()> {
         self.destroy_objects()?;
+
+        let snapshot_reader = RutabagaSnapshotReader::from_existing(PathBuf::from(directory))?;
 
         let component = self
             .components
             .get_mut(&self.default_component)
             .ok_or(RutabagaError::InvalidComponent)?;
 
-        component.restore(directory)?;
+        let component_snapshot_reader = snapshot_reader.get_namespace(self.default_component.as_str())?;
+        component.restore(component_snapshot_reader)?;
 
-        let snapshot: RutabagaSnapshot =
-            serde_json::from_reader(r).map_err(|e| RutabagaError::IoError(e.into()))?;
+        let snapshot: RutabagaSnapshot = snapshot_reader.get_fragment("rutabaga_snapshot")?;
 
         self.resources = snapshot
             .resources

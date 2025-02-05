@@ -467,14 +467,6 @@ pub struct VirtioGpu {
     deferred_snapshot_load: Option<VirtioGpuSnapshot>,
 }
 
-// Temporary container while transitioning rutabaga away from saving snapshots
-// to both a buffer and to a directory.
-#[derive(Serialize, Deserialize)]
-struct RutabagaSnapshotWrapper {
-    from_buffer: Vec<u8>,
-    from_directory: FilesSnapshot,
-}
-
 // Only the 2D mode is supported. Notes on `VirtioGpu` fields:
 //
 //   * display: re-initialized from scratch using the scanout snapshots
@@ -491,7 +483,7 @@ pub struct VirtioGpuSnapshot {
     scanouts: Map<u32, VirtioGpuScanoutSnapshot>,
     scanouts_updated: bool,
     cursor_scanout: VirtioGpuScanoutSnapshot,
-    rutabaga: RutabagaSnapshotWrapper,
+    rutabaga: FilesSnapshot,
     resources: Map<u32, VirtioGpuResourceSnapshot>,
 }
 
@@ -1333,16 +1325,12 @@ impl VirtioGpu {
             scanouts_updated: self.scanouts_updated.load(Ordering::SeqCst),
             cursor_scanout: self.cursor_scanout.snapshot(),
             rutabaga: {
-                let mut buffer = std::io::Cursor::new(Vec::new());
                 self.rutabaga
-                    .snapshot(&mut buffer, &snapshot_directory.to_string_lossy())
+                    .snapshot(&snapshot_directory.to_string_lossy())
                     .context("failed to snapshot rutabaga")?;
 
-                RutabagaSnapshotWrapper{
-                    from_buffer: buffer.into_inner(),
-                    from_directory: pack_directory_to_snapshot(snapshot_directory)
-                        .with_context(|| format!("failed to pack rutabaga snapshot from {}", snapshot_directory.display()))?
-                }
+                pack_directory_to_snapshot(snapshot_directory)
+                    .with_context(|| format!("failed to pack rutabaga snapshot from {}", snapshot_directory.display()))?
             },
             resources: self
                 .resources
@@ -1397,11 +1385,10 @@ impl VirtioGpu {
                 snapshot_directory_tempdir.path()
             };
 
-            unpack_snapshot_to_directory(snapshot_directory, snapshot.rutabaga.from_directory)
+            unpack_snapshot_to_directory(snapshot_directory, snapshot.rutabaga)
                 .with_context(|| format!("failed to unpack rutabaga snapshot to {}", snapshot_directory.display()))?;
-
             self.rutabaga
-                .restore(&mut &snapshot.rutabaga.from_buffer[..], &snapshot_directory.to_string_lossy())
+                .restore(&snapshot_directory.to_string_lossy())
                 .context("failed to restore rutabaga")?;
 
             for (id, s) in snapshot.resources.into_iter() {
