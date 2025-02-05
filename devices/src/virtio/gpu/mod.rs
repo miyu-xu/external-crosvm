@@ -5,6 +5,7 @@
 mod edid;
 mod parameters;
 mod protocol;
+mod snapshot;
 mod virtio_gpu;
 
 use std::cell::RefCell;
@@ -50,7 +51,7 @@ pub use parameters::GpuParameters;
 use rutabaga_gfx::*;
 use serde::Deserialize;
 use serde::Serialize;
-use snapshot::AnySnapshot;
+use ::snapshot::AnySnapshot;
 use sync::Mutex;
 pub use vm_control::gpu::DisplayMode as GpuDisplayMode;
 pub use vm_control::gpu::DisplayParameters as GpuDisplayParameters;
