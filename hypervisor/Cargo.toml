@@ -9,6 +9,7 @@ haxm = []
 whpx = []
 geniezone = []
 gunyah = []
+xhee = []
 noncoherent-dma = []
 
 [dependencies]

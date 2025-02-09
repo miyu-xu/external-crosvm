@@ -35,6 +35,11 @@ pub enum HypervisorKind {
     Gunyah {
         device: Option<PathBuf>,
     },
+
+    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "xhee"))]
+    Xhee {
+        device: Option<PathBuf>,
+    },
 }
 
 // Doesn't do anything on unix.
@@ -567,6 +572,42 @@ mod tests {
         assert_eq!(
             config.hypervisor,
             Some(HypervisorKind::Gunyah {
+                device: Some(PathBuf::from("/not/default"))
+            })
+        );
+    }
+
+    #[test]
+    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "xhee"))]
+    fn hypervisor_xhee() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &["--hypervisor", "xhee", "/dev/null"],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        assert_eq!(
+            config.hypervisor,
+            Some(HypervisorKind::xhee { device: None })
+        );
+    }
+
+    #[test]
+    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "xhee"))]
+    fn hypervisor_xhee_device() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &["--hypervisor", "xhee[device=/not/default]", "/dev/null"],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        assert_eq!(
+            config.hypervisor,
+            Some(HypervisorKind::xhee {
                 device: Some(PathBuf::from("/not/default"))
             })
         );

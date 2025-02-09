@@ -212,6 +212,9 @@ const KVM_PATH: &str = "/dev/kvm";
 const GENIEZONE_PATH: &str = "/dev/gzvm";
 #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
 static GUNYAH_PATH: &str = "/dev/gunyah";
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(feature = "xhee")]
+const XHEE_PATH: &str = "/dev/xrvm";
 
 fn create_virtio_devices(
     cfg: &Config,
@@ -1508,6 +1511,63 @@ fn run_gz(device_path: Option<&Path>, cfg: Config, components: VmComponents) -> 
     )
 }
 
+#[cfg(all(target_arch = "aarch64", feature = "xhee"))]
+fn run_xhee(
+    device_path: Option<&Path>,
+    cfg: Config,
+    components: VmComponents,
+) -> Result<ExitState> {
+    use devices::XheeKernelIrqChip;
+    use hypervisor::xhee::Xhee;
+    use hypervisor::xhee::XheeVm;
+    use hypervisor::xhee::XheeVcpu;
+
+    let device_path = device_path.unwrap_or(Path::new(XHEE_PATH));
+    let xhee = Xhee::new_with_path(device_path)
+        .with_context(|| format!("failed to open xhee device {}", device_path.display()))?;
+
+    let guest_mem = create_guest_memory(&cfg, &components, &xhee)?;
+
+    #[cfg(feature = "swap")]
+    let swap_controller = if let Some(swap_dir) = cfg.swap_dir.as_ref() {
+        Some(
+            SwapController::launch(guest_mem.clone(), swap_dir, &cfg.jail_config)
+                .context("launch vmm-swap monitor process")?,
+        )
+    } else {
+        None
+    };
+
+    let vm = XheeVm::new(&xhee, guest_mem, components.hv_cfg).context("failed to create vm")?;
+
+    // Check that the VM was actually created in protected mode as expected.
+    if cfg.protection_type.isolates_memory() && !vm.check_capability(VmCap::Protected) {
+        bail!("Failed to create protected VM");
+    }
+    let vm_clone = vm.try_clone().context("failed to clone vm")?;
+
+    let ioapic_host_tube;
+    let mut irq_chip = match cfg.irq_chip.unwrap_or(IrqChipKind::Kernel) {
+        IrqChipKind::Split => bail!("Xhee does not support split irqchip mode"),
+        IrqChipKind::Userspace => bail!("Xhee does not support userspace irqchip mode"),
+        IrqChipKind::Kernel => {
+            ioapic_host_tube = None;
+            XheeKernelIrqChip::new(vm_clone, components.vcpu_count)
+                .context("failed to create IRQ chip")?
+        }
+    };
+
+    run_vm::<XheeVcpu, XheeVm>(
+        cfg,
+        components,
+        vm,
+        &mut irq_chip,
+        ioapic_host_tube,
+        #[cfg(feature = "swap")]
+        swap_controller,
+    )
+}
+
 fn run_kvm(device_path: Option<&Path>, cfg: Config, components: VmComponents) -> Result<ExitState> {
     use devices::KvmKernelIrqChip;
     #[cfg(target_arch = "x86_64")]
@@ -1687,6 +1747,16 @@ fn get_default_hypervisor() -> Option<HypervisorKind> {
         }
     }
 
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    #[cfg(feature = "xhee")]
+    {
+        let xhee_path = Path::new(XHEE_PATH);
+        if xhee_path.exists() {
+            return Some(HypervisorKind::Xhee {
+                device: Some(xhee_path.to_path_buf()),
+            });
+        }
+    }
     None
 }
 
@@ -1712,6 +1782,9 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
             feature = "gunyah"
         ))]
         HypervisorKind::Gunyah { device } => run_gunyah(device.as_deref(), cfg, components),
+
+        #[cfg(all(target_arch = "aarch64", feature = "xhee"))]
+        HypervisorKind::Xhee { device } => run_xhee(device.as_deref(), cfg, components),
     }
 }
 
