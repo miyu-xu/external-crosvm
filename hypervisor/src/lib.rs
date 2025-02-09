@@ -28,6 +28,10 @@ pub mod x86_64;
 #[cfg(all(unix, feature = "geniezone"))]
 pub mod geniezone;
 
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+#[cfg(all(unix, feature = "xhee"))]
+pub mod xhee;
+
 use base::AsRawDescriptor;
 use base::Event;
 use base::MappedRegion;

@@ -30,7 +30,8 @@
     "net",
     "qcow",
     "usb",
-    "virgl_renderer"
+    "virgl_renderer",
+    "xhee"
   ],
   "workspace": true,
   "workspace_excludes": [

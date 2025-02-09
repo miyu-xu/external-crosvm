@@ -224,6 +224,7 @@ rust_library {
         "net",
         "usb",
         "virgl_renderer",
+        "xhee",
     ],
     rustlibs: [
         "libacpi_tables",

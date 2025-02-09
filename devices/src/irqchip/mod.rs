@@ -76,6 +76,11 @@ mod geniezone;
 #[cfg(all(target_arch = "aarch64", feature = "geniezone"))]
 pub use self::geniezone::GeniezoneKernelIrqChip;
 
+#[cfg(all(target_arch = "aarch64", feature = "xhee"))]
+mod xhee;
+#[cfg(all(target_arch = "aarch64", feature = "xhee"))]
+pub use self::xhee::XheeKernelIrqChip;
+
 pub type IrqEventIndex = usize;
 
 #[cfg(target_arch = "x86_64")]
