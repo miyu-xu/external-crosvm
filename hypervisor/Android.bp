@@ -156,6 +156,7 @@ rust_test {
     features: [
         "geniezone",
         "gunyah",
+        "xhee",
     ],
     rustlibs: [
         "libanyhow",

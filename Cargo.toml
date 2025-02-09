@@ -266,6 +266,9 @@ geniezone = ["devices/geniezone", "hypervisor/geniezone"]
 ## Enables the use of the Gunyah hypervisor
 gunyah = ["devices/gunyah", "hypervisor/gunyah"]
 
+## Enables the use of the xhee hypervisor
+xhee = ["devices/xhee", "hypervisor/xhee"]
+
 ## Enables the Linux trace_marker backend for cros_tracing. This backend is only
 ## supported on Linux systems. It sends all cros_tracing tracepoints to the tracefs
 ## filesystem if mounted, for easier debugging with tools like trace-cmd.

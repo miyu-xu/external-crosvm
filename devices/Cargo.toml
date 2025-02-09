@@ -43,6 +43,7 @@ swap = ["swap/enable"]
 whpx = []
 pci-hotplug = []
 noncoherent-dma = []
+xhee = []
 
 [dependencies]
 argh = "0.1.7"

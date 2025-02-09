@@ -11,6 +11,7 @@ whpx = []
 geniezone = []
 gvm = []
 gunyah = []
+xhee = []
 noncoherent-dma = []
 
 [dependencies]
