@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "185c0b75_20199513",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 3848122
+      },
+      "writtenOn": "2025-02-10T15:59:22Z",
+      "side": 1,
+      "message": "we need this code to do gsi-vts test, thanks for review",
+      "revId": "9234ae8c95d7e7c152702e5a11c9c8f1a85fd7fc",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
