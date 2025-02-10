@@ -15,7 +15,7 @@ use crate::EventToken;
 use crate::RawDescriptor;
 
 /// Wraps a RawDescriptor and safely closes it when self falls out of scope.
-#[derive(Serialize, Deserialize, Debug, Eq)]
+#[derive(Serialize, Deserialize, Debug, Eq, Clone)]
 #[serde(transparent)]
 pub struct SafeDescriptor {
     #[serde(with = "super::with_raw_descriptor")]

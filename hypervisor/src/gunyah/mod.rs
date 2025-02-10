@@ -26,6 +26,7 @@ use base::ioctl_with_ref;
 use base::ioctl_with_val;
 use base::pagesize;
 use base::warn;
+use base::error;
 use base::Error;
 use base::FromRawDescriptor;
 use base::MemoryMapping;
@@ -427,6 +428,11 @@ impl Vm for GunyahVm {
             routes: self.routes.clone(),
             hv_cfg: self.hv_cfg,
         })
+    }
+
+    fn try_clone_fd(&self) -> Result<SafeDescriptor> {
+        error!("try_clone_fd not supported for gunyah vm");
+        Err(Error::new(EINVAL))
     }
 
     fn check_capability(&self, c: VmCap) -> bool {

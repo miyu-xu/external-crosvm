@@ -51,8 +51,10 @@ rust_library {
         "libthiserror",
         "libvm_control_product",
         "libvm_memory",
+        "libselinux_bindgen",
     ],
     proc_macros: ["libremain"],
+    shared_libs: ["libselinux"],
 }
 
 rust_test {

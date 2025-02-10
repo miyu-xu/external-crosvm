@@ -22,6 +22,7 @@ use base::linux::MemoryMappingBuilderUnix;
 use base::sys::call_with_extended_max_files;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use base::MemoryMappingArena;
+use base::FromRawDescriptor;
 #[cfg(windows)]
 use base::MemoryMappingBuilderWindows;
 use hypervisor::BalloonEvent;
@@ -43,6 +44,8 @@ use std::convert::TryInto;
 use std::fmt;
 use std::fmt::Display;
 use std::fs::File;
+use std::os::fd::AsRawFd;
+use std::os::fd::RawFd;
 use std::path::Path;
 use std::path::PathBuf;
 use std::result::Result as StdResult;
@@ -78,6 +81,7 @@ use hypervisor::IrqSource;
 pub use hypervisor::MemSlot;
 use hypervisor::Vm;
 use hypervisor::VmCap;
+use hypervisor::kvm::KvmVm;
 use libc::EINVAL;
 use libc::EIO;
 use libc::ENODEV;
@@ -129,6 +133,9 @@ pub use crate::gdb::VcpuDebugStatusMessage;
 use crate::gpu::GpuControlCommand;
 #[cfg(feature = "gpu")]
 use crate::gpu::GpuControlResult;
+
+use std::ptr;
+use std::os::raw::c_char;
 
 /// Control the state of a particular VM CPU.
 #[derive(Clone, Debug)]
@@ -1506,6 +1513,8 @@ pub enum VmRequest {
     VcpuPidTid,
     /// Throttles the requested vCPU for microseconds
     Throttle(usize, u32),
+    /// Get a vm_fd.
+    GetVmFd,
 }
 
 /// NOTE: when making any changes to this enum please also update
@@ -2213,6 +2222,55 @@ impl VmRequest {
             VmRequest::Unregister { socket_addr: _ } => VmResponse::Ok,
             VmRequest::VcpuPidTid => unreachable!(),
             VmRequest::Throttle(_, _) => unreachable!(),
+            VmRequest::GetVmFd => {
+                info!("[ioffe] GetVmFd");
+                let vm_fd = match vm.try_clone_fd() {
+                    Ok(vm_fd) => vm_fd,
+                    Err(e) => {
+                        error!("fail to get vm_fd: {}", e);
+                        return VmResponse::Err(SysError::new(EIO))
+                    }
+                };
+                let mut con: *mut c_char = ptr::null_mut();
+                match unsafe { selinux_bindgen::fgetfilecon(vm_fd.as_raw_descriptor(), &mut con) } {
+                    1.. => {
+                        if !con.is_null() {
+                            info!("[ioffe] fgetfilecon: {:?}", con)
+                        } else {
+                            info!("[ioffe] fgetfilecon returned null")
+                        }
+                    },
+                    _ => {
+                        error!("[ioffe] fgetfilecon failed: {:?}", std::io::Error::last_os_error());
+                    }
+                }
+                /*let vm_fd = match vm {
+                    // TODO(ioffe): should we dup here?
+                    KvmVm { vm, ... } => vm.clone(),
+                    _ => {
+                        error!("unsupported hypervisor");
+                        // TODO(ioffe): better error code?
+                        return VmResponse::Err(SysError::new(EIO));
+                    }
+                };*/
+                /*let vm_fd = match File::open("/dev/null") {
+                    Ok(file) => file,
+                    Err(e) => {
+                        error!("fail to open /dev/null: {}", e);
+                        return VmResponse::Err(SysError::new(EIO))
+                    }
+                };
+                info!("[ioffe] just before from_raw_descriptor");
+                let vm_fd = match SafeDescriptor::try_from(vm_fd) {
+                    Ok(vm_fd) => vm_fd,
+                    Err(e) => {
+                        error!("fail to create safe descriptor: {}", e);
+                        return VmResponse::Err(SysError::new(EIO))
+                    }
+                };
+                info!("[ioffe] just after from_raw_descriptor");*/
+                VmResponse::VmFd { vm_fd }
+            }
         }
     }
 }
@@ -2482,6 +2540,9 @@ pub enum VmResponse {
     VcpuPidTidResponse {
         pid_tid_map: BTreeMap<usize, (u32, u32)>,
     },
+    VmFd {
+        vm_fd: SafeDescriptor,
+    },
 }
 
 impl Display for VmResponse {
@@ -2532,6 +2593,7 @@ impl Display for VmResponse {
             }
             DevicesState(status) => write!(f, "devices status: {:?}", status),
             VcpuPidTidResponse { pid_tid_map } => write!(f, "vcpu pid tid map: {:?}", pid_tid_map),
+            VmFd { vm_fd } => write!(f, "vm_fd : {:?}", vm_fd),
         }
     }
 }

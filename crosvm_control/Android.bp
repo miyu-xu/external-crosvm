@@ -27,6 +27,7 @@ rust_ffi_shared {
         "liblibc",
         "libswap",
         "libvm_control",
+        "liblog_rust",
     ],
     // The build.rs file compiles the generated C header just as a test, which
     // tricks cargo_embargo into thinking there is a library dependency that
@@ -50,6 +51,7 @@ rust_ffi_static {
         "liblibc",
         "libswap",
         "libvm_control",
+        "liblog_rust",
     ],
     // The build.rs file compiles the generated C header just as a test, which
     // tricks cargo_embargo into thinking there is a library dependency that
