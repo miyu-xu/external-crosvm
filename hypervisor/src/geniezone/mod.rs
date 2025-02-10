@@ -883,6 +883,11 @@ impl Vm for GeniezoneVm {
         })
     }
 
+    fn try_clone_fd(&self) -> Result<SafeDescriptor> {
+        error!("try_clone_fd not supported for geniezone vm");
+        Err(Error::new(EINVAL))
+    }
+
     fn check_capability(&self, c: VmCap) -> bool {
         if let Some(val) = self.check_capability_arch(c) {
             return val;

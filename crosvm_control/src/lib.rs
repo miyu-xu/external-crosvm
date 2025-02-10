@@ -25,7 +25,10 @@ use std::ffi::CStr;
 use std::panic::catch_unwind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::os::fd::RawFd;
 use std::time::Duration;
+
+use base::descriptor::IntoRawDescriptor;
 
 use balloon_control::BalloonStats;
 use balloon_control::BalloonWS;
@@ -53,6 +56,8 @@ use vm_control::UsbControlResult;
 use vm_control::VmRequest;
 use vm_control::VmResponse;
 use vm_control::USB_CONTROL_MAX_PORTS;
+
+use log::info;
 
 pub const VIRTIO_BALLOON_WS_MAX_NUM_BINS: usize = 16;
 pub const VIRTIO_BALLOON_WS_MAX_NUM_INTERVALS: usize = 15;
@@ -1272,6 +1277,34 @@ pub unsafe extern "C" fn crosvm_client_balloon_wsr_config(
                     vms_request(&request, socket_path).is_ok()
                 }
             } else {
+                false
+            }
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false)
+}
+
+/// TODO: document
+pub unsafe extern "C" fn crosvm_get_vm_fd(socket_path: *const c_char, vm_fd_out: *mut RawFd) -> bool {
+    log::info!("[ioffe] crosvm_get_vm_fd called");
+    catch_unwind(|| {
+        if let Some(socket_path) = validate_socket_path(socket_path) {
+            info!("[ioffe] socket_path: {:?}", socket_path.display());
+            if !vm_fd_out.is_null() {
+                info!("[ioffe] vm_fd_out is not null!");
+                // SAFETY: just checked that `vm_fd_out` is not null.
+                let resp = handle_request(&VmRequest::GetVmFd, socket_path);
+                if let Ok(VmResponse::VmFd { vm_fd }) = resp {
+                    *vm_fd_out = vm_fd.into_raw_descriptor();
+                    true
+                } else {
+                    info!("[ioffe] vm resp: {:#?}", resp);
+                    false
+                }
+            }  else {
+                info!("[ioffe] vm_fd_out is null :(");
                 false
             }
         } else {

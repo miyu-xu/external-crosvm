@@ -587,6 +587,10 @@ impl Vm for KvmVm {
         })
     }
 
+    fn try_clone_fd(&self) -> Result<SafeDescriptor> {
+        self.vm.try_clone()
+    }
+
     fn check_capability(&self, c: VmCap) -> bool {
         if let Some(val) = self.check_capability_arch(c) {
             return val;

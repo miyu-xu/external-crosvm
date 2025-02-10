@@ -113,6 +113,9 @@ pub trait Vm: Send {
     where
         Self: Sized;
 
+    /// Makes a shallow clone of the fd of this `Vm`.
+    fn try_clone_fd(&self) -> Result<SafeDescriptor>;
+
     /// Checks if a particular `VmCap` is available.
     ///
     /// This is distinct from the `Hypervisor` version of this method because some extensions depend
