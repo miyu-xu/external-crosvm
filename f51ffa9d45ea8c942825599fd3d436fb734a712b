@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ed4219e4_8069af63",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-02-11T02:02:48Z",
+      "side": 1,
+      "message": "depends on cargo_embargo changes in https://r.android.com/3487201",
+      "revId": "f51ffa9d45ea8c942825599fd3d436fb734a712b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
