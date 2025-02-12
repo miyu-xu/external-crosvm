@@ -132,4 +132,5 @@ rust_library {
         "libpaste",
         "libremain",
     ],
+    apex_available: ["com.android.virt"],
 }

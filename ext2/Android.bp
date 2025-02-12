@@ -84,4 +84,5 @@ rust_library {
         "libzerocopy-0.7.35",
     ],
     proc_macros: ["libenumn"],
+    apex_available: ["com.android.virt"],
 }

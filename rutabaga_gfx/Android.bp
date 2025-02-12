@@ -63,6 +63,7 @@ rust_library {
         "libgfxstream_backend",
         "libvirglrenderer",
     ],
+    apex_available: ["com.android.virt"],
 }
 
 rust_library {
@@ -110,6 +111,7 @@ rust_library {
             ],
         },
     },
+    apex_available: ["com.android.virt"],
 }
 
 rust_test {
@@ -137,6 +139,7 @@ rust_test {
         "libnix",
         "libserde",
         "libserde_json",
+        "libtempfile",
         "libthiserror",
         "libzerocopy",
     ],

@@ -23,15 +23,10 @@ rust_defaults {
             enabled: false,
         },
     },
-    apex_available: [
-        "com.android.virt",
-    ],
     defaults_visibility: [
         "//external/crosvm:__subpackages__",
         "//packages/modules/Virtualization/guest/authfs",
         "//packages/modules/Virtualization/tests/authfs",
-        // For QCOM's crosvm fork.
-        "//vendor:__subpackages__",
     ],
 }
 

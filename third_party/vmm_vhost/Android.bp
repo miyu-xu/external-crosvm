@@ -36,6 +36,7 @@ rust_library {
         "libenumn",
         "libremain",
     ],
+    apex_available: ["com.android.virt"],
 }
 
 rust_test {

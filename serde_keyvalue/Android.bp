@@ -37,6 +37,7 @@ rust_library {
         "libremain",
         "libserde_keyvalue_derive",
     ],
+    apex_available: ["com.android.virt"],
 }
 
 rust_test {

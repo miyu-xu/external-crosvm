@@ -129,4 +129,5 @@ rust_library {
         "libsync_rust",
         "libvm_memory",
     ],
+    apex_available: ["com.android.virt"],
 }

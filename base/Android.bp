@@ -230,6 +230,7 @@ rust_library {
         "libbase_event_token_derive",
         "libremain",
     ],
+    apex_available: ["com.android.virt"],
     target: {
         android: {
             rustlibs: ["libandroid_log_sys"],
@@ -249,5 +250,4 @@ rust_library {
         },
     },
     shared_libs: ["libcap"], // specified in src/linux/capabilities.rs
-    visibility: ["//vendor:__subpackages__"],
 }

@@ -31,6 +31,7 @@ rust_library {
         "libsync_rust",
     ],
     aliases: ["metrics_generic:metrics_product"],
+    apex_available: ["com.android.virt"],
 }
 
 rust_test {

@@ -45,4 +45,5 @@ rust_library {
         "libserde",
         "libzerocopy-0.7.35",
     ],
+    apex_available: ["com.android.virt"],
 }

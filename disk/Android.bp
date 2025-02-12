@@ -92,8 +92,6 @@ rust_library {
         "libasync_trait",
         "libremain",
     ],
-    visibility: [
-        "//packages/modules/Virtualization/android/virtmgr",
-        "//vendor:__subpackages__",
-    ],
+    apex_available: ["com.android.virt"],
+    visibility: ["//packages/modules/Virtualization/android/virtmgr"],
 }

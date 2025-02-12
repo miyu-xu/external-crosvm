@@ -63,4 +63,5 @@ rust_library {
         "libstatic_assertions",
         "libzerocopy-0.7.35",
     ],
+    apex_available: ["com.android.virt"],
 }

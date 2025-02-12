@@ -32,12 +32,13 @@ rust_library {
         "liblz4_flex",
         "libserde",
         "libserde_json",
+        "libserde_keyvalue",
         "libsnapshot_crosvm",
         "libthiserror",
         "libzerocopy-0.7.35",
     ],
     proc_macros: ["libremain"],
-    visibility: ["//vendor:__subpackages__"],
+    apex_available: ["com.android.virt"],
 }
 
 rust_test {
@@ -65,6 +66,7 @@ rust_test {
         "liblz4_flex",
         "libserde",
         "libserde_json",
+        "libserde_keyvalue",
         "libsnapshot_crosvm",
         "libtempfile",
         "libthiserror",
