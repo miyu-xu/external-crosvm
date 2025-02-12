@@ -215,6 +215,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "5ebf43b1_dd3222cb",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 224,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-02-12T02:30:19Z",
+      "side": 1,
+      "message": "I think that is OK, you can just make it an error. In a sense, it is similiarly awkward for pKVM.",
+      "parentUuid": "d7549e2d_0750b07f",
+      "range": {
+        "startLine": 224,
+        "startChar": 8,
+        "endLine": 224,
+        "endChar": 24
+      },
+      "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "7bd0bb47_b1eb1808",
@@ -246,6 +270,24 @@
       "side": 1,
       "message": "Noted, this point Daniel.",
       "parentUuid": "7bd0bb47_b1eb1808",
+      "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ef6bc451_229652d3",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 414,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-02-12T02:30:19Z",
+      "side": 1,
+      "message": "resolving",
+      "parentUuid": "d2221ebc_503ccdd3",
       "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
