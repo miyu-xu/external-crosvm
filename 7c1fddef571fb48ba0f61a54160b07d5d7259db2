@@ -193,6 +193,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "d7549e2d_0750b07f",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 224,
+      "author": {
+        "id": 1858345
+      },
+      "writtenOn": "2025-02-12T01:45:15Z",
+      "side": 1,
+      "message": "One comment here -- `set_one_reg` seems designed to work at any time during the VM life. set_boot_context is only allowed before the VM starts, and specifically before the VM_START ioctl which happens in `init_arch()`",
+      "parentUuid": "4908fbd5_3563d7a9",
+      "range": {
+        "startLine": 224,
+        "startChar": 8,
+        "endLine": 224,
+        "endChar": 24
+      },
+      "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "7bd0bb47_b1eb1808",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 3
