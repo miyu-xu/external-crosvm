@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "87109f03_0f7d3911",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-02-13T18:22:56Z",
+      "side": 1,
+      "message": "need Qualcomm-Review+1",
+      "revId": "fe39a036dfa08d8f107e99685f25ae88341ff56a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}

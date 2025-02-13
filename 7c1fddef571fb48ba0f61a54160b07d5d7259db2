@@ -263,6 +263,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "a8cec776_f7c8d2ea",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 224,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-02-13T18:22:56Z",
+      "side": 1,
+      "message": "That\u0027s right",
+      "parentUuid": "9acc23e9_6f047f2b",
+      "range": {
+        "startLine": 224,
+        "startChar": 8,
+        "endLine": 224,
+        "endChar": 24
+      },
+      "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "7bd0bb47_b1eb1808",
