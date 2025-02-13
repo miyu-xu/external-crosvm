@@ -239,6 +239,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "9acc23e9_6f047f2b",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 224,
+      "author": {
+        "id": 1851199
+      },
+      "writtenOn": "2025-02-13T09:06:36Z",
+      "side": 1,
+      "message": "IIUC, this ioctl works for pKVM but obviously it will not be reflected after pVM starts, is that what you are saying. Let us know if we are okay with current patch.",
+      "parentUuid": "5ebf43b1_dd3222cb",
+      "range": {
+        "startLine": 224,
+        "startChar": 8,
+        "endLine": 224,
+        "endChar": 24
+      },
+      "revId": "7c1fddef571fb48ba0f61a54160b07d5d7259db2",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "7bd0bb47_b1eb1808",
