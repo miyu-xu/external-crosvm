@@ -1506,6 +1506,13 @@ pub struct RunCommand {
     /// move all vGPU server threads to this Cgroup (default: nothing moves)
     pub gpu_server_cgroup_path: Option<PathBuf>,
 
+    #[cfg(target_arch = "aarch64")]
+    #[argh(switch)]
+    #[serde(skip)] // TODO(b/255223604)
+    #[merge(strategy = overwrite_option)]
+    /// allow ffa for this vm.
+    pub guest_ffa: Option<bool>,
+
     #[argh(switch)]
     #[serde(skip)] // TODO(b/255223604)
     #[merge(strategy = overwrite_option)]
@@ -2920,6 +2927,11 @@ impl TryFrom<RunCommand> for super::config::Config {
         }
 
         cfg.hugepages = cmd.hugepages.unwrap_or_default();
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            cfg.guest_ffa = cmd.guest_ffa.unwrap_or_default();
+        }
 
         // `cfg.hypervisor` may have been set by the deprecated `--kvm-device` option above.
         // TODO(b/274817652): remove this workaround when `--kvm-device` is removed.

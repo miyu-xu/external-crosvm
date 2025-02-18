@@ -29,6 +29,7 @@ pub const KVM_CAP_X86_PROTECTED_VM_FLAGS_SET_FW_GPA: u32 = 0;
 pub const KVM_CAP_X86_PROTECTED_VM_FLAGS_INFO: u32 = 1;
 pub const KVM_DEV_VFIO_PVIOMMU: u32 = 2;
 pub const KVM_DEV_VFIO_PVIOMMU_ATTACH: u32 = 1;
+pub const KVM_CAP_ARM_FFA_SUPPORT: u32 = 0xffbadab2;
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone)]
 pub struct kvm_vfio_iommu_info {

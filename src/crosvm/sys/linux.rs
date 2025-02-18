@@ -1502,6 +1502,8 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             #[cfg(target_arch = "aarch64")]
             mte: cfg.mte,
             protection_type: cfg.protection_type,
+            #[cfg(target_arch = "aarch64")]
+            guest_ffa: cfg.guest_ffa,
         },
         vm_image,
         android_fstab: cfg

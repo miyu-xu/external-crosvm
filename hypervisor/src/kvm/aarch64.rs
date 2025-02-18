@@ -97,6 +97,12 @@ impl KvmVm {
             // Safe because it does not take pointer arguments.
             unsafe { self.enable_raw_capability(KvmCap::ArmMte, 0, &[0, 0, 0, 0])? }
         }
+        #[cfg(target_arch = "aarch64")]
+        if cfg.guest_ffa {
+            // SAFETY:
+            // Safe because it does not take pointer arguments.
+            unsafe { self.enable_raw_capability(KvmCap::ArmGuestFfa, 0, &[0, 0, 0, 0])? }
+        }
         #[cfg(not(target_arch = "aarch64"))]
         {
             // Suppress warning.

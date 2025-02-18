@@ -122,6 +122,7 @@ pub enum KvmCap {
     ImmediateExit = KVM_CAP_IMMEDIATE_EXIT,
     ArmPmuV3 = KVM_CAP_ARM_PMU_V3,
     ArmProtectedVm = KVM_CAP_ARM_PROTECTED_VM,
+    #[cfg(target_arch = "x86_64")]
     X86ProtectedVm = KVM_CAP_X86_PROTECTED_VM,
     ArmMte = KVM_CAP_ARM_MTE,
     #[cfg(target_arch = "x86_64")]
@@ -131,4 +132,6 @@ pub enum KvmCap {
     UserMemory2 = KVM_CAP_USER_MEMORY2,
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     Sve = KVM_CAP_ARM_SVE,
+    #[cfg(target_arch = "aarch64")]
+    ArmGuestFfa = KVM_CAP_ARM_FFA_SUPPORT,
 }

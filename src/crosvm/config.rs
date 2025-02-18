@@ -707,6 +707,8 @@ pub struct Config {
     pub gpu_server_cgroup_path: Option<PathBuf>,
     #[cfg(all(windows, feature = "gpu"))]
     pub gpu_vmm_config: Option<GpuVmmConfig>,
+    #[cfg(target_arch = "aarch64")]
+    pub guest_ffa: bool,
     pub host_cpu_topology: bool,
     #[cfg(windows)]
     pub host_guid: Option<String>,
@@ -940,6 +942,8 @@ impl Default for Config {
             gpu_server_cgroup_path: None,
             #[cfg(all(windows, feature = "gpu"))]
             gpu_vmm_config: None,
+            #[cfg(target_arch = "aarch64")]
+            guest_ffa: false,
             host_cpu_topology: false,
             #[cfg(windows)]
             host_guid: None,
