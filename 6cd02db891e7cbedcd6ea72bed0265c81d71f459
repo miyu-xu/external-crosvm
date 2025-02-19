@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "698b0b9c_04257aa9",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-02-19T01:31:08Z",
+      "side": 1,
+      "message": "i think there should be no diffs here. we don\u0027t want to compile `gfxstream_stub` in",
+      "revId": "6cd02db891e7cbedcd6ea72bed0265c81d71f459",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
