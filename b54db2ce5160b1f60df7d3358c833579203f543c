@@ -22,6 +22,30 @@
       },
       "revId": "b54db2ce5160b1f60df7d3358c833579203f543c",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "0c801a98_3ab4f040",
+        "filename": "rutabaga_gfx/patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 113,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2025-02-19T18:25:04Z",
+      "side": 0,
+      "message": "Oh wait - that\u0027s not omitted. my bad.",
+      "parentUuid": "5e0734fb_71282162",
+      "range": {
+        "startLine": 113,
+        "startChar": 0,
+        "endLine": 113,
+        "endChar": 20
+      },
+      "revId": "b54db2ce5160b1f60df7d3358c833579203f543c",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
