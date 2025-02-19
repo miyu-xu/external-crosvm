@@ -22,6 +22,30 @@
       },
       "revId": "d6e6ea4d8830a163da6e1a9921ba05b5a5f9331a",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "00e57a58_8b5da73d",
+        "filename": "rutabaga_gfx/patches/Android.bp.patch",
+        "patchSetId": 3
+      },
+      "lineNbr": 26,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2025-02-19T18:34:38Z",
+      "side": 1,
+      "message": "*shrug* - I think this is just a difference in the diff formatting with this line losing the `+`.\n\nI didn\u0027t manually edit this patch file and I\u0027ve run `./android-merge-2-cargo-embargo.sh` to make sure it works and doesn\u0027t modify the Android.bp file. So I think it\u0027s fine as-is.",
+      "parentUuid": "abce661a_1144481c",
+      "range": {
+        "startLine": 26,
+        "startChar": 4,
+        "endLine": 26,
+        "endChar": 5
+      },
+      "revId": "d6e6ea4d8830a163da6e1a9921ba05b5a5f9331a",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
