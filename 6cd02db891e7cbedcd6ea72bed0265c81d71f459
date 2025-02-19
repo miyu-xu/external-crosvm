@@ -16,6 +16,24 @@
       "message": "i think there should be no diffs here. we don\u0027t want to compile `gfxstream_stub` in",
       "revId": "6cd02db891e7cbedcd6ea72bed0265c81d71f459",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fd8c9655_cc0cb340",
+        "filename": "rutabaga_gfx/Android.bp",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1644679
+      },
+      "writtenOn": "2025-02-19T18:12:58Z",
+      "side": 1,
+      "message": "I think you\u0027re right. Removed all differences and updated the patch file",
+      "parentUuid": "698b0b9c_04257aa9",
+      "revId": "6cd02db891e7cbedcd6ea72bed0265c81d71f459",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
