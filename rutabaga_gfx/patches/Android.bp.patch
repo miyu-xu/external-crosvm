@@ -1,33 +1,25 @@
 diff --git a/rutabaga_gfx/Android.bp b/rutabaga_gfx/Android.bp
-index e1c7614d8..178e68066 100644
+index e1b65dd5a..c5ce64c49 100644
 --- a/rutabaga_gfx/Android.bp
 +++ b/rutabaga_gfx/Android.bp
-@@ -23,7 +23,6 @@ rust_library {
-     edition: "2021",
-     features: [
-         "gfxstream",
--        "gfxstream_stub",
-         "virgl_renderer",
-     ],
-     rustlibs: [
-@@ -34,20 +33,87 @@ rust_library {
-         "libserde",
-         "libserde_json",
-         "libthiserror",
--        "libzerocopy-0.7.35",
-+        "libzerocopy",
+@@ -37,14 +37,81 @@ rust_library {
      ],
      proc_macros: ["libremain"],
--    static_libs: [
+     static_libs: [
 -        "libgbm",
--        "libvirglrenderer",
-+    cfgs: [
-+        "gfxstream_unstable",
++        "libepoxy",
++        "libgfxstream_backend",
+         "libvirglrenderer",
      ],
      shared_libs: [
 -        "libdrm",
+-        "libepoxy",
 +        "libc++",
 +        "libbase",
+     ],
+     apex_available: ["com.android.virt"],
++    cfgs: [
++        "gfxstream_unstable",
 +    ],
 +    target: {
 +        android: {
@@ -44,14 +36,8 @@ index e1c7614d8..178e68066 100644
 +            ],
 +        },
 +    },
-+    static_libs: [
-         "libepoxy",
-+        "libgfxstream_backend",
-+        "libvirglrenderer",
-     ],
-     apex_available: ["com.android.virt"],
- }
- 
++}
++
 +rust_library {
 +    name: "librutabaga_gfx_gfxstream",
 +    host_supported: true,
@@ -98,25 +84,11 @@ index e1c7614d8..178e68066 100644
 +        },
 +    },
 +    apex_available: ["com.android.virt"],
-+}
-+
+ }
+ 
  rust_test {
-     name: "rutabaga_gfx_test_src_lib",
-     defaults: ["crosvm_defaults"],
-@@ -64,7 +130,6 @@ rust_test {
-     edition: "2021",
-     features: [
-         "gfxstream",
--        "gfxstream_stub",
-         "virgl_renderer",
-     ],
-     rustlibs: [
-@@ -76,15 +141,12 @@ rust_test {
-         "libserde_json",
-         "libtempfile",
-         "libthiserror",
--        "libzerocopy-0.7.35",
-+        "libzerocopy",
+@@ -77,12 +144,10 @@ rust_test {
+         "libzerocopy",
      ],
      proc_macros: ["libremain"],
 -    static_libs: [
@@ -124,9 +96,146 @@ index e1c7614d8..178e68066 100644
 -        "libvirglrenderer",
 -    ],
      shared_libs: [
--        "libdrm",
+         "libdrm",
          "libepoxy",
 +        "libgfxstream_backend",
 +        "libvirglrenderer",
      ],
  }
+diff --git a/rutabaga_gfx/patches/Android.bp.patch b/rutabaga_gfx/patches/Android.bp.patch
+index 30b2bddde..e69de29bb 100644
+--- a/rutabaga_gfx/patches/Android.bp.patch
++++ b/rutabaga_gfx/patches/Android.bp.patch
+@@ -1,132 +0,0 @@
+-diff --git a/rutabaga_gfx/Android.bp b/rutabaga_gfx/Android.bp
+-index e1c7614d8..178e68066 100644
+---- a/rutabaga_gfx/Android.bp
+-+++ b/rutabaga_gfx/Android.bp
+-@@ -23,7 +23,6 @@ rust_library {
+-     edition: "2021",
+-     features: [
+-         "gfxstream",
+--        "gfxstream_stub",
+-         "virgl_renderer",
+-     ],
+-     rustlibs: [
+-@@ -34,20 +33,87 @@ rust_library {
+-         "libserde",
+-         "libserde_json",
+-         "libthiserror",
+--        "libzerocopy-0.7.35",
+-+        "libzerocopy",
+-     ],
+-     proc_macros: ["libremain"],
+--    static_libs: [
+--        "libgbm",
+--        "libvirglrenderer",
+-+    cfgs: [
+-+        "gfxstream_unstable",
+-     ],
+-     shared_libs: [
+--        "libdrm",
+-+        "libc++",
+-+        "libbase",
+-+    ],
+-+    target: {
+-+        android: {
+-+            shared_libs: [
+-+                "libnativewindow",
+-+                "libcutils",
+-+                "liblog",
+-+            ],
+-+        },
+-+        host: {
+-+            features: ["vulkano"],
+-+            rustlibs: [
+-+                "libvulkano",
+-+            ],
+-+        },
+-+    },
+-+    static_libs: [
+-         "libepoxy",
+-+        "libgfxstream_backend",
+-+        "libvirglrenderer",
+-     ],
+-     apex_available: ["com.android.virt"],
+- }
+- 
+-+rust_library {
+-+    name: "librutabaga_gfx_gfxstream",
+-+    host_supported: true,
+-+    vendor_available: true,
+-+    crate_name: "rutabaga_gfx",
+-+    cargo_env_compat: true,
+-+    cargo_pkg_version: "0.1.2",
+-+    srcs: ["src/lib.rs"],
+-+    edition: "2021",
+-+    rustlibs: [
+-+        "libcfg_if",
+-+        "liblibc",
+-+        "liblog_rust",
+-+        "libnix",
+-+        "libserde",
+-+        "libserde_json",
+-+        "libthiserror",
+-+        "libzerocopy",
+-+    ],
+-+    proc_macros: ["libremain"],
+-+    target: {
+-+        host: {
+-+            cfgs: [
+-+                "fence_passing_option1",
+-+                "gfxstream_unstable",
+-+            ],
+-+            features: [
+-+                "gfxstream",
+-+                "vulkano",
+-+            ],
+-+            shared_libs: [
+-+                "libgfxstream_backend",
+-+            ],
+-+            compile_multilib: "64",
+-+            rustlibs: [
+-+                "libvulkano",
+-+            ],
+-+        },
+-+        android: {
+-+            cfgs: [
+-+                "fence_passing_option1",
+-+                "gfxstream_unstable",
+-+            ],
+-+        },
+-+    },
+-+    apex_available: ["com.android.virt"],
+-+}
+-+
+- rust_test {
+-     name: "rutabaga_gfx_test_src_lib",
+-     defaults: ["crosvm_defaults"],
+-@@ -64,7 +130,6 @@ rust_test {
+-     edition: "2021",
+-     features: [
+-         "gfxstream",
+--        "gfxstream_stub",
+-         "virgl_renderer",
+-     ],
+-     rustlibs: [
+-@@ -76,15 +141,12 @@ rust_test {
+-         "libserde_json",
+-         "libtempfile",
+-         "libthiserror",
+--        "libzerocopy-0.7.35",
+-+        "libzerocopy",
+-     ],
+-     proc_macros: ["libremain"],
+--    static_libs: [
+--        "libgbm",
+--        "libvirglrenderer",
+--    ],
+-     shared_libs: [
+--        "libdrm",
+-         "libepoxy",
+-+        "libgfxstream_backend",
+-+        "libvirglrenderer",
+-     ],
+- }
