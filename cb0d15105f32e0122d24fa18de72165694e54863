@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b33cd387_3a459a00",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1380243
+      },
+      "writtenOn": "2025-02-25T17:24:23Z",
+      "side": 1,
+      "message": "You\u0027ll need to update `cargo_embargo.json` and re-run cargo_embargo via the `android-merge-2-cargo-embargo.sh` script to update the `Android.bp` to use the appropriate version of zerocopy.",
+      "revId": "cb0d15105f32e0122d24fa18de72165694e54863",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
