@@ -16,6 +16,24 @@
       "message": "patch file WIP",
       "revId": "9d4e58bddd73451d31bcfb5a54e81a2ce8941182",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e4109b34_c292a91d",
+        "filename": "rutabaga_gfx/patches/Android.bp.patch",
+        "patchSetId": 1
+      },
+      "lineNbr": 2,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2025-02-25T18:12:36Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "9c03ba3f_d809afc0",
+      "revId": "9d4e58bddd73451d31bcfb5a54e81a2ce8941182",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
