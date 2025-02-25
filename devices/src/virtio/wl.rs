@@ -124,14 +124,20 @@ use rutabaga_gfx::RutabagaIntoRawDescriptor;
 use rutabaga_gfx::RUTABAGA_MAP_CACHE_CACHED;
 #[cfg(feature = "minigbm")]
 use rutabaga_gfx::RUTABAGA_MAP_CACHE_MASK;
+<<<<<<< HEAD   (f0e3b8 Merge "Merge remote-tracking branch 'aosp/upstream-main' int)
 use snapshot::AnySnapshot;
+||||||| BASE
+=======
+use static_assertions::const_assert_eq;
+>>>>>>> BRANCH (08cc3b aarch64: fix potential initrd size subtraction underflow)
 use thiserror::Error as ThisError;
 use vm_control::VmMemorySource;
 use vm_memory::GuestMemory;
 use vm_memory::GuestMemoryError;
-use zerocopy::AsBytes;
 use zerocopy::FromBytes;
-use zerocopy::FromZeroes;
+use zerocopy::Immutable;
+use zerocopy::IntoBytes;
+use zerocopy::KnownLayout;
 
 #[cfg(feature = "gpu")]
 use super::resource_bridge::get_resource_info;
@@ -621,14 +627,14 @@ impl VmRequester {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, Default, FromBytes, Immutable, IntoBytes, KnownLayout)]
 struct CtrlHeader {
     type_: Le32,
     flags: Le32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, FromZeroes, FromBytes, AsBytes)]
+#[derive(Copy, Clone, Default, FromBytes, Immutable, IntoBytes, KnownLayout)]
 struct CtrlVfdNew {
     hdr: CtrlHeader,
     id: Le32,
@@ -639,7 +645,7 @@ struct CtrlVfdNew {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, Default, FromBytes, Immutable, IntoBytes, KnownLayout)]
 struct CtrlVfdNewCtxNamed {
     hdr: CtrlHeader,
     id: Le32,
@@ -647,10 +653,12 @@ struct CtrlVfdNewCtxNamed {
     pfn: Le64,   // Ignored.
     size: Le32,  // Ignored.
     name: [u8; 32],
+    _pad: u32,
 }
+const_assert_eq!(size_of::<CtrlVfdNewCtxNamed>(), 64);
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, Default, FromBytes, Immutable, IntoBytes, KnownLayout)]
 #[cfg(feature = "minigbm")]
 struct CtrlVfdNewDmabuf {
     hdr: CtrlHeader,
@@ -671,7 +679,7 @@ struct CtrlVfdNewDmabuf {
 
 #[cfg(feature = "minigbm")]
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, Default, FromBytes, Immutable, IntoBytes, KnownLayout)]
 struct CtrlVfdDmabufSync {
     hdr: CtrlHeader,
     id: Le32,
@@ -679,7 +687,7 @@ struct CtrlVfdDmabufSync {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, AsBytes, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, FromBytes, Immutable, IntoBytes, KnownLayout)]
 struct CtrlVfdRecv {
     hdr: CtrlHeader,
     id: Le32,
@@ -687,14 +695,14 @@ struct CtrlVfdRecv {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, Default, FromBytes, Immutable, IntoBytes, KnownLayout)]
 struct CtrlVfd {
     hdr: CtrlHeader,
     id: Le32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, Default, FromBytes, Immutable, IntoBytes, KnownLayout)]
 struct CtrlVfdSend {
     hdr: CtrlHeader,
     id: Le32,
@@ -703,21 +711,21 @@ struct CtrlVfdSend {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, AsBytes, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, Default, FromBytes, Immutable, IntoBytes, KnownLayout)]
 struct CtrlVfdSendVfd {
     kind: Le32,
     id: Le32,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, FromBytes, Immutable, KnownLayout)]
 union CtrlVfdSendVfdV2Payload {
     id: Le32,
     seqno: Le64,
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, FromZeroes, FromBytes)]
+#[derive(Copy, Clone, FromBytes, Immutable, KnownLayout)]
 struct CtrlVfdSendVfdV2 {
     kind: Le32,
     payload: CtrlVfdSendVfdV2Payload,
