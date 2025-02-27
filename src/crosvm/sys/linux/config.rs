@@ -34,6 +34,8 @@ pub enum HypervisorKind {
     #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
     Gunyah {
         device: Option<PathBuf>,
+        qcom_trusted_vm_id: Option<u16>,
+        qcom_trusted_vm_pas_id: Option<u32>,
     },
 }
 
@@ -617,7 +619,11 @@ mod tests {
 
         assert_eq!(
             config.hypervisor,
-            Some(HypervisorKind::Gunyah { device: None })
+            Some(HypervisorKind::Gunyah {
+                device: None,
+                qcom_trusted_vm_id: None,
+                qcom_trusted_vm_pas_id: None,
+            })
         );
     }
 
@@ -635,7 +641,9 @@ mod tests {
         assert_eq!(
             config.hypervisor,
             Some(HypervisorKind::Gunyah {
-                device: Some(PathBuf::from("/not/default"))
+                device: Some(PathBuf::from("/not/default")),
+                qcom_trusted_vm_id: Some(0),
+                qcom_trusted_vm_pas_id: Some(0),
             })
         );
     }
