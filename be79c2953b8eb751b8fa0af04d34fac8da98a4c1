@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1a051896_b9cd2338",
+        "filename": "rutabaga_gfx/Android.bp.extra",
+        "patchSetId": 2
+      },
+      "lineNbr": 1,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2025-03-06T21:42:32Z",
+      "side": 1,
+      "message": "Nice!",
+      "revId": "be79c2953b8eb751b8fa0af04d34fac8da98a4c1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
