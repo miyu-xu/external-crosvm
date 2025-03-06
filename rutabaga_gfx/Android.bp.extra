@@ -1,3 +1,32 @@
+rust_defaults {
+    name: "rutabaga_gfx_defaults",
+    cfgs: [
+        "gfxstream_unstable",
+    ],
+    static_libs: [
+        "libgfxstream_backend",
+    ],
+    shared_libs: [
+        "libc++",
+        "libbase",
+    ],
+    target: {
+        android: {
+            shared_libs: [
+                "libnativewindow",
+                "libcutils",
+                "liblog",
+            ],
+        },
+        host: {
+            features: ["vulkano"],
+            rustlibs: [
+                "libvulkano",
+            ],
+        },
+    },
+}
+
 // Manually written variant of librutabaga_gfx.
 // See https://r.android.com/2965726
 rust_library {

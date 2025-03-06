@@ -14,7 +14,10 @@ package {
 
 rust_library {
     name: "librutabaga_gfx",
-    defaults: ["crosvm_defaults"],
+    defaults: [
+        "crosvm_defaults",
+        "rutabaga_gfx_defaults",
+    ],
     host_supported: true,
     crate_name: "rutabaga_gfx",
     cargo_env_compat: true,
@@ -38,37 +41,17 @@ rust_library {
     proc_macros: ["libremain"],
     static_libs: [
         "libepoxy",
-        "libgfxstream_backend",
         "libvirglrenderer",
     ],
-    shared_libs: [
-        "libc++",
-        "libbase",
-    ],
     apex_available: ["com.android.virt"],
-    cfgs: [
-        "gfxstream_unstable",
-    ],
-    target: {
-        android: {
-            shared_libs: [
-                "libnativewindow",
-                "libcutils",
-                "liblog",
-            ],
-        },
-        host: {
-            features: ["vulkano"],
-            rustlibs: [
-                "libvulkano",
-            ],
-        },
-    },
 }
 
 rust_test {
     name: "rutabaga_gfx_test_src_lib",
-    defaults: ["crosvm_defaults"],
+    defaults: [
+        "crosvm_defaults",
+        "rutabaga_gfx_defaults",
+    ],
     host_supported: true,
     crate_name: "rutabaga_gfx",
     cargo_env_compat: true,
@@ -96,11 +79,39 @@ rust_test {
         "libzerocopy",
     ],
     proc_macros: ["libremain"],
-    shared_libs: [
+    static_libs: [
         "libepoxy",
-        "libgfxstream_backend",
         "libvirglrenderer",
     ],
+}
+
+rust_defaults {
+    name: "rutabaga_gfx_defaults",
+    cfgs: [
+        "gfxstream_unstable",
+    ],
+    static_libs: [
+        "libgfxstream_backend",
+    ],
+    shared_libs: [
+        "libc++",
+        "libbase",
+    ],
+    target: {
+        android: {
+            shared_libs: [
+                "libnativewindow",
+                "libcutils",
+                "liblog",
+            ],
+        },
+        host: {
+            features: ["vulkano"],
+            rustlibs: [
+                "libvulkano",
+            ],
+        },
+    },
 }
 
 // Manually written variant of librutabaga_gfx.
