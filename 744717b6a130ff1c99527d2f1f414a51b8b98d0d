@@ -106,6 +106,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "639bda17_e1f3f14c",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 263,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-06T01:55:26Z",
+      "side": 1,
+      "message": "Guarding it with vmid/pas_id being set will mean I can\u0027t launch a normal VM with CMA. How do we deal with this? Probably once we have guest_memfd, we can have another arg to differentiate b/w CMA and normal file?",
+      "parentUuid": "dcb6cd2d_c21cf16f",
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "38bf8324_9a40afb1",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 4
