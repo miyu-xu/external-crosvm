@@ -141,6 +141,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "5805b8af_85fd1567",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 263,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T19:27:52Z",
+      "side": 1,
+      "message": "Good point. Will `GH_VM_ANDROID_MAP_CMA_MEM` fail if the FD isn\u0027t CMA backed? If so, maybe you can always call it like this, but if you get a certain error code back, fallback to the `android_lend_user_memory_region` call?",
+      "parentUuid": "639bda17_e1f3f14c",
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "38bf8324_9a40afb1",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 4
