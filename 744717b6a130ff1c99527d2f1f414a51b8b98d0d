@@ -20,6 +20,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "c2943a54_13b36b1c",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 139,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2025-03-06T19:19:53Z",
+      "side": 1,
+      "message": "I am guessing `ReservedMemory` should probably be treated the same as `GuestMemoryRegion` here",
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "a997783f_8f55d95e",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 4
@@ -256,6 +273,23 @@
         "endLine": 556,
         "endChar": 40
       },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4f78f2d3_ea0f0fbb",
+        "filename": "src/crosvm/sys/linux/config.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 646,
+      "author": {
+        "id": 1572669
+      },
+      "writtenOn": "2025-03-06T19:19:53Z",
+      "side": 1,
+      "message": "The `qcom-trusted-vm-id` and `qcom-trusted-vm-pas-id` options weren\u0027t actually specified in the command line above, so they should default to `None`, not `Some(0)`; please make sure the unit tests pass (this fails as written if I run it locally).\n\nIt would also be good to add another command line unit test function that includes these options to avoid unintentional future command line parsing breakage.",
       "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
