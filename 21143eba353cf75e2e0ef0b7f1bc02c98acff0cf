@@ -33,6 +33,24 @@
       "message": "```\n85.95 MiB\t86.16 MiB\t+216.00 KiB\t+0.25%\t/system/apex/com.google.android.virt.apex\n```\n\nThis makes crosvm ~1.5% bigger on device and we\u0027ve been getting push back about the binary using too much RAM.\n\nI don\u0027t have a good answer for \"how\", but it would nice if you could enable this only for host builds",
       "revId": "21143eba353cf75e2e0ef0b7f1bc02c98acff0cf",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b12e02b5_e1b4b281",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 10
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1293738
+      },
+      "writtenOn": "2025-03-06T20:19:56Z",
+      "side": 1,
+      "message": "1.5% doesn\u0027t seem that much, and we have plans to enable this for unprotected guests in AVF as well. If this doesn\u0027t pan out we can address turning it off later, but I don\u0027t think this small increase should block our ability to work on this feature for CF right now.",
+      "parentUuid": "c3ee5a31_f1c65758",
+      "revId": "21143eba353cf75e2e0ef0b7f1bc02c98acff0cf",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
