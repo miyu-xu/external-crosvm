@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6de3846e_8d7e13b2",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T22:28:17Z",
+      "side": 1,
+      "message": "this might not work on host, i get some gralloc error\n\n```\n$ atest --host rutabaga_gfx_test_src_lib\n...\nx86_64 rutabaga_gfx_test_src_lib\n--------------------------------\nrutabaga_gfx_test_src_lib (8 Tests)\nRUNNER ERROR: Something went wrong when running the rust binary:Exit Code: 101\nstdout:\nrunning 8 tests\ntest rutabaga_gralloc::formats::tests::canonical_formats ... ok \u003c0.000s\u003e\ntest rutabaga_gralloc::formats::tests::format_debug ... ok \u003c0.000s\u003e\ntest rutabaga_gralloc::formats::tests::canonical_planar_formats ... ok \u003c0.000s\u003e\ntest rutabaga_core::tests::snapshot_restore_2d_no_resources ... ok \u003c0.001s\u003e\ntest rutabaga_core::tests::snapshot_restore_2d_one_resource ... ok \u003c0.001s\u003e\ntest rutabaga_gralloc::gralloc::tests::create_video_buffer ... FAILED \u003c0.397s\u003e\ntest rutabaga_gralloc::gralloc::tests::export_and_map ... FAILED \u003c0.412s\u003e\ntest rutabaga_gralloc::gralloc::tests::create_render_target ... FAILED \u003c0.452s\u003e\n\nfailures:\n\n---- rutabaga_gralloc::gralloc::tests::create_video_buffer stdout ----\nthread \u0027rutabaga_gralloc::gralloc::tests::create_video_buffer\u0027 panicked at external/crosvm/rutabaga_gfx/src/rutabaga_gralloc/gralloc.rs:442:64:\ncalled `Result::unwrap()` on an `Err` value: VkImageCreationError(OptimalTilingNotSupported)\nstack backtrace:\n   0:     0x55c227a7d4de - \u003cunknown\u003e\n   1:     0x55c227905a53 - \u003cunknown\u003e\n   2:     0x55c227a77377 - \u003cunknown\u003e\n   3:     0x55c227a7d332 - \u003cunknown\u003e\n   4:     0x55c227a7e703 - \u003cunknown\u003e\n   5:     0x55c227a7e500 - \u003cunknown\u003e\n   6:     0x55c22796eded - \u003cunknown\u003e\n   7:     0x55c227a7ee10 - \u003cunknown\u003e\n   8:     0x55c227a7ebda - \u003cunknown\u003e\n   9:     0x55c227a7d9bd - \u003cunknown\u003e\n  10:     0x55c227a7e820 - \u003cunknown\u003e\n  11:     0x55c2279039b4 - \u003cunknown\u003e\n  12:     0x55c227903d7a - \u003cunknown\u003e\n  13:     0x55c227a3e7f4 - \u003cunknown\u003e\n  14:     0x55c227974726 - \u003cunknown\u003e\n  15:     0x55c227973c69 - \u003cunknown\u003e\n  16:     0x55c227936b0b - \u003cunknown\u003e\n  17:     0x55c22793bb7b - \u003cunknown\u003e\n  18:     0x55c227a8247f - \u003cunknown\u003e\n  19:     0x7f1fd5f4d103 - start_thread\n                               at ./nptl/pthread_create.c:447:8\n  20:     0x7f1fd5fcb7b8 - __GI___clone3\n                               at ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:78\n  21:                0x0 - \u003cunknown\u003e\n...\n```",
+      "range": {
+        "startLine": 12,
+        "startChar": 0,
+        "endLine": 15,
+        "endChar": 55
+      },
+      "revId": "453bc47501cad91611f684d9c0bacd6ffa5d2258",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
