@@ -63,6 +63,30 @@
       },
       "revId": "826c489808c5433c4f0f8360bf983f56363f2ae1",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "650f8adc_023a60e5",
+        "filename": "hypervisor/src/gunyah/gunyah_sys.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 34,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "in review at https://android-review.git.corp.google.com/q/topic:%22QTVM-with-AVF%22+uapi now. don\u0027t need to block this CL on them",
+      "parentUuid": "a30bbfc0_e8846bb5",
+      "range": {
+        "startLine": 32,
+        "startChar": 0,
+        "endLine": 34,
+        "endChar": 77
+      },
+      "revId": "826c489808c5433c4f0f8360bf983f56363f2ae1",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }

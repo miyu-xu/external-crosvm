@@ -1,0 +1,245 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "52ee5982_db7d0cda",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "Latest patch looks good to me, the comments are mostly about style. Thanks!",
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "a997783f_8f55d95e",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 182,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "this is similar to the comment block at the top of the function. can you delete the other one?",
+      "range": {
+        "startLine": 178,
+        "startChar": 0,
+        "endLine": 182,
+        "endChar": 50
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "5482bd55_b0494d51",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 185,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "this is a duplicate of the if block just above",
+      "range": {
+        "startLine": 183,
+        "startChar": 0,
+        "endLine": 185,
+        "endChar": 9
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "322e67e8_5d110f31",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 174,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "prefer to make this function safe and put an `unsafe { ... }` around just the `ioctl_with_ref` call\n\nif you keep it unsafe, need to add a comment with the \"safety preconditions\", as with `set_user_memory_region` above",
+      "range": {
+        "startLine": 174,
+        "startChar": 0,
+        "endLine": 174,
+        "endChar": 6
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "dcb6cd2d_c21cf16f",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 263,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "don\u0027t assume these are CMA unless the `vm_id` / `pas_id` are provided\n\nwe want a normal VM on Gunyah to treat file backed memory just like hypervisors would. it is OK if you don\u0027t support that case though, just throw an error",
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "38bf8324_9a40afb1",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 264,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "unsafe blocks need a `SAFETY` comment",
+      "range": {
+        "startLine": 264,
+        "startChar": 16,
+        "endLine": 264,
+        "endChar": 24
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "fe9bdc01_2ce08d5d",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 269,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "use `!region.options.file_backed.writable`, or, if you don\u0027t support writable, at least assert it is false",
+      "range": {
+        "startLine": 269,
+        "startChar": 24,
+        "endLine": 269,
+        "endChar": 29
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b0ca8a28_3eb4e7c5",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 277,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "use `} else if {` to reduce indention",
+      "range": {
+        "startLine": 276,
+        "startChar": 14,
+        "endLine": 277,
+        "endChar": 25
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "06f90bed_464b5f2d",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 332,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "don\u0027t need a `SAFETY` here because there is no unsafe. it is fine to keep comment contents ofc",
+      "range": {
+        "startLine": 331,
+        "startChar": 0,
+        "endLine": 332,
+        "endChar": 78
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b35b77ca_8509f473",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 447,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "`Option\u003cu16\u003e` and `Option\u003cu32\u003e` implement the `Copy` trait, so you can do\n\n```\n            vm_id: self.vm_id,\n            pas_id: self.pas_id,\n```\n\n(and you have to otherwise will get a lint error about unneeded clones)",
+      "range": {
+        "startLine": 446,
+        "startChar": 0,
+        "endLine": 447,
+        "endChar": 40
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e1f9c46f_3de5ac19",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 556,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "same here",
+      "range": {
+        "startLine": 555,
+        "startChar": 0,
+        "endLine": 556,
+        "endChar": 40
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}

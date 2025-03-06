@@ -260,6 +260,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "f3640f37_fc35de2b",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 134,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "resolving",
+      "parentUuid": "b629985e_ba6631bb",
+      "range": {
+        "startLine": 133,
+        "startChar": 0,
+        "endLine": 134,
+        "endChar": 64
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "2c222698_06e2de9d",
@@ -1933,6 +1957,30 @@
       "side": 1,
       "message": "I am open to suggestions. Thanks.",
       "parentUuid": "94861b51_a79bf7ef",
+      "range": {
+        "startLine": 1424,
+        "startChar": 0,
+        "endLine": 1522,
+        "endChar": 1
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "310b0748_cef5a052",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 1522,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-06T01:07:28Z",
+      "side": 1,
+      "message": "Done in upstream",
+      "parentUuid": "346871ce_e9288e09",
       "range": {
         "startLine": 1424,
         "startChar": 0,
