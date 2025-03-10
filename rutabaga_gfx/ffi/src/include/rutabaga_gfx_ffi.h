@@ -221,6 +221,9 @@ struct rutabaga_builder {
 
     // Optional, renderer specific, null-terminated C-string.
     const char *renderer_features;
+
+    uint32_t display_width;
+    uint32_t display_height;
 };
 
 /**
