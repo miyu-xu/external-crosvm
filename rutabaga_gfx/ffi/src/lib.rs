@@ -183,6 +183,8 @@ pub struct rutabaga_builder<'a> {
     pub debug_cb: Option<rutabaga_debug_callback>,
     pub channels: Option<&'a rutabaga_channels>,
     pub renderer_features: *const c_char,
+    pub display_width: u32,
+    pub display_height: u32,
 }
 
 fn create_ffi_fence_handler(
@@ -279,14 +281,22 @@ pub unsafe extern "C" fn rutabaga_init(builder: &rutabaga_builder, ptr: &mut *mu
             _ => return -EINVAL,
         };
 
-        let result = RutabagaBuilder::new(component_type, (*builder).capset_mask)
+        let mut b = RutabagaBuilder::new(component_type, (*builder).capset_mask)
             .set_use_external_blob(false)
             .set_use_egl(true)
             .set_wsi(rutabaga_wsi)
             .set_debug_handler(debug_handler_opt)
             .set_rutabaga_channels(rutabaga_channels_opt)
-            .set_renderer_features(renderer_features_opt)
-            .build(fence_handler, None);
+            .set_renderer_features(renderer_features_opt);
+
+        if builder.display_width != 0 {
+            b = b.set_display_width(builder.display_width);
+        }
+        if builder.display_height != 0 {
+            b = b.set_display_height(builder.display_height);
+        }
+
+        let result = b.build(fence_handler, None);
 
         let rtbg = return_on_error!(result);
         *ptr = Box::into_raw(Box::new(rtbg)) as _;
