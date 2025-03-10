@@ -109,7 +109,7 @@ impl CrossDomainState {
             )?;
             let len = r.bytes;
 
-            let files = match r.cmsgs().next() {
+            let files = match r.cmsgs()?.next() {
                 Some(ControlMessageOwned::ScmRights(fds)) => {
                     fds.into_iter()
                         .map(|fd| {
