@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "67a82d30_abc33fab",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-12T22:41:09Z",
+      "side": 1,
+      "message": "do you need this? there is already a check for it later, but it is conditional, see https://r.android.com/3463783",
+      "range": {
+        "startLine": 179,
+        "startChar": 0,
+        "endLine": 181,
+        "endChar": 9
+      },
+      "revId": "8697df57e227d7278e658f1a116f7181aa641bc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e921f8a5_b3ef9994",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 267,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-12T22:41:09Z",
+      "side": 1,
+      "message": "`map_cma_region` is safe now, so you can delete the `unsafe {` and SAFETY comment",
+      "range": {
+        "startLine": 265,
+        "startChar": 0,
+        "endLine": 267,
+        "endChar": 24
+      },
+      "revId": "8697df57e227d7278e658f1a116f7181aa641bc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
