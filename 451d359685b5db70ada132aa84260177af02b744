@@ -16,6 +16,46 @@
       "message": "Code LGTM, but could we wait for someone to do a first pass review on the UAPI first? (https://r.android.com/3490833)",
       "revId": "451d359685b5db70ada132aa84260177af02b744",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "b83d0fe8_d57aed26",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 22,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-12T22:52:53Z",
+      "side": 1,
+      "message": "unused",
+      "revId": "451d359685b5db70ada132aa84260177af02b744",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cb5a4598_f66d8da3",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 732,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-12T22:52:53Z",
+      "side": 1,
+      "message": "unused, do `BalloonEvent::Deflate(_)`",
+      "range": {
+        "startLine": 732,
+        "startChar": 34,
+        "endLine": 732,
+        "endChar": 35
+      },
+      "revId": "451d359685b5db70ada132aa84260177af02b744",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
