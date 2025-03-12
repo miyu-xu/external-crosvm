@@ -35,6 +35,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "bfe3cf3b_10fd5b93",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 139,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "c2943a54_13b36b1c",
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "a997783f_8f55d95e",
@@ -48,6 +66,30 @@
       "writtenOn": "2025-03-06T01:07:28Z",
       "side": 1,
       "message": "this is similar to the comment block at the top of the function. can you delete the other one?",
+      "range": {
+        "startLine": 178,
+        "startChar": 0,
+        "endLine": 182,
+        "endChar": 50
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fca61808_ae3b2efd",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 182,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "a997783f_8f55d95e",
       "range": {
         "startLine": 178,
         "startChar": 0,
@@ -81,6 +123,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "c2bf9f42_8655b6ff",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 185,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "5482bd55_b0494d51",
+      "range": {
+        "startLine": 183,
+        "startChar": 0,
+        "endLine": 185,
+        "endChar": 9
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "322e67e8_5d110f31",
@@ -94,6 +160,30 @@
       "writtenOn": "2025-03-06T01:07:28Z",
       "side": 1,
       "message": "prefer to make this function safe and put an `unsafe { ... }` around just the `ioctl_with_ref` call\n\nif you keep it unsafe, need to add a comment with the \"safety preconditions\", as with `set_user_memory_region` above",
+      "range": {
+        "startLine": 174,
+        "startChar": 0,
+        "endLine": 174,
+        "endChar": 6
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d7c4bdab_b8194c1e",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 174,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "322e67e8_5d110f31",
       "range": {
         "startLine": 174,
         "startChar": 0,
@@ -198,6 +288,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "78c7bec9_4acfb0cd",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 264,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "38bf8324_9a40afb1",
+      "range": {
+        "startLine": 264,
+        "startChar": 16,
+        "endLine": 264,
+        "endChar": 24
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "fe9bdc01_2ce08d5d",
@@ -211,6 +325,30 @@
       "writtenOn": "2025-03-06T01:07:28Z",
       "side": 1,
       "message": "use `!region.options.file_backed.writable`, or, if you don\u0027t support writable, at least assert it is false",
+      "range": {
+        "startLine": 269,
+        "startChar": 24,
+        "endLine": 269,
+        "endChar": 29
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1f37619d_a86bb749",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 269,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "fe9bdc01_2ce08d5d",
       "range": {
         "startLine": 269,
         "startChar": 24,
@@ -244,6 +382,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "1b83545f_dbcb2396",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 277,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "b0ca8a28_3eb4e7c5",
+      "range": {
+        "startLine": 276,
+        "startChar": 14,
+        "endLine": 277,
+        "endChar": 25
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "06f90bed_464b5f2d",
@@ -257,6 +419,30 @@
       "writtenOn": "2025-03-06T01:07:28Z",
       "side": 1,
       "message": "don\u0027t need a `SAFETY` here because there is no unsafe. it is fine to keep comment contents ofc",
+      "range": {
+        "startLine": 331,
+        "startChar": 0,
+        "endLine": 332,
+        "endChar": 78
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "1c129357_c4d26fce",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 332,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "06f90bed_464b5f2d",
       "range": {
         "startLine": 331,
         "startChar": 0,
@@ -290,6 +476,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "e79854e5_eb2a59df",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 447,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "b35b77ca_8509f473",
+      "range": {
+        "startLine": 446,
+        "startChar": 0,
+        "endLine": 447,
+        "endChar": 40
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "e1f9c46f_3de5ac19",
@@ -313,6 +523,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "be63a9ce_ebe42c68",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 556,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "e1f9c46f_3de5ac19",
+      "range": {
+        "startLine": 555,
+        "startChar": 0,
+        "endLine": 556,
+        "endChar": 40
+      },
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "4f78f2d3_ea0f0fbb",
@@ -326,6 +560,24 @@
       "writtenOn": "2025-03-06T19:19:53Z",
       "side": 1,
       "message": "The `qcom-trusted-vm-id` and `qcom-trusted-vm-pas-id` options weren\u0027t actually specified in the command line above, so they should default to `None`, not `Some(0)`; please make sure the unit tests pass (this fails as written if I run it locally).\n\nIt would also be good to add another command line unit test function that includes these options to avoid unintentional future command line parsing breakage.",
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "e6b1602f_5f09770e",
+        "filename": "src/crosvm/sys/linux/config.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 646,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-12T17:50:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "4f78f2d3_ea0f0fbb",
       "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
