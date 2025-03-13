@@ -16,6 +16,24 @@
       "message": "\u003e @gurchetansingh should this be upstreamed?\n\nFor crosvm/main, yes we do accept unstable patches yes.  please see how via https://crosvm.dev/book/contributing/contributing.html.\n\nFor qemu/upstream, it\u0027s not entirely under our control, and reviewers like to see stable version cuts of both rutabaga_gfx_ffi and gfxstream (`think gfxstream-v0.1.5`).  At the moment, the gfxstream doesn\u0027t really build with the way QEMU reviewers like it.  Plus there\u0027s other features people want stablized (like Linux support, display integration improvements since right now everything goes thru pixman which isn\u0027t really performant).  so that requires more planning of how to support linux distro style users, and is probably best done in \"batches\" where test and roll up a bunch of features at-once.  so i recommend gfxstream stabilize a bit -- especially with recent changes on project location -- and we plan a new release, and upstream corresponding patches.  hope that helps!",
       "revId": "51d7c1381e48625dcda1abe20101014938eeb06b",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "413e98ef_b6d267bb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 3831493
+      },
+      "writtenOn": "2025-03-13T17:18:21Z",
+      "side": 1,
+      "message": "Acknowledged, thank you for the thorough explanation.",
+      "parentUuid": "f0c6d85c_6d324892",
+      "revId": "51d7c1381e48625dcda1abe20101014938eeb06b",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
