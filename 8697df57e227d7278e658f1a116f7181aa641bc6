@@ -98,6 +98,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "175ab98f_517dea11",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-14T23:07:09Z",
+      "side": 1,
+      "message": "I\u0027m afraid this is undoing the recent improvement from https://r.android.com/3463783. CC @quic_mpilaniy@quicinc.com\n\n`self.hv_cfg.protection_type.isolates_memory() \u0026\u0026 !self.hv_cfg.protection_type.needs_firmware_loaded()` is the headline usecase. `needs_firmware_loaded() \u003d\u003d true` is really only for development workflows. Do we need to essentially require `payload_offset \u003d\u003d 0` for all pVMs? Or, is this a QTVM specific limitation?\n\nA bit off topic: When I looked at https://r.android.com/3463783 originally, I mixed `payload_offset` and `payload_entry_address` together in my head. The currently checked in code looks a bit odd to me now. It tries to configure the entry point and, if that op isn\u0027t supported, it asserts that the region containing that entry point is at offset zero (which doesn\u0027t imply the entry point is at offset zero).",
+      "parentUuid": "352333cc_ea8b537d",
+      "range": {
+        "startLine": 179,
+        "startChar": 0,
+        "endLine": 181,
+        "endChar": 9
+      },
+      "revId": "8697df57e227d7278e658f1a116f7181aa641bc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "74239072_a70051df",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 6
