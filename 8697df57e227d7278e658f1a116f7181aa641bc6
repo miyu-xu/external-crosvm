@@ -72,6 +72,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "352333cc_ea8b537d",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-14T22:02:33Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "727ef5ba_d3cfe82e",
+      "range": {
+        "startLine": 179,
+        "startChar": 0,
+        "endLine": 181,
+        "endChar": 9
+      },
+      "revId": "8697df57e227d7278e658f1a116f7181aa641bc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "e921f8a5_b3ef9994",
@@ -85,6 +109,30 @@
       "writtenOn": "2025-03-12T22:41:09Z",
       "side": 1,
       "message": "`map_cma_region` is safe now, so you can delete the `unsafe {` and SAFETY comment",
+      "range": {
+        "startLine": 265,
+        "startChar": 0,
+        "endLine": 267,
+        "endChar": 24
+      },
+      "revId": "8697df57e227d7278e658f1a116f7181aa641bc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "dcd7453f_f4b6b3de",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 267,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-14T22:02:33Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "e921f8a5_b3ef9994",
       "range": {
         "startLine": 265,
         "startChar": 0,
