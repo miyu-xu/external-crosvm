@@ -170,6 +170,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "331a3605_e727811e",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-15T00:42:23Z",
+      "side": 1,
+      "message": "Thanks! I think the right combination to use is,\nself.hv_cfg.protection_type.isolates_memory() \u0026\u0026 !self.hv_cfg.protection_type.runs_firmware() \u0026\u0026 payload_offset !\u003d 0",
+      "parentUuid": "a418d578_3e03ad05",
+      "range": {
+        "startLine": 179,
+        "startChar": 0,
+        "endLine": 181,
+        "endChar": 9
+      },
+      "revId": "8697df57e227d7278e658f1a116f7181aa641bc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "74239072_a70051df",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 6
