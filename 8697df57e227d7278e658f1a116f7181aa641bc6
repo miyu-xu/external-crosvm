@@ -122,6 +122,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "d0708eea_32e7c6d7",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-15T00:12:25Z",
+      "side": 1,
+      "message": "Honestly, I had put this self.hv_cfg.protection_type.isolates_memory() \u0026\u0026 !self.hv_cfg.protection_type.needs_firmware_loaded() check inside QTVM block and moved it out. I want to confirm with Philip once on the usage of this. Because in the kernel what happens is, if it has no fw or it is a qtvm, we don\u0027t allow it to set PC. Not sure if thats all i need to care about or not.\n\nWe care about the offset of the payload_entry_address in the region of that guest_mem to be 0. Thats what the code is doing, right?",
+      "parentUuid": "175ab98f_517dea11",
+      "range": {
+        "startLine": 179,
+        "startChar": 0,
+        "endLine": 181,
+        "endChar": 9
+      },
+      "revId": "8697df57e227d7278e658f1a116f7181aa641bc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "74239072_a70051df",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 6
