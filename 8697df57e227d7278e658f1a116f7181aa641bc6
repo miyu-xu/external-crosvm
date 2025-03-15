@@ -194,6 +194,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "c542b327_47227251",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-15T00:49:17Z",
+      "side": 1,
+      "message": "I don\u0027t know much about that combination. Is it just for development? If so, I\u0027m not worried about and it seems OK, if a little odd of an edge case.",
+      "parentUuid": "331a3605_e727811e",
+      "range": {
+        "startLine": 179,
+        "startChar": 0,
+        "endLine": 181,
+        "endChar": 9
+      },
+      "revId": "8697df57e227d7278e658f1a116f7181aa641bc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "74239072_a70051df",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 6
