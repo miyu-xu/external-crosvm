@@ -218,6 +218,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "8874c6c8_d584867f",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 6
+      },
+      "lineNbr": 181,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-15T00:56:56Z",
+      "side": 1,
+      "message": "I want to say it is for development only. Like you said, you don\u0027t allow any pVM to run without a fw via AVF. With this check I want to ensure, if crosvm is launching a protected VM without any fw, payload_offet should be 0. What I am missing is even https://android-review.googlesource.com/c/platform/external/crosvm/+/3463783 is not a combination CrosVM allows (Unprotected VM). I will confirm this with Philip and upload the patch! Thanks Fredrick!",
+      "parentUuid": "c542b327_47227251",
+      "range": {
+        "startLine": 179,
+        "startChar": 0,
+        "endLine": 181,
+        "endChar": 9
+      },
+      "revId": "8697df57e227d7278e658f1a116f7181aa641bc6",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "74239072_a70051df",
         "filename": "hypervisor/src/gunyah/aarch64.rs",
         "patchSetId": 6
