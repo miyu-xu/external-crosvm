@@ -41,8 +41,8 @@ rust_library(
         "@thiserror-impl",
     ],
     deps = [
-        "//hardware/google/gfxstream/host:gfxstream_backend_shared",
         "@cfg-if",
+        "@gfxstream//host:gfxstream_backend_shared",
         "@libc",
         "@log",
         "@thiserror",
