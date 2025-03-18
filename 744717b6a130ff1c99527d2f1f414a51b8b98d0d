@@ -267,6 +267,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "34f5a995_85c0daac",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 263,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-18T21:02:05Z",
+      "side": 1,
+      "message": "\u003e Maybe we can have this fall back when we have a file which is not CMA backed.\n\nIs there a way to check if it is CMA backed?\n\n\u003e Guarding it with vmid/pas_id being set will mean I can\u0027t launch a normal VM with CMA.\n\nIf there isn\u0027t a good solution yet, maybe no CMA for non-QTVMs is an OK limitation for this release",
+      "parentUuid": "0e48dfb1_cf91e08b",
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "38bf8324_9a40afb1",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 4
