@@ -331,6 +331,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "8c4918ec_1e8643cf",
+        "filename": "hypervisor/src/gunyah/gunyah_sys/bindings.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 34,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-18T21:05:05Z",
+      "side": 1,
+      "message": "i\u0027m going to look into switching this stuff to bindgen as part of http://b/402466294. i think it is ok as is for this CL, so marking resolved",
+      "parentUuid": "df1b7212_6a0f73d7",
+      "range": {
+        "startLine": 27,
+        "startChar": 0,
+        "endLine": 34,
+        "endChar": 49
+      },
+      "revId": "a3f2e7b3a68a8f841b81bb9ff508447945794f4d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "0ad4cc0d_7510542b",
