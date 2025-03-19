@@ -33,6 +33,23 @@
       "message": "just need Qualcomm-Review, thanks",
       "revId": "01f584e3262b176ec7c6ed7cf96e41f9514436b7",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "bc013881_38aba449",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-19T22:00:29Z",
+      "side": 1,
+      "message": "upstream cherry pick at https://crrev.com/c/6369872",
+      "revId": "01f584e3262b176ec7c6ed7cf96e41f9514436b7",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
