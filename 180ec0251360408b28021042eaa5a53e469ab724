@@ -16,6 +16,23 @@
       "message": "need Qualcomm-Review, then I\u0027ll merge, thanks!",
       "revId": "180ec0251360408b28021042eaa5a53e469ab724",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "d2b2777c_71583041",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 9
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-19T22:01:14Z",
+      "side": 1,
+      "message": "upstream cherrypick at https://crrev.com/c/6369873",
+      "revId": "180ec0251360408b28021042eaa5a53e469ab724",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ],
   "submitRequirementResults": [
