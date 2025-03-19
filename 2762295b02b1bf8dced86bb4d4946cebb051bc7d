@@ -1,0 +1,27 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6c50ad89_a61a8194",
+        "filename": "hypervisor/src/gunyah/aarch64.rs",
+        "patchSetId": 8
+      },
+      "lineNbr": 192,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-19T21:57:18Z",
+      "side": 1,
+      "message": "FYI: This got a dropped. I\u0027m going to bring it back in the cherrypick",
+      "range": {
+        "startLine": 190,
+        "startChar": 0,
+        "endLine": 192,
+        "endChar": 27
+      },
+      "revId": "2762295b02b1bf8dced86bb4d4946cebb051bc7d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
