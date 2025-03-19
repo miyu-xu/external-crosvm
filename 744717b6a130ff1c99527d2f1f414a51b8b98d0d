@@ -301,6 +301,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "d932a2c5_9bd794f2",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 263,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-19T20:25:05Z",
+      "side": 1,
+      "message": "I think it is OK to defer on this. It would be good to document the short coming, but doesn\u0027t need to block this CL. Marking resolved",
+      "parentUuid": "1b00c812_ad479512",
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "38bf8324_9a40afb1",
