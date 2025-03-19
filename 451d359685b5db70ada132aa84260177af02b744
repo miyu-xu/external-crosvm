@@ -53,6 +53,24 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "9379213e_aed24559",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 22,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-19T20:35:52Z",
+      "side": 1,
+      "message": "i\u0027ll fix it when cherrypicking",
+      "parentUuid": "b83d0fe8_d57aed26",
+      "revId": "451d359685b5db70ada132aa84260177af02b744",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "cb5a4598_f66d8da3",
@@ -66,6 +84,30 @@
       "writtenOn": "2025-03-12T22:52:53Z",
       "side": 1,
       "message": "unused, do `BalloonEvent::Deflate(_)`",
+      "range": {
+        "startLine": 732,
+        "startChar": 34,
+        "endLine": 732,
+        "endChar": 35
+      },
+      "revId": "451d359685b5db70ada132aa84260177af02b744",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "47c094d6_ed7a558a",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 1
+      },
+      "lineNbr": 732,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-03-19T20:35:52Z",
+      "side": 1,
+      "message": "i\u0027ll fix it when cherrypicking",
+      "parentUuid": "cb5a4598_f66d8da3",
       "range": {
         "startLine": 732,
         "startChar": 34,
