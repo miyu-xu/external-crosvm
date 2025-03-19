@@ -285,6 +285,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "1b00c812_ad479512",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 4
+      },
+      "lineNbr": 263,
+      "author": {
+        "id": 2007406
+      },
+      "writtenOn": "2025-03-19T18:03:01Z",
+      "side": 1,
+      "message": "\u003eIs there a way to check if it is CMA backed?\nToday, this would fail when the memory is shared with the VM not at this stage. We can probably work on this when we have guest_memfd? this could then become a fallback. What do you think?",
+      "parentUuid": "34f5a995_85c0daac",
+      "revId": "744717b6a130ff1c99527d2f1f414a51b8b98d0d",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "38bf8324_9a40afb1",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 4
