@@ -22,6 +22,30 @@
       },
       "revId": "453bc47501cad91611f684d9c0bacd6ffa5d2258",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "bc632699_984849c2",
+        "filename": "/COMMIT_MSG",
+        "patchSetId": 1
+      },
+      "lineNbr": 15,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-04-11T17:52:18Z",
+      "side": 1,
+      "message": "natsu@ mentioned that this is probably because i enabled `vulkano` in the test for host",
+      "parentUuid": "6de3846e_8d7e13b2",
+      "range": {
+        "startLine": 12,
+        "startChar": 0,
+        "endLine": 15,
+        "endChar": 55
+      },
+      "revId": "453bc47501cad91611f684d9c0bacd6ffa5d2258",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
