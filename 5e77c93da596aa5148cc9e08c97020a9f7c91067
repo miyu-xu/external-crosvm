@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "4ee1e054_718527ad",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-05-06T18:06:11Z",
+      "side": 1,
+      "message": "It is possible someone is relying on the broken behavior in android15, but seems unlikely.",
+      "revId": "5e77c93da596aa5148cc9e08c97020a9f7c91067",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
