@@ -16,6 +16,40 @@
       "message": "It is possible someone is relying on the broken behavior in android15, but seems unlikely.",
       "revId": "5e77c93da596aa5148cc9e08c97020a9f7c91067",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "aa69a8b9_2347af71",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2025-05-07T12:25:08Z",
+      "side": 1,
+      "message": "\u003e Qualcomm-Review\tNo votes\n\nWho in Qualcomm can review this??",
+      "revId": "5e77c93da596aa5148cc9e08c97020a9f7c91067",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7faac482_a4035657",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1132673
+      },
+      "writtenOn": "2025-05-07T12:25:08Z",
+      "side": 1,
+      "message": "\u003e Qualcomm-Review\tNo votes\n\nWho in Qualcomm can review this??",
+      "revId": "5e77c93da596aa5148cc9e08c97020a9f7c91067",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
