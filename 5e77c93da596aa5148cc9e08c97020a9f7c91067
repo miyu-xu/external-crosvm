@@ -50,6 +50,23 @@
       "message": "\u003e Qualcomm-Review\tNo votes\n\nWho in Qualcomm can review this??",
       "revId": "5e77c93da596aa5148cc9e08c97020a9f7c91067",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "5d3bfda9_c614749c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-05-07T15:34:13Z",
+      "side": 1,
+      "message": "@nramaraj@quicinc.com, can you help us with Qualcomm-Review for this cherrypick? Thanks",
+      "revId": "5e77c93da596aa5148cc9e08c97020a9f7c91067",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
