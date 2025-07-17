@@ -44,7 +44,7 @@ index 3358d5055..b6bc63efa 100644
 +        },
 +    },
  }
- 
+
  rust_test {
 @@ -60,7 +82,6 @@ rust_test {
      edition: "2021",
