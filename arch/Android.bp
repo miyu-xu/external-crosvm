@@ -67,6 +67,7 @@ rust_library {
     name: "libarch",
     defaults: ["crosvm_defaults"],
     host_supported: true,
+    vendor_available: true,
     crate_name: "arch",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",

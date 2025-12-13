@@ -45,6 +45,7 @@ rust_library {
     name: "libjail",
     defaults: ["crosvm_defaults"],
     host_supported: true,
+    vendor_available: true,
     crate_name: "jail",
     cargo_env_compat: true,
     cargo_pkg_version: "0.1.0",
