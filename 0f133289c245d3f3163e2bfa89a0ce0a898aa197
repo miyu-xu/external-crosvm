@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "31a12dc1_1276386c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2025-12-15T23:30:15Z",
+      "side": 1,
+      "message": "these are crosvm internal-only libraries, we don\u0027t support vendors depending on them",
+      "revId": "0f133289c245d3f3163e2bfa89a0ce0a898aa197",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
