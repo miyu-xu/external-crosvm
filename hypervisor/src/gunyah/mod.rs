@@ -11,12 +11,18 @@ use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
 use std::collections::HashSet;
 use std::ffi::CString;
+use std::fs;
 use std::fs::File;
+use std::io::Write;
+use std::io::Read;
 use std::mem::size_of;
+use std::os::fd::FromRawFd;
 use std::os::raw::c_ulong;
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -49,6 +55,9 @@ use sync::Mutex;
 use vm_memory::MemoryRegionPurpose;
 
 use crate::*;
+
+const AARCH64_PHYS_MEM_START: u64 = 0x80000000;
+const VM_SSRDUMP_PATH: &str = "/data/vendor/vm_ssrdump";
 
 pub struct Gunyah {
     gunyah: SafeDescriptor,
@@ -221,12 +230,14 @@ pub struct GunyahVm {
     vm: SafeDescriptor,
     vm_id: Option<u16>,
     pas_id: Option<u32>,
+    vm_dump: Option<String>,
     guest_mem: GuestMemory,
     mem_regions: Arc<Mutex<BTreeMap<MemSlot, (Box<dyn MappedRegion>, GuestAddress)>>>,
     /// A min heap of MemSlot numbers that were used and then removed and can now be re-used
     mem_slot_gaps: Arc<Mutex<BinaryHeap<Reverse<MemSlot>>>>,
     routes: Arc<Mutex<HashSet<GunyahIrqRoute>>>,
     hv_cfg: crate::Config,
+    vm_descriptor_closed: Arc<AtomicBool>,
 }
 
 impl AsRawDescriptor for GunyahVm {
@@ -236,7 +247,7 @@ impl AsRawDescriptor for GunyahVm {
 }
 
 impl GunyahVm {
-    pub fn new(gh: &Gunyah, vm_id: Option<u16>, pas_id: Option<u32>, guest_mem: GuestMemory, cfg: Config) -> Result<GunyahVm> {
+    pub fn new(gh: &Gunyah, vm_id: Option<u16>, pas_id: Option<u32>, vm_dump: Option<String>, guest_mem: GuestMemory, cfg: Config) -> Result<GunyahVm> {
         // SAFETY:
         // Safe because we know gunyah is a real gunyah fd as this module is the only one that can
         // make Gunyah objects.
@@ -307,12 +318,92 @@ impl GunyahVm {
             vm: vm_descriptor,
             vm_id,
             pas_id,
+            vm_dump,
             guest_mem,
             mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
             routes: Arc::new(Mutex::new(HashSet::new())),
             hv_cfg: cfg,
+            vm_descriptor_closed: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Safely close VM descriptor, ensuring it is only closed once
+    /// Returns true if the descriptor was closed by this call, false if already closed
+    fn close_vm_descriptor_once(&self) -> bool {
+        // Try to atomically set vm_descriptor_closed from false to true
+        if self.vm_descriptor_closed.compare_exchange(
+            false,
+            true,
+            Ordering::AcqRel,
+            Ordering::Acquire
+        ).is_ok() {
+            // We successfully changed it from false to true, so we should close it
+            let close_result = unsafe { libc::close(self.vm.as_raw_descriptor()) };
+            if close_result == 0 {
+                true
+            } else {
+                let err = std::io::Error::last_os_error();
+                warn!("[VM] Failed to close VM descriptor: {}", err);
+                // Even if close failed, we mark it as closed to prevent retry
+                true
+            }
+        } else {
+            // Already closed by another function
+            info!("[VM] VM descriptor already closed, skipping");
+            false
+        }
+    }
+
+    pub fn fulldump(&self) -> Result<()> {
+        // Close VM descriptor before reading memory (safe from double-close)
+        self.close_vm_descriptor_once();
+
+        for guest_region in self.guest_mem.regions() {
+            if guest_region.options.file_backed.is_some() {
+                let cma_fd = guest_region.shm.as_raw_descriptor();
+                let mut cma_file = unsafe { File::from_raw_fd(cma_fd as i32) };
+
+                let dump_dir = format!(
+                    "{}/fulldump_{}",
+                    VM_SSRDUMP_PATH,
+                    self.vm_id.map(|id| id.to_string()).unwrap_or_else(|| "unknown".to_string())
+                );
+
+                // Create directory, if failed log error and return
+                if let Err(e) = fs::create_dir_all(&dump_dir) {
+                    error!("Failed to create dump directory {}: {}", dump_dir, e);
+                    return Err(e.into());
+                }
+
+                let mut dump_bin = File::create(format!("{}/fulldump.bin", dump_dir))?;
+                let mut dump_info = File::create(format!("{}/dump_info.txt", dump_dir))?;
+
+                // Write more metadata information
+                writeln!(dump_info, "VM ID: {}", self.vm_id.unwrap_or(0))?;
+                writeln!(dump_info, "PAS ID: {}", self.pas_id.unwrap_or(0))?;
+                writeln!(dump_info, "IPA Address: 0x{:X}", AARCH64_PHYS_MEM_START)?;
+                writeln!(dump_info, "Memory Size: 0x{:X}", guest_region.size)?;
+                writeln!(dump_info, "Dump Path: {}", dump_dir)?;
+
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let bytes_read = cma_file.read(&mut buffer)?;
+                    if bytes_read == 0 {
+                        break;
+                    }
+                    dump_bin.write_all(&buffer[..bytes_read])?;
+                }
+
+                // Prevent closing the fd
+                std::mem::forget(cma_file);
+
+                // Break after processing the first file-backed region
+                break;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn set_vm_auth_type_to_qcom_trusted_vm(&self, payload_start: GuestAddress, payload_size: u64) -> Result<()> {
@@ -441,11 +532,13 @@ impl GunyahVm {
             vm: self.vm.try_clone()?,
             vm_id: self.vm_id,
             pas_id: self.pas_id,
+            vm_dump: self.vm_dump.clone(),
             guest_mem: self.guest_mem.clone(),
             mem_regions: self.mem_regions.clone(),
             mem_slot_gaps: self.mem_slot_gaps.clone(),
             routes: self.routes.clone(),
             hv_cfg: self.hv_cfg,
+            vm_descriptor_closed: self.vm_descriptor_closed.clone(),
         })
     }
 
@@ -550,11 +643,13 @@ impl Vm for GunyahVm {
             vm: self.vm.try_clone()?,
             vm_id: self.vm_id,
             pas_id: self.pas_id,
+            vm_dump: self.vm_dump.clone(),
             guest_mem: self.guest_mem.clone(),
             mem_regions: self.mem_regions.clone(),
             mem_slot_gaps: self.mem_slot_gaps.clone(),
             routes: self.routes.clone(),
             hv_cfg: self.hv_cfg,
+            vm_descriptor_closed: self.vm_descriptor_closed.clone(),
         })
     }
 
