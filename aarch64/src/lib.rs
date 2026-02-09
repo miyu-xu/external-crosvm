@@ -105,7 +105,7 @@ const AARCH64_GIC_DIST_SIZE: u64 = 0x10000;
 const AARCH64_GIC_CPUI_SIZE: u64 = 0x20000;
 
 // This indicates the start of DRAM inside the physical address space.
-const AARCH64_PHYS_MEM_START: u64 = 0x80000000;
+pub const AARCH64_PHYS_MEM_START: u64 = 0x80000000;
 const AARCH64_PLATFORM_MMIO_SIZE: u64 = 0x800000;
 
 const AARCH64_PROTECTED_VM_FW_MAX_SIZE: u64 = 0x400000;
