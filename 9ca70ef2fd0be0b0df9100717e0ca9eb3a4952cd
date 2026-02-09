@@ -1,0 +1,200 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "2a8347fc_db65a745",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-09T22:18:14Z",
+      "side": 1,
+      "message": "Any reason for this to be Gunyah specific and not hypervisor agnostic? The phys memory of AARCH64 starts at `8000_0000` as defined here https://crosvm.dev/book/appendix/memory_layout.html#aarch64-guest-physical-memory-map. The function could be defined here: https://chromium.googlesource.com/crosvm/crosvm/+/refs/heads/main/hypervisor/src/aarch64.rs. I don\u0027t see anything specific to Gunyah that would require this function to be only for Gunyah.\n\nThere is the `qcom_trusted_vm_dump`, but that can be generalized to `vm_dump_mode` which takes `full` or other options as input.",
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "6b5734da_dd75afe5",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 17,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-09T22:18:14Z",
+      "side": 1,
+      "message": "Consider BufReader and BufWriter?",
+      "range": {
+        "startLine": 16,
+        "startChar": 0,
+        "endLine": 17,
+        "endChar": 18
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "3b74d925_4e81fd2e",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 342,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-09T22:18:14Z",
+      "side": 1,
+      "message": "Add a `SAFETY:` clause before this line",
+      "range": {
+        "startLine": 342,
+        "startChar": 31,
+        "endLine": 342,
+        "endChar": 37
+      },
+      "fixSuggestions": [
+        {
+          "fixId": "74e688a3_f629120e",
+          "description": "prompt_to_edit API",
+          "replacements": [
+            {
+              "path": "hypervisor/src/gunyah/mod.rs",
+              "range": {
+                "startLine": 342,
+                "startChar": 0,
+                "endLine": 342,
+                "endChar": 0
+              },
+              "replacement": "            // SAFETY: The file descriptor is valid and owned by this struct. The compare_exchange\n            // ensures that `libc::close` is called exactly once on this descriptor.\n"
+            }
+          ]
+        }
+      ],
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "19de181f_331139a4",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 346,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-09T22:18:14Z",
+      "side": 1,
+      "message": "If we hit `EINTR`, do we want to retry or just give up? You may want to loop while the error is `EINTR`.",
+      "range": {
+        "startLine": 346,
+        "startChar": 16,
+        "endLine": 346,
+        "endChar": 58
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "03a2ef54_58935e77",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 358,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-09T22:18:14Z",
+      "side": 1,
+      "message": "Does this work with pVMs? Shouldn\u0027t memory be inaccessible by the hypervisor if pVMs are used?\n\nWouldn\u0027t this cause errors?",
+      "range": {
+        "startLine": 358,
+        "startChar": 0,
+        "endLine": 358,
+        "endChar": 42
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "e57244b2_c8370c0f",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 360,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-09T22:18:14Z",
+      "side": 1,
+      "message": "This function returns a bool, but that is not checked. Should you check the return value or would it be better to change the function signature to be void? `bool` -\u003e `()`",
+      "range": {
+        "startLine": 360,
+        "startChar": 8,
+        "endLine": 360,
+        "endChar": 40
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "02b9423a_0a8cfa80",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 370,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-09T22:18:14Z",
+      "side": 1,
+      "message": "Will there be VMs with unknown IDs? I don\u0027t think this should be allowed.\n\n@ptosi@google.com do you have some comments on this? If it\u0027s fine, that\u0027s okay, I would just ack.",
+      "range": {
+        "startLine": 370,
+        "startChar": 20,
+        "endLine": 370,
+        "endChar": 96
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "46935a18_64b362d2",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 389,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-09T22:18:14Z",
+      "side": 1,
+      "message": "Can you define a `const` that\u0027s descriptive as to why we\u0027re taking a size of 4K?\n\nI\u0027m assuming 4K is coming from memory alignment, though if I\u0027m wrong, please provide an explanation and disregard the rest of this message.\n\nIf it is due to alignment, and in the future we support 16KB aligned VMs, we\u0027ll need to revisit this.",
+      "range": {
+        "startLine": 389,
+        "startChar": 39,
+        "endLine": 389,
+        "endChar": 43
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
