@@ -53,6 +53,9 @@ impl TryFrom<u32> for PsciVersion {
 // The list of registers available exceeds 600 registers
 pub const AARCH64_MAX_REG_COUNT: usize = 1024;
 
+// This indicates the start of DRAM inside the physical address space.
+pub const AARCH64_PHYS_MEM_START: u64 = 0x80000000;
+
 pub const PSCI_0_2: PsciVersion = PsciVersion { major: 0, minor: 2 };
 pub const PSCI_1_0: PsciVersion = PsciVersion { major: 1, minor: 0 };
 
