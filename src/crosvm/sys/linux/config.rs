@@ -36,6 +36,7 @@ pub enum HypervisorKind {
         device: Option<PathBuf>,
         qcom_trusted_vm_id: Option<u16>,
         qcom_trusted_vm_pas_id: Option<u32>,
+        qcom_trusted_vm_dump_mode: Option<String>,
     },
 }
 

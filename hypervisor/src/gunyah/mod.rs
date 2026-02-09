@@ -11,12 +11,26 @@ use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
 use std::collections::HashSet;
 use std::ffi::CString;
+use std::fs;
 use std::fs::File;
+use std::io;
+use std::io::BufReader;
+use std::io::BufWriter;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
+use std::io::ErrorKind;
 use std::mem::size_of;
+use std::os::fd::FromRawFd;
 use std::os::raw::c_ulong;
 use std::os::unix::prelude::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::slice::from_raw_parts;
+use std::str::from_utf8;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -49,6 +63,11 @@ use sync::Mutex;
 use vm_memory::MemoryRegionPurpose;
 
 use crate::*;
+
+const MAX_MD_REGION: usize = 100;
+const MD_REGION_SIZE: usize = 0x1000;
+const MD_REGION_IPA: u64 = 0x810017000;
+const VM_SSRDUMP_PATH: &str = "/data/vendor/vm_ssrdump";
 
 pub struct Gunyah {
     gunyah: SafeDescriptor,
@@ -210,6 +229,15 @@ fn map_cma_region(
     }
 }
 
+#[repr(C)]
+pub struct minidump_region {
+    name: [u8; 10],
+    id: u32,
+    virt_addr: u64,
+    phys_addr: u64,
+    size: u64,
+}
+
 #[derive(PartialEq, Eq, Hash)]
 pub struct GunyahIrqRoute {
     irq: u32,
@@ -221,12 +249,14 @@ pub struct GunyahVm {
     vm: SafeDescriptor,
     vm_id: Option<u16>,
     pas_id: Option<u32>,
+    dump_mode: Option<String>,
     guest_mem: GuestMemory,
     mem_regions: Arc<Mutex<BTreeMap<MemSlot, (Box<dyn MappedRegion>, GuestAddress)>>>,
     /// A min heap of MemSlot numbers that were used and then removed and can now be re-used
     mem_slot_gaps: Arc<Mutex<BinaryHeap<Reverse<MemSlot>>>>,
     routes: Arc<Mutex<HashSet<GunyahIrqRoute>>>,
     hv_cfg: crate::Config,
+    vm_descriptor_closed: Arc<AtomicBool>,
 }
 
 impl AsRawDescriptor for GunyahVm {
@@ -236,7 +266,7 @@ impl AsRawDescriptor for GunyahVm {
 }
 
 impl GunyahVm {
-    pub fn new(gh: &Gunyah, vm_id: Option<u16>, pas_id: Option<u32>, guest_mem: GuestMemory, cfg: Config) -> Result<GunyahVm> {
+    pub fn new(gh: &Gunyah, vm_id: Option<u16>, pas_id: Option<u32>, dump_mode: Option<String>, guest_mem: GuestMemory, cfg: Config) -> Result<GunyahVm> {
         // SAFETY:
         // Safe because we know gunyah is a real gunyah fd as this module is the only one that can
         // make Gunyah objects.
@@ -307,12 +337,187 @@ impl GunyahVm {
             vm: vm_descriptor,
             vm_id,
             pas_id,
+            dump_mode,
             guest_mem,
             mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
             routes: Arc::new(Mutex::new(HashSet::new())),
             hv_cfg: cfg,
+            vm_descriptor_closed: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    pub fn add_minidump_memory_region(&mut self) -> Result<MemSlot> {
+        let md_mem = MemoryMappingBuilder::new(MD_REGION_SIZE)
+            .build()
+            .map_err(|_| Error::new(ENOSPC))?;
+
+        let slot = self.add_memory_region(
+            GuestAddress(MD_REGION_IPA),
+            Box::new(md_mem),
+            false,
+            false,
+            MemCacheType::CacheCoherent,
+        )
+        .map_err(|_| Error::new(ENOSPC))?;
+        Ok(slot)
+    }
+
+    /// Safely close VM descriptor, ensuring it is only closed once
+    /// Returns true if the descriptor was closed by this call, false if already closed
+    fn close_vm_descriptor_once(&self) -> Result<()> {
+        // Try to atomically set vm_descriptor_closed from false to true
+        if self.vm_descriptor_closed.compare_exchange(
+            false,
+            true,
+            Ordering::AcqRel,
+            Ordering::Acquire
+        ).is_ok() {
+            // Retry up to 5 times on EINTR
+            for i in 0..5 {
+                // SAFETY: safe because the return value is checked.
+                // We successfully changed it from false to true, so we should close it
+                let close_result = unsafe { libc::close(self.vm.as_raw_descriptor()) };
+                if close_result == 0 {
+                    return Ok(());
+                } else {
+                    let err = std::io::Error::last_os_error();
+                    // Ignore EINTR and retry
+                    if err.kind() == ErrorKind::Interrupted {
+                        continue;
+                    }
+                    warn!("Failed to close VM descriptor: {}", err);
+                    // Reset vm_descriptor_closed to false since close failed
+                    self.vm_descriptor_closed.store(false, Ordering::Release);
+                    return errno_result();
+                }
+            }
+            // If we exhausted all retries (all were EINTR), still failed
+            warn!("Failed to close VM descriptor after 5 EINTR retries");
+            self.vm_descriptor_closed.store(false, Ordering::Release);
+            return errno_result();
+        } else {
+            // Already closed by another function, do nothing
+            info!("VM descriptor already closed, skipping");
+        }
+
+        Ok(())
+    }
+
+    pub fn fulldump(&self) -> Result<()> {
+        self.close_vm_descriptor_once()?;
+
+        for guest_region in self.guest_mem.regions() {
+            if guest_region.options.file_backed.is_some() {
+                let cma_fd = guest_region.shm.as_raw_descriptor();
+                // SAFETY:
+                // Safe because cma_fd is a valid file descriptor from guest_region.shm
+                let mut cma_file = unsafe { File::from_raw_fd(cma_fd as i32) };
+
+                let dump_dir = format!(
+                    "{}/fulldump_{}",
+                    VM_SSRDUMP_PATH,
+                    self.vm_id.map(|id| id.to_string()).unwrap()
+                );
+                fs::create_dir_all(dump_dir.clone())?;
+
+                let mut dump_bin = File::create(format!("{}/fulldump.bin", dump_dir))?;
+                let mut dump_info = File::create(format!("{}/dump_info.txt", dump_dir))?;
+
+                // Write more metadata information
+                writeln!(dump_info, "VM ID: {}", self.vm_id.unwrap_or(0))?;
+                writeln!(dump_info, "PAS ID: {}", self.pas_id.unwrap_or(0))?;
+                writeln!(dump_info, "IPA Address: 0x{:X}", AARCH64_PHYS_MEM_START)?;
+                writeln!(dump_info, "Memory Size: 0x{:X}", guest_region.size)?;
+                writeln!(dump_info, "Dump Path: {}", dump_dir)?;
+
+                let mut reader = BufReader::new(cma_file);
+                let mut writer = BufWriter::new(dump_bin);
+                io::copy(&mut reader, &mut writer)?;
+                writer.flush()?;
+
+                // Prevent closing the fd
+                let cma_file = reader.into_inner();
+                std::mem::forget(cma_file);
+
+                // Break after processing the first file-backed region
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn minidump(&self, md_slot: u32) -> Result<()> {
+        self.close_vm_descriptor_once()?;
+
+        for guest_region in self.guest_mem.regions() {
+            if guest_region.options.file_backed.is_some() {
+                let cma_fd = guest_region.shm.as_raw_descriptor().try_into().unwrap();
+                // SAFETY: Safe because we verify that ret is valid and we own the fd
+                let mut cma_file = unsafe { File::from_raw_fd(cma_fd) };
+
+                let mem_regions = self.mem_regions.lock();
+                if let Some((md_region, _guest_addr)) = mem_regions.get(&md_slot) {
+                    let max_region_bytes = MAX_MD_REGION * size_of::<minidump_region>();
+                    let region_size: usize = guest_region.size.try_into().unwrap();
+
+                    if max_region_bytes > region_size {
+                        return Err(Error::new(EOVERFLOW));
+                    }
+
+                    let md_base_ptr = md_region.as_ptr() as *const u8;
+                    // SAFETY: `md_region` was created via a safe memory mapping and we have verified
+                    // that the region is at least `max_region_bytes` in size. We are only reading from
+                    // this memory, not writing to it, so this is safe.
+                    let raw_md_bytes = unsafe { from_raw_parts(md_base_ptr, max_region_bytes) };
+                    // SAFETY: The memory was originally allocated for `minidump_region` structures,
+                    // and we have verified the size and alignment. `align_to` is safe in this context.
+                    let (_, md_slices, _) = unsafe { raw_md_bytes.align_to::<minidump_region>() };
+                    if md_slices.len() != MAX_MD_REGION {
+                        return Err(Error::new(EINVAL));
+                    }
+
+                    let dump_dir = format!(
+                        "{}/minidump_{}",
+                        VM_SSRDUMP_PATH,
+                        self.vm_id.map(|id| id.to_string()).unwrap()
+                    );
+                    fs::create_dir_all(dump_dir.clone())?;
+
+                    for (index, md_entry) in md_slices.iter().enumerate() {
+                        if md_entry.virt_addr == 0 {
+                            break;
+                        }
+
+                        let region_name = from_utf8(&md_entry.name)
+                            .unwrap()
+                            .replace('\0', "");
+                        let file_path = format!("{}/{}.bin", dump_dir, region_name);
+
+                        let offset = (md_entry.phys_addr - AARCH64_PHYS_MEM_START)
+                            .try_into()
+                            .unwrap();
+                        cma_file.seek(SeekFrom::Start(offset))?;
+
+                        let size: usize = md_entry.size.try_into().unwrap();
+                        let mut buffer = vec![0; size];
+                        let bytes_read = cma_file.read(&mut buffer)?;
+
+                        let mut output_file = File::create(&file_path)?;
+                        output_file.write_all(&buffer[..bytes_read])?;
+                    }
+                }
+
+                // Prevent closing the fd
+                std::mem::forget(cma_file);
+
+                // Only handle the first file-backed region
+                break;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn set_vm_auth_type_to_qcom_trusted_vm(&self, payload_start: GuestAddress, payload_size: u64) -> Result<()> {
@@ -441,11 +646,13 @@ impl GunyahVm {
             vm: self.vm.try_clone()?,
             vm_id: self.vm_id,
             pas_id: self.pas_id,
+            dump_mode: self.dump_mode.clone(),
             guest_mem: self.guest_mem.clone(),
             mem_regions: self.mem_regions.clone(),
             mem_slot_gaps: self.mem_slot_gaps.clone(),
             routes: self.routes.clone(),
             hv_cfg: self.hv_cfg,
+            vm_descriptor_closed: self.vm_descriptor_closed.clone(),
         })
     }
 
@@ -550,11 +757,13 @@ impl Vm for GunyahVm {
             vm: self.vm.try_clone()?,
             vm_id: self.vm_id,
             pas_id: self.pas_id,
+            dump_mode: self.dump_mode.clone(),
             guest_mem: self.guest_mem.clone(),
             mem_regions: self.mem_regions.clone(),
             mem_slot_gaps: self.mem_slot_gaps.clone(),
             routes: self.routes.clone(),
             hv_cfg: self.hv_cfg,
+            vm_descriptor_closed: self.vm_descriptor_closed.clone(),
         })
     }
 

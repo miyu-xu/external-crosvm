@@ -1861,6 +1861,7 @@ fn run_gunyah(
     device_path: Option<&Path>,
     qcom_trusted_vm_id: Option<u16>,
     qcom_trusted_vm_pas_id: Option<u32>,
+    qcom_trusted_vm_dump_mode: Option<String>,
     cfg: Config,
     components: VmComponents,
 ) -> Result<ExitState> {
@@ -1887,25 +1888,53 @@ fn run_gunyah(
         None
     };
 
-    let vm = GunyahVm::new(&gunyah, qcom_trusted_vm_id, qcom_trusted_vm_pas_id, guest_mem, components.hv_cfg).context("failed to create vm")?;
+    let mut vm = GunyahVm::new(&gunyah, qcom_trusted_vm_id, qcom_trusted_vm_pas_id,
+    qcom_trusted_vm_dump_mode.clone(), guest_mem, components.hv_cfg).context("failed to create vm")?;
 
     // Check that the VM was actually created in protected mode as expected.
     if cfg.protection_type.isolates_memory() && !vm.check_capability(VmCap::Protected) {
         bail!("Failed to create protected VM");
     }
 
-    let vm_clone = vm.try_clone()?;
+    // Determine dump mode and validate
+    let dump_mode = qcom_trusted_vm_dump_mode.as_deref().unwrap_or("none");
+    let slot = Some(vm.add_minidump_memory_region()?);
 
-    run_vm::<GunyahVcpu, GunyahVm>(
+    // Clone VM for IRQ chip and dump handling
+    let irq_vm = vm.try_clone()?;
+    let dump_vm = vm.try_clone()?;
+
+    let exit_state = run_vm::<GunyahVcpu, GunyahVm>(
         cfg,
         components,
         &arch_memory_layout,
         vm,
-        &mut GunyahIrqChip::new(vm_clone)?,
+        &mut GunyahIrqChip::new(irq_vm)?,
         None,
         #[cfg(feature = "swap")]
         swap_controller,
-    )
+    );
+
+    // Collect dump AFTER run_vm returns but BEFORE VM is destroyed
+    if let Ok(state) = exit_state {
+        if state == ExitState::Stop {
+            match dump_mode {
+                "mini" => {
+                    let slot_val = slot.expect("Invalid slot number");
+                    dump_vm.minidump(slot_val)?;
+                }
+                "full" => dump_vm.fulldump()?,
+                "both" => {
+                    dump_vm.fulldump()?;
+                    let slot_val = slot.expect("Invalid slot number");
+                    dump_vm.minidump(slot_val)?;
+                }
+                _ => {} // No dump for other types
+            }
+        }
+    }
+
+    exit_state
 }
 
 /// Choose a default hypervisor if no `--hypervisor` option was specified.
@@ -1940,6 +1969,7 @@ fn get_default_hypervisor() -> Option<HypervisorKind> {
                 device: Some(gunyah_path.to_path_buf()),
                 qcom_trusted_vm_id: None,
                 qcom_trusted_vm_pas_id: None,
+                qcom_trusted_vm_dump_mode: None,
             });
         }
     }
@@ -1970,11 +2000,13 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
         ))]
         HypervisorKind::Gunyah { device,
                                  qcom_trusted_vm_id,
-                                 qcom_trusted_vm_pas_id
+                                 qcom_trusted_vm_pas_id,
+                                 qcom_trusted_vm_dump_mode
                                } => run_gunyah(
                                         device.as_deref(),
                                         qcom_trusted_vm_id,
                                         qcom_trusted_vm_pas_id,
+                                        qcom_trusted_vm_dump_mode,
                                         cfg, components),
     }
 }
