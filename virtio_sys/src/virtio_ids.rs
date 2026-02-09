@@ -16,6 +16,8 @@
 pub const VIRTIO_ID_PVCLOCK: u32 = 61;
 // TODO: Remove this once the ID is included in the Linux headers.
 pub const VIRTIO_ID_MEDIA: u32 = 48;
+// TODO: Remove this once the ID is included in the Linux headers.
+pub const VIRTIO_ID_MINIDUMP: u32 = 60;
 
 pub const VIRTIO_ID_NET: u32 = 1;
 pub const VIRTIO_ID_BLOCK: u32 = 2;
