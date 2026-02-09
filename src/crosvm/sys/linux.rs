@@ -23,7 +23,6 @@ use std::arch::asm;
 use std::cmp::max;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-#[cfg(feature = "registered_events")]
 use std::collections::HashMap;
 #[cfg(feature = "registered_events")]
 use std::collections::HashSet;
@@ -227,9 +226,10 @@ fn create_virtio_devices(
     #[cfg(feature = "gpu")] render_server_fd: Option<SafeDescriptor>,
     #[cfg(feature = "gpu")] has_vfio_gfx_device: bool,
     #[cfg(feature = "registered_events")] registered_evt_q: &SendTube,
-) -> DeviceResult<Vec<VirtioDeviceStub>> {
+) -> DeviceResult<(Vec<VirtioDeviceStub>, Option<Arc<Mutex<HashMap<String, devices::virtio::MinidumpRegion>>>>)> {
     let mut devs = Vec::new();
 
+    let mut minidump_regions: Option<Arc<Mutex<HashMap<String, devices::virtio::MinidumpRegion>>>> = None;
     #[cfg(any(feature = "gpu", feature = "video-decoder", feature = "video-encoder"))]
     let mut resource_bridges = Vec::<Tube>::new();
 
@@ -453,6 +453,15 @@ fn create_virtio_devices(
             cfg.protection_type,
             cfg.jail_config.as_ref(),
         )?);
+    }
+
+    if cfg.minidump {
+        let (minidump_device, regions_arc) = create_minidump_device(
+            cfg.protection_type,
+            cfg.jail_config.as_ref(),
+        )?;
+        devs.push(minidump_device);
+        minidump_regions = Some(regions_arc);
     }
 
     #[cfg(feature = "pvclock")]
@@ -908,7 +917,7 @@ fn create_virtio_devices(
         )?);
     }
 
-    Ok(devs)
+    Ok((devs, minidump_regions))
 }
 
 fn create_devices(
@@ -1047,7 +1056,7 @@ fn create_devices(
         }
     }
 
-    let stubs = create_virtio_devices(
+    let (stubs, minidump_regions_arc) = create_virtio_devices(
         cfg,
         vm,
         resources,
@@ -1064,6 +1073,12 @@ fn create_devices(
         registered_evt_q,
     )?;
 
+    // Set minidump regions on the VM if available
+    if let Some(regions_arc) = minidump_regions_arc {
+        if let Err(e) = vm.set_minidump_regions(regions_arc) {
+            warn!("Failed to set minidump regions: {}", e);
+        }
+    }
     for stub in stubs {
         let (msi_host_tube, msi_device_tube) = Tube::pair().context("failed to create tube")?;
         add_control_tube(AnyControlTube::IrqTube(msi_host_tube));
@@ -1891,15 +1906,16 @@ fn run_gunyah(
     let mut vm = GunyahVm::new(&gunyah, qcom_trusted_vm_id, qcom_trusted_vm_pas_id,
     qcom_trusted_vm_dump.clone(), guest_mem, components.hv_cfg).context("failed to create vm")?;
 
+    // Determine dump type
+    let dump_type = qcom_trusted_vm_dump.as_deref().unwrap_or("none");
+    let enable_minidump = cfg.minidump;
+
     // Check that the VM was actually created in protected mode as expected.
     if cfg.protection_type.isolates_memory() && !vm.check_capability(VmCap::Protected) {
         bail!("Failed to create protected VM");
     }
 
-    // Determine dump type and validate
-    let dump_type = qcom_trusted_vm_dump.as_deref().unwrap_or("none");
-
-    // Clone VM for IRQ chip and dump handling
+    // Clone VM for IRQ chip and dump handling (following reference implementation)
     let irq_vm = vm.try_clone()?;
     let dump_vm = vm.try_clone()?;
 
@@ -1923,9 +1939,18 @@ fn run_gunyah(
                         error!("Failed to collect fulldump: {}", e);
                     }
                 }
+
+                if enable_minidump {
+                // Keep existing minidump behavior for crashes
+                    if let Err(e) = dump_vm.minidump() {
+                        error!("Failed to collect minidump {}", e);
+                    }
+                }
             }
         }
-        Err(_) => {}
+        Err(ref e) => {
+            error!("run_gunyah: VM exited with error: {:?}", e);
+        }
     }
 
     exit_state
@@ -1963,7 +1988,7 @@ fn get_default_hypervisor() -> Option<HypervisorKind> {
                 device: Some(gunyah_path.to_path_buf()),
                 qcom_trusted_vm_id: None,
                 qcom_trusted_vm_pas_id: None,
-                qcom_trusted_vm_dump:None,
+                qcom_trusted_vm_dump: None,
             });
         }
     }
