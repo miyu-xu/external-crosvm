@@ -20,6 +20,23 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "1e5d3637_5db3a2cf",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-09T22:19:59Z",
+      "side": 1,
+      "message": "Also, as this is going in crosvm, please submit to upstream crosvm. https://crosvm.dev/book/contributing/contributing.html",
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "6b5734da_dd75afe5",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 2
