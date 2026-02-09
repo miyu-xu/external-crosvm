@@ -21,6 +21,7 @@ mod queue;
 mod rng;
 #[cfg(feature = "vtpm")]
 mod tpm;
+mod minidump;
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
 mod video;
 mod virtio_device;
@@ -89,6 +90,8 @@ pub use self::queue::PeekedDescriptorChain;
 pub use self::queue::Queue;
 pub use self::queue::QueueConfig;
 pub use self::rng::Rng;
+pub use self::minidump::Minidump;
+pub use self::minidump::MinidumpRegion;
 pub use self::scsi::Controller as ScsiController;
 pub use self::scsi::DiskConfig as ScsiDiskConfig;
 #[cfg(feature = "vtpm")]
@@ -184,6 +187,7 @@ pub enum DeviceType {
     Tpm = virtio_ids::VIRTIO_ID_TPM,
     Pvclock = virtio_ids::VIRTIO_ID_PVCLOCK,
     Media = virtio_ids::VIRTIO_ID_MEDIA,
+    Minidump = virtio_ids::VIRTIO_ID_MINIDUMP,
 }
 
 impl DeviceType {
@@ -215,6 +219,7 @@ impl DeviceType {
             DeviceType::Tpm => 1,           // request queue
             DeviceType::Pvclock => 1,       // request queue
             DeviceType::Media => 2,         // commandq, eventq
+            DeviceType::Minidump => 1,      // request queue
         }
     }
 }
@@ -245,6 +250,7 @@ impl std::fmt::Display for DeviceType {
             DeviceType::Mac80211HwSim => write!(f, "mac80211-hwsim"),
             DeviceType::Scmi => write!(f, "scmi"),
             DeviceType::Media => write!(f, "media"),
+            DeviceType::Minidump => write!(f, "minidump"),
         }
     }
 }

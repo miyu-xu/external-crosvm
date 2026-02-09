@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fs;
 use std::fs::File;
@@ -1807,4 +1808,19 @@ pub fn setup_virtio_access_platform(
         translate_response_senders,
         tube_pair.map(|(_request_tx, request_rx)| request_rx),
     ))
+}
+
+pub fn create_minidump_device(
+    protection_type: ProtectionType,
+    jail_config: Option<&JailConfig>,
+) -> Result<(VirtioDeviceStub, Arc<Mutex<HashMap<String, devices::virtio::MinidumpRegion>>>)> {
+    let dev = virtio::Minidump::new(virtio::base_features(protection_type), None)
+        .context("failed to set up minidump")?;
+    let regions_arc = dev.get_regions_arc();
+    let features = virtio::base_features(protection_type);
+
+    Ok((VirtioDeviceStub {
+        dev: Box::new(dev),
+        jail: simple_jail(jail_config, "minidump_device")?,
+    }, regions_arc))
 }

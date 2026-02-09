@@ -1680,6 +1680,11 @@ pub struct RunCommand {
     /// Possible key values:
     ///     size=NUM - amount of guest memory in MiB. (default: 256)
     pub mem: Option<MemOptions>,
+    #[argh(switch)]
+    #[serde(skip)]
+    #[merge(strategy = overwrite_option)]
+    /// enable the virtio-minidump device for guest memory region tracking
+    pub minidump: Option<bool>,
 
     #[argh(option, from_str_fn(parse_mmio_address_range))]
     #[serde(skip)] // TODO(b/255223604)
@@ -2931,6 +2936,7 @@ impl TryFrom<RunCommand> for super::config::Config {
 
         let mem = cmd.mem.unwrap_or_default();
         cfg.memory = mem.size;
+        cfg.minidump = cmd.minidump.unwrap_or(false);  // Default to false
 
         #[cfg(target_arch = "aarch64")]
         {

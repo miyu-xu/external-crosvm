@@ -9,21 +9,26 @@ mod gunyah_sys;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::ffi::CString;
 use std::fs;
 use std::fs::File;
-use std::io::Write;
 use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::mem::size_of;
-use std::os::fd::FromRawFd;
 use std::os::raw::c_ulong;
 use std::os::unix::prelude::OsStrExt;
+use std::os::unix::fs::FileExt;
+use std::os::fd::FromRawFd;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use anyhow::Context;
 use base::errno_result;
@@ -40,6 +45,7 @@ use base::MemoryMapping;
 use base::MemoryMappingBuilder;
 use base::MmapError;
 use base::RawDescriptor;
+use base::Protection;
 use gunyah_sys::*;
 use libc::open;
 use libc::EFAULT;
@@ -53,6 +59,8 @@ use libc::O_CLOEXEC;
 use libc::O_RDWR;
 use sync::Mutex;
 use vm_memory::MemoryRegionPurpose;
+use vm_memory::guest_memory::BackingObject;
+use vm_memory::guest_memory::MemoryRegionInformation;
 
 use crate::*;
 
@@ -237,6 +245,8 @@ pub struct GunyahVm {
     mem_slot_gaps: Arc<Mutex<BinaryHeap<Reverse<MemSlot>>>>,
     routes: Arc<Mutex<HashSet<GunyahIrqRoute>>>,
     hv_cfg: crate::Config,
+    minidump_regions: Arc<Mutex<Option<Arc<Mutex<HashMap<String, MinidumpRegion>>>>>>,
+    minidump_collected: Arc<AtomicBool>,
     vm_descriptor_closed: Arc<AtomicBool>,
 }
 
@@ -324,6 +334,8 @@ impl GunyahVm {
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
             routes: Arc::new(Mutex::new(HashSet::new())),
             hv_cfg: cfg,
+            minidump_regions: Arc::new(Mutex::new(None)),
+            minidump_collected: Arc::new(AtomicBool::new(false)),
             vm_descriptor_closed: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -341,6 +353,7 @@ impl GunyahVm {
             // We successfully changed it from false to true, so we should close it
             let close_result = unsafe { libc::close(self.vm.as_raw_descriptor()) };
             if close_result == 0 {
+                info!("[VM] Successfully closed VM descriptor");
                 true
             } else {
                 let err = std::io::Error::last_os_error();
@@ -403,6 +416,108 @@ impl GunyahVm {
             }
         }
 
+        Ok(())
+    }
+
+    /// Collect minidump when VM crashes
+    /// Uses regions registered via virtio minidump device
+    pub fn minidump(&self) -> Result<()> {
+
+        if self.minidump_collected.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+            info!("[MINIDUMP] Minidump already collected (or in-progress); skipping ");
+            return Ok(());
+        }
+
+        let regions_arc = match self.minidump_regions.lock().clone() {
+            Some(r) => r,
+            None => {
+                warn!("[MINIDUMP] No minidump regions registered ");
+                self.minidump_collected.store(false, Ordering::Release);
+                return Err(Error::new(ENOENT));
+            }
+        };
+
+        let regions = regions_arc.lock();
+        if regions.is_empty() {
+            warn!("[MINIDUMP] No regions to dump ");
+            self.minidump_collected.store(false, Ordering::Release);
+            return Ok(());
+        }
+
+        let regions_snapshot: Vec<MinidumpRegion> = regions.values().cloned().collect();
+        drop(regions);
+
+        let dump_dir = format!("{}/minidump_{}", VM_SSRDUMP_PATH, self.vm_id.map(|id| id.to_string()).unwrap_or_else(|| "unknown".to_string()));
+        fs::create_dir_all(&dump_dir)?;
+
+        // Close VM descriptor before reading memory
+        self.close_vm_descriptor_once();
+
+        let mut cma_file_opt: Option<File> = None;
+        for guest_region in self.guest_mem.regions() {
+            if guest_region.options.file_backed.is_some() {
+                let cma_fd = guest_region.shm.as_raw_descriptor();
+                let cma_file = unsafe { File::from_raw_fd(cma_fd as i32) };
+                cma_file_opt = Some(cma_file);
+                break;
+            }
+        }
+
+        let mut cma_file = match cma_file_opt {
+            Some(f) => f,
+            None => {
+                error!("[MINIDUMP] No file-backed guest memory region found");
+                self.minidump_collected.store(false, Ordering::Release);
+                return Err(Error::new(ENOENT));
+            }
+        };
+
+        for region in regions_snapshot.iter() {
+            let safe_name = region.name.trim().replace('/', "_");
+            let file_path = format!("{}/{}.bin", dump_dir, safe_name);
+            info!("[MINIDUMP] Dumping region '{}': phys_addr=0x{:x}, size=0x{:x}", safe_name, region.phys_addr, region.size);
+
+            let offset = region.phys_addr.saturating_sub(AARCH64_PHYS_MEM_START);
+            match cma_file.seek(SeekFrom::Start(offset)) {
+                Ok(pos) => { /* seek succeeded */ },
+                Err(e) => {
+                    warn!("[MINIDUMP] Failed to seek to offset 0x{:x} for region '{}': {}", offset, safe_name, e);
+                    continue;
+                }
+            }
+
+            let size: usize = region.size.try_into().unwrap_or(0);
+            let mut buffer = vec![0u8; size];
+            match cma_file.read(&mut buffer) {
+                Ok(bytes_read) => {
+                    if bytes_read > 0 {
+                        match File::create(&file_path) {
+                            Ok(mut output_file) => {
+                                if let Err(e) = output_file.write_all(&buffer[..bytes_read]) {
+                                    warn!("[MINIDUMP] Failed to write region '{}': {:?}", safe_name, e);
+                                    continue;
+                                }
+                                info!("[MINIDUMP] Successfully dumped {} ({} bytes)", file_path, bytes_read);
+                            }
+                            Err(e) => {
+                                warn!("[MINIDUMP] Failed to create output file for '{}': {:?}", safe_name, e);
+                                continue;
+                            }
+                        }
+                    } else {
+                        warn!("[MINIDUMP] Zero bytes read for region '{}'", safe_name);
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    warn!("[MINIDUMP] Failed to read region '{}': {:?}; skipping", safe_name, e);
+                    continue;
+                }
+            }
+        }
+
+        std::mem::forget(cma_file);
+        info!("[MINIDUMP] Minidump collection completed successfully");
         Ok(())
     }
 
@@ -470,6 +585,7 @@ impl GunyahVm {
             vcpu,
             id,
             run_mmap: Arc::new(run_mmap),
+            vm_ref: Some(Arc::new(self.try_clone()?)),
         })
     }
 
@@ -538,6 +654,8 @@ impl GunyahVm {
             mem_slot_gaps: self.mem_slot_gaps.clone(),
             routes: self.routes.clone(),
             hv_cfg: self.hv_cfg,
+            minidump_regions: self.minidump_regions.clone(),
+            minidump_collected: self.minidump_collected.clone(),
             vm_descriptor_closed: self.vm_descriptor_closed.clone(),
         })
     }
@@ -649,6 +767,8 @@ impl Vm for GunyahVm {
             mem_slot_gaps: self.mem_slot_gaps.clone(),
             routes: self.routes.clone(),
             hv_cfg: self.hv_cfg,
+            minidump_regions: self.minidump_regions.clone(),
+            minidump_collected: self.minidump_collected.clone(),
             vm_descriptor_closed: self.vm_descriptor_closed.clone(),
         })
     }
@@ -917,6 +1037,11 @@ impl Vm for GunyahVm {
             BalloonEvent::BalloonTargetReached(_) => Ok(()),
         }
     }
+
+    fn set_minidump_regions(&mut self, regions: Arc<Mutex<HashMap<String, MinidumpRegion>>>) -> Result<()> {
+        *self.minidump_regions.lock() = Some(regions);
+        Ok(())
+    }
 }
 
 const GH_RM_EXIT_TYPE_VM_EXIT: u16 = 0;
@@ -933,6 +1058,7 @@ pub struct GunyahVcpu {
     vcpu: File,
     id: usize,
     run_mmap: Arc<MemoryMapping>,
+    vm_ref: Option<Arc<GunyahVm>>,
 }
 
 struct GunyahVcpuSignalHandle {
@@ -968,6 +1094,7 @@ impl Vcpu for GunyahVcpu {
             vcpu,
             id: self.id,
             run_mmap: self.run_mmap.clone(),
+            vm_ref: self.vm_ref.clone(),
         })
     }
 

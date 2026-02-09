@@ -38,6 +38,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
+use std::collections::HashMap;
+use std::sync::Arc;
+use sync::Mutex;
 
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 pub use crate::aarch64::*;
@@ -53,6 +56,14 @@ pub type MemSlot = u32;
 /// Range of GPA space. Starting from `guest_address` up to `size`.
 pub struct MemRegion {
     pub guest_address: GuestAddress,
+    pub size: u64,
+}
+
+/// Guest physical memory region to include in a crash minidump.
+#[derive(Clone, Debug)]
+pub struct MinidumpRegion {
+    pub name: String,
+    pub phys_addr: u64,
     pub size: u64,
 }
 
@@ -283,6 +294,12 @@ pub trait Vm: Send {
 
     /// Events from virtio-balloon that affect the state for guest memory and host memory.
     fn handle_balloon_event(&mut self, event: BalloonEvent) -> Result<()>;
+
+    /// Set minidump regions for crash dump collection
+    fn set_minidump_regions(&mut self, regions: Arc<Mutex<HashMap<String, MinidumpRegion>>>) -> Result<()> {
+        // Default implementation does nothing
+        Ok(())
+    }
 }
 
 /// Operation for Io and Mmio

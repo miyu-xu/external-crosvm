@@ -732,6 +732,7 @@ pub struct Config {
     pub media_decoder: Vec<VideoDeviceConfig>,
     pub memory: Option<u64>,
     pub memory_file: Option<PathBuf>,
+    pub minidump: bool,
     pub mmio_address_ranges: Vec<AddressRange>,
     #[cfg(target_arch = "aarch64")]
     pub mte: bool,
@@ -975,6 +976,7 @@ impl Default for Config {
             media_decoder: Default::default(),
             memory: None,
             memory_file: None,
+            minidump: false,
             mmio_address_ranges: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             mte: false,
