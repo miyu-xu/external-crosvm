@@ -145,6 +145,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "904fb193_2d76f0b8",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 358,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-10T02:58:01Z",
+      "side": 1,
+      "message": "Got more context that this would only be used for debug. Also missed the check for `full` earlier. Disregard this",
+      "parentUuid": "03a2ef54_58935e77",
+      "range": {
+        "startLine": 358,
+        "startChar": 0,
+        "endLine": 358,
+        "endChar": 42
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "e57244b2_c8370c0f",
