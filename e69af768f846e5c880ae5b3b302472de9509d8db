@@ -16,6 +16,23 @@
       "message": "As this is going in crosvm, please submit to upstream crosvm. https://crosvm.dev/book/contributing/contributing.html",
       "revId": "e69af768f846e5c880ae5b3b302472de9509d8db",
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "72f91bbf_a7a8a3c4",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 3
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-10T18:42:29Z",
+      "side": 1,
+      "message": "I will do a code review soon, I do have some questions first:\n- Is there a spec for virtio-minidump?\n- Are there plans to upstream this?\n- Is upstream virtio aware of this? As more updates come to virtio, if this is purely custom, this will clash with virtio device IDs. At the moment, upstream virtio spec seems to have reached ID 49 for the upcoming release. See https://github.com/oasis-tcs/virtio-spec/blob/master/content.tex\n- Is it not possible to use virtio-console?",
+      "revId": "e69af768f846e5c880ae5b3b302472de9509d8db",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     }
   ]
 }
