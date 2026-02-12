@@ -37,6 +37,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "b33cc674_95123a0c",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1972040
+      },
+      "writtenOn": "2026-02-12T13:15:18Z",
+      "side": 1,
+      "message": "Has use the AARCH64_PHYS_MEM_START in aarch64/src/libs. I have changes the name from qcom_trusted_vm_dump to qcom_trusted_vm_dump_mode. both fulldump and minidump as Gunyah-specific features.",
+      "parentUuid": "2a8347fc_db65a745",
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "6b5734da_dd75afe5",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 2
@@ -48,6 +66,30 @@
       "writtenOn": "2026-02-09T22:18:14Z",
       "side": 1,
       "message": "Consider BufReader and BufWriter?",
+      "range": {
+        "startLine": 16,
+        "startChar": 0,
+        "endLine": 17,
+        "endChar": 18
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6823cd80_42730d83",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 17,
+      "author": {
+        "id": 1972040
+      },
+      "writtenOn": "2026-02-12T13:15:18Z",
+      "side": 1,
+      "message": "Done. But writeln function also need use std::io::Write;",
+      "parentUuid": "6b5734da_dd75afe5",
       "range": {
         "startLine": 16,
         "startChar": 0,
@@ -99,6 +141,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "4d8a5598_4acd89e0",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 342,
+      "author": {
+        "id": 1972040
+      },
+      "writtenOn": "2026-02-12T13:15:18Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "3b74d925_4e81fd2e",
+      "range": {
+        "startLine": 342,
+        "startChar": 31,
+        "endLine": 342,
+        "endChar": 37
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "19de181f_331139a4",
@@ -112,6 +178,30 @@
       "writtenOn": "2026-02-09T22:18:14Z",
       "side": 1,
       "message": "If we hit `EINTR`, do we want to retry or just give up? You may want to loop while the error is `EINTR`.",
+      "range": {
+        "startLine": 346,
+        "startChar": 16,
+        "endLine": 346,
+        "endChar": 58
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f265fe0a_4f24575d",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 346,
+      "author": {
+        "id": 1972040
+      },
+      "writtenOn": "2026-02-12T13:15:18Z",
+      "side": 1,
+      "message": "Fix it. If hit EINTR, don\u0027t do any dump.",
+      "parentUuid": "19de181f_331139a4",
       "range": {
         "startLine": 346,
         "startChar": 16,
@@ -169,6 +259,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "66406c64_49000b3c",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 358,
+      "author": {
+        "id": 1972040
+      },
+      "writtenOn": "2026-02-12T13:15:18Z",
+      "side": 1,
+      "message": "Only for gunyah",
+      "parentUuid": "904fb193_2d76f0b8",
+      "range": {
+        "startLine": 358,
+        "startChar": 0,
+        "endLine": 358,
+        "endChar": 42
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "e57244b2_c8370c0f",
@@ -182,6 +296,30 @@
       "writtenOn": "2026-02-09T22:18:14Z",
       "side": 1,
       "message": "This function returns a bool, but that is not checked. Should you check the return value or would it be better to change the function signature to be void? `bool` -\u003e `()`",
+      "range": {
+        "startLine": 360,
+        "startChar": 8,
+        "endLine": 360,
+        "endChar": 40
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "87ac087a_ed6daecf",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 360,
+      "author": {
+        "id": 1972040
+      },
+      "writtenOn": "2026-02-12T13:15:18Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "e57244b2_c8370c0f",
       "range": {
         "startLine": 360,
         "startChar": 8,
@@ -215,6 +353,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "856ffe8d_258e863f",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 370,
+      "author": {
+        "id": 1972040
+      },
+      "writtenOn": "2026-02-12T13:15:18Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "02b9423a_0a8cfa80",
+      "range": {
+        "startLine": 370,
+        "startChar": 20,
+        "endLine": 370,
+        "endChar": 96
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "46935a18_64b362d2",
@@ -228,6 +390,30 @@
       "writtenOn": "2026-02-09T22:18:14Z",
       "side": 1,
       "message": "Can you define a `const` that\u0027s descriptive as to why we\u0027re taking a size of 4K?\n\nI\u0027m assuming 4K is coming from memory alignment, though if I\u0027m wrong, please provide an explanation and disregard the rest of this message.\n\nIf it is due to alignment, and in the future we support 16KB aligned VMs, we\u0027ll need to revisit this.",
+      "range": {
+        "startLine": 389,
+        "startChar": 39,
+        "endLine": 389,
+        "endChar": 43
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "dee29bd4_6ead7099",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 389,
+      "author": {
+        "id": 1972040
+      },
+      "writtenOn": "2026-02-12T13:15:18Z",
+      "side": 1,
+      "message": "Have replace this logic with BufReader and BufWriter",
+      "parentUuid": "46935a18_64b362d2",
       "range": {
         "startLine": 389,
         "startChar": 39,
