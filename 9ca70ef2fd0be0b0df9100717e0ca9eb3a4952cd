@@ -232,6 +232,30 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "fc37ac72_349ba41a",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 346,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-17T17:29:10Z",
+      "side": 1,
+      "message": "I think it\u0027s fine if EINTR happens, maybe retry X amount of times before failing explicitly\n\n```\nfor i in 0..5 {\n    // We successfully changed it from false to true, so we should close it\n    let close_result \u003d unsafe { libc::close(self.vm.as_raw_descriptor()) };\n    if close_result \u003d\u003d 0 {\n        return true;\n    } else {\n        let err \u003d std::io::Error::last_os_error();\n        // Ignore EINTR and retry\n        if (err.kind() \u003d\u003d ErrorKind::Interrupted) {\n            continue;\n        }\n        warn!(\"[VM] Failed to close VM descriptor: {}\", err);\n        // TODO: Reset `vm_descriptor_closed` to false\n        return false;\n    }\n}\nfalse\n```\n\nAlso, if we fail to close the FD, shouldn\u0027t we reset `vm_descriptor_closed` back to false? If `vm_descriptor_closed` was changed to true, but the close fails, that means the FD remains open but any attempt of closing it won\u0027t happen since `vm_descriptor_closed` is already true.",
+      "parentUuid": "f265fe0a_4f24575d",
+      "range": {
+        "startLine": 346,
+        "startChar": 16,
+        "endLine": 346,
+        "endChar": 58
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "03a2ef54_58935e77",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 2
@@ -432,6 +456,30 @@
       "side": 1,
       "message": "Have replace this logic with BufReader and BufWriter",
       "parentUuid": "46935a18_64b362d2",
+      "range": {
+        "startLine": 389,
+        "startChar": 39,
+        "endLine": 389,
+        "endChar": 43
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "252edd6f_1788f01c",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 389,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-17T17:29:10Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "dee29bd4_6ead7099",
       "range": {
         "startLine": 389,
         "startChar": 39,

@@ -1,0 +1,113 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "7d10c7bf_820a45c3",
+        "filename": "aarch64/src/lib.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 108,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-17T17:29:10Z",
+      "side": 1,
+      "message": "It should be fine to keep this not `pub`, since you defined it in `hypervisor/src/aarch64.rs`",
+      "range": {
+        "startLine": 108,
+        "startChar": 0,
+        "endLine": 108,
+        "endChar": 4
+      },
+      "revId": "57385834d625140e97fa57f64cfa55c814ba7e29",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "cc9e3765_a483d489",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 349,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-17T17:29:10Z",
+      "side": 1,
+      "message": "`minidump` - faster to understand the context of the function",
+      "range": {
+        "startLine": 349,
+        "startChar": 15,
+        "endLine": 349,
+        "endChar": 17
+      },
+      "revId": "57385834d625140e97fa57f64cfa55c814ba7e29",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "4ec30b84_49c2fd80",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 1928,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-17T17:29:10Z",
+      "side": 1,
+      "message": "What\u0027s the purpose of `both`? Doesn\u0027t `full` have everything in `mini` and more?",
+      "range": {
+        "startLine": 1928,
+        "startChar": 20,
+        "endLine": 1928,
+        "endChar": 31
+      },
+      "revId": "57385834d625140e97fa57f64cfa55c814ba7e29",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "dc5fe816_b63870a6",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 1938,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-17T17:29:10Z",
+      "side": 1,
+      "message": "Instead of using `match`, since you are only doing an action when `exit_state \u003d\u003d Ok(state)`, you can use:\n```\nif let Ok(state) \u003d exit_state {\n...\n}\n```\n\nNo action is performed on `Err(_)` besides returning `exit_state`, which still happens right after this block, so no need to match against it.",
+      "range": {
+        "startLine": 1919,
+        "startChar": 4,
+        "endLine": 1938,
+        "endChar": 5
+      },
+      "revId": "57385834d625140e97fa57f64cfa55c814ba7e29",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "88899ca2_b3af2293",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 1975,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-17T17:29:10Z",
+      "side": 1,
+      "message": "nit: missing space after colon",
+      "revId": "57385834d625140e97fa57f64cfa55c814ba7e29",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
