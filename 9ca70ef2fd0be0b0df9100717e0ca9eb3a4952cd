@@ -254,6 +254,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "3e5192b5_52ae8f4c",
+        "filename": "hypervisor/src/gunyah/mod.rs",
+        "patchSetId": 2
+      },
+      "lineNbr": 346,
+      "author": {
+        "id": 1972040
+      },
+      "writtenOn": "2026-02-20T10:29:20Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "fc37ac72_349ba41a",
+      "range": {
+        "startLine": 346,
+        "startChar": 16,
+        "endLine": 346,
+        "endChar": 58
+      },
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "03a2ef54_58935e77",
