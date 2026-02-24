@@ -142,6 +142,30 @@
       "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
     },
     {
+      "unresolved": false,
+      "key": {
+        "uuid": "e9c6cebb_803ebcca",
+        "filename": "src/crosvm/sys/linux.rs",
+        "patchSetId": 3
+      },
+      "lineNbr": 1928,
+      "author": {
+        "id": 1944405
+      },
+      "writtenOn": "2026-02-24T17:45:32Z",
+      "side": 1,
+      "message": "Acknowledged",
+      "parentUuid": "0b7440cb_c6d5f838",
+      "range": {
+        "startLine": 1928,
+        "startChar": 20,
+        "endLine": 1928,
+        "endChar": 31
+      },
+      "revId": "57385834d625140e97fa57f64cfa55c814ba7e29",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
       "unresolved": true,
       "key": {
         "uuid": "dc5fe816_b63870a6",
