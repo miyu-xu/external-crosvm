@@ -109,6 +109,24 @@
     {
       "unresolved": true,
       "key": {
+        "uuid": "5e9ba204_30016543",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1972040
+      },
+      "writtenOn": "2026-03-03T02:40:22Z",
+      "side": 1,
+      "message": "I have uploaded it to upstream https://chromium-review.googlesource.com/c/crosvm/crosvm/+/7624409",
+      "parentUuid": "7aae3db7_60b8fcab",
+      "revId": "9ca70ef2fd0be0b0df9100717e0ca9eb3a4952cd",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    },
+    {
+      "unresolved": true,
+      "key": {
         "uuid": "6b5734da_dd75afe5",
         "filename": "hypervisor/src/gunyah/mod.rs",
         "patchSetId": 2
