@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "8c2f7151_3041900e",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2026-04-03T18:14:45Z",
+      "side": 1,
+      "message": "this is an internal library, neither system nor vendor code is allowed to use it",
+      "revId": "6ec78e8f047cabb13e3b188d588126945100316f",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
