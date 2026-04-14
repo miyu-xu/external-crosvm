@@ -115,20 +115,20 @@
     "cmd": [
       "python3",
       "-u",
-      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "RECIPE_MODULE[depot_tools::gcloud]/resources/gcloud_smart_retry.py",
       "--",
-      "RECIPE_REPO[depot_tools]/gsutil.py",
-      "----",
+      "RECIPE_REPO[depot_tools]/gcloud.py",
+      "storage",
       "cp",
       "docker_export/baguette_rootfs_amd64.img.zstd",
       "gs://cros-containers/baguette/images/baguette_rootfs_amd64_2012-05-14-125321_.img.zstd"
     ],
     "cwd": "[CACHE]/platform2/vm_tools/baguette_image",
     "infra_step": true,
-    "name": "upload VM images.upload amd64 image.gsutil upload",
+    "name": "upload VM images.upload amd64 image.gcloud upload",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/cros-containers/baguette/images/baguette_rootfs_amd64_2012-05-14-125321_.img.zstd@@@"
+      "@@@STEP_LINK@gcloud.upload@https://storage.cloud.google.com/cros-containers/baguette/images/baguette_rootfs_amd64_2012-05-14-125321_.img.zstd@@@"
     ]
   },
   {
@@ -143,20 +143,20 @@
     "cmd": [
       "python3",
       "-u",
-      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
+      "RECIPE_MODULE[depot_tools::gcloud]/resources/gcloud_smart_retry.py",
       "--",
-      "RECIPE_REPO[depot_tools]/gsutil.py",
-      "----",
+      "RECIPE_REPO[depot_tools]/gcloud.py",
+      "storage",
       "cp",
       "docker_export/baguette_rootfs_arm64.img.zstd",
       "gs://cros-containers/baguette/images/baguette_rootfs_arm64_2012-05-14-125321_.img.zstd"
     ],
     "cwd": "[CACHE]/platform2/vm_tools/baguette_image",
     "infra_step": true,
-    "name": "upload VM images.upload arm64 image.gsutil upload",
+    "name": "upload VM images.upload arm64 image.gcloud upload",
     "~followup_annotations": [
       "@@@STEP_NEST_LEVEL@2@@@",
-      "@@@STEP_LINK@gsutil.upload@https://storage.cloud.google.com/cros-containers/baguette/images/baguette_rootfs_arm64_2012-05-14-125321_.img.zstd@@@"
+      "@@@STEP_LINK@gcloud.upload@https://storage.cloud.google.com/cros-containers/baguette/images/baguette_rootfs_arm64_2012-05-14-125321_.img.zstd@@@"
     ]
   },
   {

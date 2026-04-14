@@ -59,16 +59,12 @@
   },
   {
     "cmd": [
-      "python3",
-      "-u",
-      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
-      "--",
-      "RECIPE_REPO[depot_tools]/gsutil.py",
-      "-m",
-      "----",
+      "gcloud",
+      "storage",
       "rsync",
-      "-r",
-      "-d",
+      "--no-ignore-symlinks",
+      "--recursive",
+      "--delete-unmatched-destination-objects",
       "./docs/target/html",
       "gs://crosvm-dot-dev/book"
     ],
@@ -89,19 +85,15 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "gsutil Upload book"
+    "name": "gcloud Upload book"
   },
   {
     "cmd": [
-      "python3",
-      "-u",
-      "RECIPE_MODULE[depot_tools::gsutil]/resources/gsutil_smart_retry.py",
-      "--",
-      "RECIPE_REPO[depot_tools]/gsutil.py",
-      "-m",
-      "----",
+      "gcloud",
+      "storage",
       "rsync",
-      "-r",
+      "--no-ignore-symlinks",
+      "--recursive",
       "./docs/target/doc",
       "gs://crosvm-dot-dev/doc"
     ],
@@ -122,6 +114,6 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "gsutil Upload docs"
+    "name": "gcloud Upload docs"
   }
 ]

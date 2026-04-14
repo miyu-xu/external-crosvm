@@ -10,7 +10,7 @@ DEPS = [
     "recipe_engine/buildbucket",
     "recipe_engine/context",
     "recipe_engine/step",
-    "depot_tools/gsutil",
+    "depot_tools/gcloud",
 ]
 
 BOOK_URL = "gs://crosvm-dot-dev/book"
@@ -34,28 +34,26 @@ def RunSteps(api):
         )
 
         # Container generated files are root-owned, we need to make sure they will be readable by
-        # gsutil (which has to run outside the container to run with proper authentication).
+        # gcloud storage (which has to run outside the container to run with proper authentication).
         api.crosvm.step_in_container(
-            "Make docs readable by gsutil",
+            "Make docs readable by gcloud storage",
             ["chmod", "-R", "o+r", "docs/target"],
         )
 
-        api.gsutil(
-            ["rsync", "-r", "-d", "./docs/target/html", BOOK_URL],
+        api.gcloud(
+            ["storage", "rsync", "--recursive", "--delete-unmatched-destination-objects", "./docs/target/html", BOOK_URL],
             name="Upload book",
-            multithreaded=True,
         )
         # TODO(b/239255064): Generate the redirect HTML so we can use cleanly mirror here too.
-        api.gsutil(
-            ["rsync", "-r", "./docs/target/doc", DOCS_URL],
+        api.gcloud(
+            ["storage", "rsync", "--recursive", "./docs/target/doc", DOCS_URL],
             name="Upload docs",
-            multithreaded=True,
         )
 
 
 def GenTests(api):
     filter_steps = Filter(
-        "Build mdbook", "Run cargo docs", "gsutil Upload book", "gsutil Upload docs"
+        "Build mdbook", "Run cargo docs", "Upload book", "Upload docs"
     )
     yield (
         api.test(
