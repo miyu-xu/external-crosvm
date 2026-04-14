@@ -62,7 +62,6 @@
       "gcloud",
       "storage",
       "rsync",
-      "--no-ignore-symlinks",
       "--recursive",
       "--delete-unmatched-destination-objects",
       "./docs/target/html",
@@ -85,14 +84,13 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "gcloud Upload book"
+    "name": "gsutil Upload book"
   },
   {
     "cmd": [
       "gcloud",
       "storage",
       "rsync",
-      "--no-ignore-symlinks",
       "--recursive",
       "./docs/target/doc",
       "gs://crosvm-dot-dev/doc"
@@ -114,6 +112,6 @@
         "hostname": "rdbhost"
       }
     },
-    "name": "gcloud Upload docs"
+    "name": "gsutil Upload docs"
   }
 ]

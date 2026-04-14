@@ -41,19 +41,21 @@ def RunSteps(api):
         )
 
         api.gcloud(
-            ["storage", "rsync", "--recursive", "--delete-unmatched-destination-objects", "./docs/target/html", BOOK_URL],
+            "storage",
+            ["rsync", "--recursive", "--delete-unmatched-destination-objects", "./docs/target/html", BOOK_URL],
             name="Upload book",
         )
         # TODO(b/239255064): Generate the redirect HTML so we can use cleanly mirror here too.
         api.gcloud(
-            ["storage", "rsync", "--recursive", "./docs/target/doc", DOCS_URL],
+            "storage",
+            ["rsync", "--recursive", "./docs/target/doc", DOCS_URL],
             name="Upload docs",
         )
 
 
 def GenTests(api):
     filter_steps = Filter(
-        "Build mdbook", "Run cargo docs", "Upload book", "Upload docs"
+        "Build mdbook", "Run cargo docs", "gcloud.storage Upload book", "gcloud.storage Upload docs"
     )
     yield (
         api.test(

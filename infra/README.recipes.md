@@ -104,7 +104,7 @@ Runs a luci step inside the crosvm dev container.
 
 ### *recipes* / [build\_baguette\_image](/infra/recipes/build_baguette_image.py)
 
-[DEPS](/infra/recipes/build_baguette_image.py#19): [depot\_tools/bot\_update][depot_tools/recipe_modules/bot_update], [depot\_tools/depot\_tools][depot_tools/recipe_modules/depot_tools], [depot\_tools/gclient][depot_tools/recipe_modules/gclient], [depot\_tools/git][depot_tools/recipe_modules/git], [depot\_tools/gsutil][depot_tools/recipe_modules/gsutil], [recipe\_engine/buildbucket][recipe_engine/recipe_modules/buildbucket], [recipe\_engine/context][recipe_engine/recipe_modules/context], [recipe\_engine/file][recipe_engine/recipe_modules/file], [recipe\_engine/path][recipe_engine/recipe_modules/path], [recipe\_engine/properties][recipe_engine/recipe_modules/properties], [recipe\_engine/raw\_io][recipe_engine/recipe_modules/raw_io], [recipe\_engine/step][recipe_engine/recipe_modules/step], [recipe\_engine/time][recipe_engine/recipe_modules/time]
+[DEPS](/infra/recipes/build_baguette_image.py#19): [depot\_tools/bot\_update][depot_tools/recipe_modules/bot_update], [depot\_tools/depot\_tools][depot_tools/recipe_modules/depot_tools], [depot\_tools/gclient][depot_tools/recipe_modules/gclient], [depot\_tools/git][depot_tools/recipe_modules/git], [depot\_tools/gcloud][depot_tools/recipe_modules/gcloud], [recipe\_engine/buildbucket][recipe_engine/recipe_modules/buildbucket], [recipe\_engine/context][recipe_engine/recipe_modules/context], [recipe\_engine/file][recipe_engine/recipe_modules/file], [recipe\_engine/path][recipe_engine/recipe_modules/path], [recipe\_engine/properties][recipe_engine/recipe_modules/properties], [recipe\_engine/raw\_io][recipe_engine/recipe_modules/raw_io], [recipe\_engine/step][recipe_engine/recipe_modules/step], [recipe\_engine/time][recipe_engine/recipe_modules/time]
 
 
 Recipe for building a Baguette rootfs image.
@@ -118,7 +118,7 @@ Recipe for building a Baguette rootfs image.
 &mdash; **def [RunSteps](/infra/recipes/build_chromeos_hatch.py#17)(api):**
 ### *recipes* / [build\_docs](/infra/recipes/build_docs.py)
 
-[DEPS](/infra/recipes/build_docs.py#7): [crosvm](#recipe_modules-crosvm), [depot\_tools/gsutil][depot_tools/recipe_modules/gsutil], [recipe\_engine/buildbucket][recipe_engine/recipe_modules/buildbucket], [recipe\_engine/context][recipe_engine/recipe_modules/context], [recipe\_engine/file][recipe_engine/recipe_modules/file], [recipe\_engine/step][recipe_engine/recipe_modules/step]
+[DEPS](/infra/recipes/build_docs.py#7): [crosvm](#recipe_modules-crosvm), [depot\_tools/gcloud][depot_tools/recipe_modules/gcloud], [recipe\_engine/buildbucket][recipe_engine/recipe_modules/buildbucket], [recipe\_engine/context][recipe_engine/recipe_modules/context], [recipe\_engine/file][recipe_engine/recipe_modules/file], [recipe\_engine/step][recipe_engine/recipe_modules/step]
 
 
 &mdash; **def [RunSteps](/infra/recipes/build_docs.py#20)(api):**
@@ -194,7 +194,7 @@ This recipe requires ambient luci authentication. To test locally run:
 [depot_tools/recipe_modules/depot_tools]: https://chromium.googlesource.com/chromium/tools/depot_tools.git/+/f40ddcd8d51626fb7be3ab3c418b3f3be801623f/recipes/README.recipes.md#recipe_modules-depot_tools
 [depot_tools/recipe_modules/gclient]: https://chromium.googlesource.com/chromium/tools/depot_tools.git/+/f40ddcd8d51626fb7be3ab3c418b3f3be801623f/recipes/README.recipes.md#recipe_modules-gclient
 [depot_tools/recipe_modules/git]: https://chromium.googlesource.com/chromium/tools/depot_tools.git/+/f40ddcd8d51626fb7be3ab3c418b3f3be801623f/recipes/README.recipes.md#recipe_modules-git
-[depot_tools/recipe_modules/gsutil]: https://chromium.googlesource.com/chromium/tools/depot_tools.git/+/f40ddcd8d51626fb7be3ab3c418b3f3be801623f/recipes/README.recipes.md#recipe_modules-gsutil
+[depot_tools/recipe_modules/gcloud]: https://chromium.googlesource.com/chromium/tools/depot_tools.git/+/f40ddcd8d51626fb7be3ab3c418b3f3be801623f/recipes/README.recipes.md#recipe_modules-gcloud
 [recipe_engine/recipe_modules/buildbucket]: https://chromium.googlesource.com/infra/luci/recipes-py.git/+/b67985a8c735f0c61e1757be3cefd43b5d629696/README.recipes.md#recipe_modules-buildbucket
 [recipe_engine/recipe_modules/cipd]: https://chromium.googlesource.com/infra/luci/recipes-py.git/+/b67985a8c735f0c61e1757be3cefd43b5d629696/README.recipes.md#recipe_modules-cipd
 [recipe_engine/recipe_modules/context]: https://chromium.googlesource.com/infra/luci/recipes-py.git/+/b67985a8c735f0c61e1757be3cefd43b5d629696/README.recipes.md#recipe_modules-context
