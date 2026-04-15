@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "074e3356_042bc3a2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1944400
+      },
+      "writtenOn": "2026-04-15T16:55:50Z",
+      "side": 1,
+      "message": "crosvm is developed in another repo + this one is frozen in AOSP",
+      "revId": "48d4e9805832a6b6cfc6b587b8f70a6757d81187",
+      "serverId": "85c56323-6fa9-3386-8a01-6480fb634889"
+    }
+  ]
+}
