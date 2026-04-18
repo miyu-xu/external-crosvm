@@ -5,17 +5,25 @@
 mod config;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 pub mod fork;
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos"
+))]
 mod helpers;
 
 pub use crate::config::JailConfig;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 pub use crate::fork::fork_process;
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos"
+))]
 pub use crate::helpers::*;
 
 // TODO(b/268407006): We define Minijail as an empty struct as a stub for minijail::Minijail on
-// Windows because the concept of jailing is baked into a bunch of places where it isn't easy to
-// compile it out. In the long term, this should go away.
-#[cfg(windows)]
+// Windows and macOS because the concept of jailing is baked into a bunch of places where it
+// isn't easy to compile it out. In the long term, this should go away.
+#[cfg(any(windows, target_os = "macos"))]
 pub struct FakeMinijailStub {}

@@ -8,9 +8,11 @@ use std::fs::OpenOptions;
 use std::io;
 use std::mem::size_of;
 use std::ops::Range;
+use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 
 use win_util::LargeInteger;
+use win_util::duplicate_handle;
 use winapi::um::fileapi::GetFileSizeEx;
 pub use winapi::um::winioctl::FSCTL_QUERY_ALLOCATED_RANGES;
 pub use winapi::um::winioctl::FSCTL_SET_SPARSE;
@@ -23,9 +25,22 @@ use crate::Result;
 /// Open the file with the given path.
 ///
 /// Note that on POSIX, this wrapper handles opening existing FDs via /proc/self/fd/N. On Windows,
-/// this functionality doesn't exist, but we preserve this seemingly not very useful function to
-/// simplify cross platform code.
+/// composite disks use `\\.\fd\N` for inherited CRT fds, so we mirror that behavior by duplicating
+/// the underlying HANDLE into the current process.
 pub fn open_file_or_duplicate<P: AsRef<Path>>(path: P, options: &OpenOptions) -> Result<File> {
+    if let Some(path_str) = path.as_ref().to_str() {
+        if let Some(fd_str) = path_str.strip_prefix(r"\\.\fd\") {
+            let fd: i32 = fd_str.parse().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, format!("invalid fd path: {path_str}"))
+            })?;
+            let raw = unsafe { libc::get_osfhandle(fd) };
+            if raw == -1 {
+                return Err(io::Error::last_os_error().into());
+            }
+            let handle = duplicate_handle(raw as _)?.cast();
+            return Ok(unsafe { File::from_raw_handle(handle) });
+        }
+    }
     Ok(options.open(path)?)
 }
 

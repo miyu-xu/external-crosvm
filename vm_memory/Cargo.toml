@@ -5,6 +5,9 @@ authors = ["The ChromiumOS Authors"]
 edition = "2021"
 include = ["src/**/*", "Cargo.toml"]
 
+[features]
+hvf = ["base/hvf"]
+
 [dependencies]
 anyhow = "1.0.32"
 cfg-if = "1.0.0"

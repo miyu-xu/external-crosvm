@@ -1,0 +1,485 @@
+// Copyright 2025 The ChromiumOS Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
+
+use applevisor_sys::hv_error_t;
+use applevisor_sys::hv_gic_config_create;
+use applevisor_sys::hv_gic_config_set_distributor_base;
+use applevisor_sys::hv_gic_config_set_redistributor_base;
+use applevisor_sys::hv_gic_create;
+use applevisor_sys::hv_gic_send_msi;
+use applevisor_sys::hv_gic_set_spi;
+use applevisor_sys::hv_ipa_t;
+use applevisor_sys::hv_memory_flags_t;
+use applevisor_sys::hv_return_t;
+use applevisor_sys::hv_vm_config_create;
+use applevisor_sys::hv_vm_config_set_ipa_size;
+use applevisor_sys::hv_vm_create;
+use applevisor_sys::hv_vm_destroy;
+use applevisor_sys::hv_vm_map;
+use applevisor_sys::hv_vm_protect;
+use applevisor_sys::hv_vm_unmap;
+use applevisor_sys::os_release;
+use applevisor_sys::HV_MEMORY_EXEC;
+use applevisor_sys::HV_MEMORY_READ;
+use applevisor_sys::HV_MEMORY_WRITE;
+use base::pagesize;
+use base::AsRawDescriptor;
+use base::Error;
+use base::Event;
+use base::MappedRegion;
+use base::MmapError;
+use base::Protection;
+use base::Result;
+use base::SafeDescriptor;
+use cros_fdt::Fdt;
+use libc::EFAULT;
+use libc::EINVAL;
+use libc::ENOENT;
+use libc::ENOSPC;
+use libc::ENOSYS;
+use libc::ENXIO;
+use libc::EOVERFLOW;
+use libc::EEXIST;
+use libc::EIO;
+use vm_memory::GuestAddress;
+use vm_memory::GuestMemory;
+
+use super::vcpu::HvfVcpu;
+use crate::BalloonEvent;
+use crate::ClockState;
+use crate::Config;
+use crate::Datamatch;
+use crate::DeviceKind;
+use crate::Hypervisor;
+use crate::HypervisorCap;
+use crate::IoEventAddress;
+use crate::MemCacheType;
+use crate::MemSlot;
+use crate::ProtectionType;
+use crate::Vm;
+use crate::VmAArch64;
+use crate::VmCap;
+
+/// Same layout as devices `irqchip/kvm/aarch64` (guest GICv3 MMIO).
+const AARCH64_AXI_BASE: u64 = 0x4000_0000;
+const AARCH64_GIC_DIST_SIZE: u64 = 0x1_0000;
+const AARCH64_GIC_CPUI_SIZE: u64 = 0x2_0000;
+const AARCH64_GIC_REDIST_SIZE: u64 = 0x2_0000;
+
+const AARCH64_GIC_DIST_BASE: u64 = AARCH64_AXI_BASE - AARCH64_GIC_DIST_SIZE;
+const AARCH64_GIC_CPUI_BASE: u64 = AARCH64_GIC_DIST_BASE - AARCH64_GIC_CPUI_SIZE;
+
+pub(crate) fn check_hv(r: hv_return_t) -> Result<()> {
+    if r == hv_error_t::HV_SUCCESS as hv_return_t {
+        Ok(())
+    } else {
+        Err(Error::new(EIO))
+    }
+}
+
+/// Bitmap size for dirty logging (same formula as KVM).
+pub fn dirty_log_bitmap_size(size: usize) -> usize {
+    let page_size = pagesize();
+    (((size + page_size - 1) / page_size) + 7) / 8
+}
+
+/// Ensures `hv_vm_destroy` runs once when the last `HvfVm` clone drops.
+struct HvfVmLife {
+    _p: (),
+}
+
+impl Drop for HvfVmLife {
+    fn drop(&mut self) {
+        // SAFETY: Hypervisor.framework API; destroys the per-process VM.
+        unsafe {
+            let _ = hv_vm_destroy();
+        }
+    }
+}
+
+/// Lightweight handle for [`Hypervisor`] trait parity with KVM (`Kvm` does not own the VM fd).
+#[derive(Clone)]
+pub struct HvfHypervisor;
+
+impl HvfHypervisor {
+    pub fn new() -> Result<Self> {
+        Ok(HvfHypervisor)
+    }
+}
+
+impl Hypervisor for HvfHypervisor {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(HvfHypervisor)
+    }
+
+    fn check_capability(&self, cap: HypervisorCap) -> bool {
+        matches!(
+            cap,
+            HypervisorCap::UserMemory | HypervisorCap::ImmediateExit
+        )
+    }
+}
+
+pub struct HvfVm {
+    _hypervisor: HvfHypervisor,
+    _vm_life: Arc<HvfVmLife>,
+    guest_mem: GuestMemory,
+    mem_regions: Arc<Mutex<BTreeMap<MemSlot, (GuestAddress, u64, Box<dyn MappedRegion>)>>>,
+    mem_slot_gaps: Arc<Mutex<BinaryHeap<Reverse<MemSlot>>>>,
+    ipa_bits: u8,
+    gic_done: AtomicBool,
+    ioevents: Arc<Mutex<HashMap<IoEventAddress, Event>>>,
+}
+
+impl HvfVm {
+    pub fn new(_hv: &HvfHypervisor, guest_mem: GuestMemory, cfg: Config) -> Result<HvfVm> {
+        if cfg.protection_type != ProtectionType::Unprotected {
+            return Err(Error::new(ENOSYS));
+        }
+        #[cfg(target_arch = "aarch64")]
+        if cfg.mte {
+            return Err(Error::new(ENOSYS));
+        }
+
+        let vm_life = Arc::new(HvfVmLife { _p: () });
+        let vm_cfg = unsafe { hv_vm_config_create() };
+        if vm_cfg.is_null() {
+            return Err(Error::new(ENOSPC));
+        }
+        let r = unsafe { hv_vm_config_set_ipa_size(vm_cfg, 40) };
+        if r != hv_error_t::HV_SUCCESS as hv_return_t {
+            unsafe {
+                os_release(vm_cfg as *mut c_void);
+            }
+            return Err(Error::new(EIO));
+        }
+        let r = unsafe { hv_vm_create(vm_cfg) };
+        unsafe {
+            os_release(vm_cfg as *mut c_void);
+        }
+        check_hv(r)?;
+
+        for region in guest_mem.regions() {
+            let flags = HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC;
+            check_hv(unsafe {
+                hv_vm_map(
+                    region.host_addr as *const c_void,
+                    region.guest_addr.offset() as hv_ipa_t,
+                    region.size,
+                    flags,
+                )
+            })?;
+        }
+
+        Ok(HvfVm {
+            _hypervisor: HvfHypervisor,
+            _vm_life: vm_life,
+            guest_mem,
+            mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
+            mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
+            ipa_bits: 40,
+            gic_done: AtomicBool::new(false),
+            ioevents: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    /// Installs the in-framework GICv3. Must run **before** any `hv_vcpu_create`, after guest RAM
+    /// is mapped. Matches the guest physical layout used by `KvmKernelIrqChip` on AArch64.
+    pub fn init_gic(&self, num_vcpus: usize) -> Result<()> {
+        if self
+            .gic_done
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let dist_if_addr = AARCH64_GIC_DIST_BASE;
+        let redist_addr = dist_if_addr - (AARCH64_GIC_REDIST_SIZE as u64 * num_vcpus as u64);
+
+        let gic_cfg = unsafe { hv_gic_config_create() };
+        if gic_cfg.is_null() {
+            self.gic_done.store(false, Ordering::SeqCst);
+            return Err(Error::new(ENOSPC));
+        }
+        let mut ok = true;
+        if ok {
+            let r = unsafe { hv_gic_config_set_distributor_base(gic_cfg, dist_if_addr) };
+            ok = r == hv_error_t::HV_SUCCESS as hv_return_t;
+        }
+        if ok {
+            let r = unsafe { hv_gic_config_set_redistributor_base(gic_cfg, redist_addr) };
+            ok = r == hv_error_t::HV_SUCCESS as hv_return_t;
+        }
+        let r = if ok {
+            unsafe { hv_gic_create(gic_cfg) }
+        } else {
+            hv_error_t::HV_BAD_ARGUMENT as hv_return_t
+        };
+        unsafe {
+            os_release(gic_cfg as *mut c_void);
+        }
+        if !ok || r != hv_error_t::HV_SUCCESS as hv_return_t {
+            self.gic_done.store(false, Ordering::SeqCst);
+            return check_hv(r);
+        }
+        Ok(())
+    }
+
+    /// Assert or deassert a GICv3 SPI line (`intid` is the full interrupt ID, e.g. `32 + gsi` for
+    /// the first guest SPI).
+    pub fn set_gic_spi(&self, intid: u32, level: bool) -> Result<()> {
+        check_hv(unsafe { hv_gic_set_spi(intid, level) })
+    }
+
+    pub fn send_gic_msi(&self, gpa: u64, intid: u32) -> Result<()> {
+        check_hv(unsafe { hv_gic_send_msi(gpa as hv_ipa_t, intid) })
+    }
+
+    pub(crate) fn guest_pagesize() -> usize {
+        applevisor_sys::PAGE_SIZE
+    }
+
+    pub(crate) fn fire_ioevents(&self, addr: IoEventAddress, data: &[u8]) -> Result<()> {
+        let map = self.ioevents.lock();
+        if let Some(evt) = map.get(&addr) {
+            evt.signal().map_err(|_| Error::new(EIO))?;
+        }
+        let _ = data;
+        Ok(())
+    }
+}
+
+impl Vm for HvfVm {
+    fn try_clone(&self) -> Result<Self> {
+        Ok(HvfVm {
+            _hypervisor: self._hypervisor.clone(),
+            _vm_life: self._vm_life.clone(),
+            guest_mem: self.guest_mem.clone(),
+            mem_regions: self.mem_regions.clone(),
+            mem_slot_gaps: self.mem_slot_gaps.clone(),
+            ipa_bits: self.ipa_bits,
+            gic_done: AtomicBool::new(self.gic_done.load(Ordering::SeqCst)),
+            ioevents: self.ioevents.clone(),
+        })
+    }
+
+    fn check_capability(&self, _c: VmCap) -> bool {
+        false
+    }
+
+    fn get_guest_phys_addr_bits(&self) -> u8 {
+        self.ipa_bits
+    }
+
+    fn get_memory(&self) -> &GuestMemory {
+        &self.guest_mem
+    }
+
+    fn add_memory_region(
+        &mut self,
+        guest_addr: GuestAddress,
+        mem: Box<dyn MappedRegion>,
+        read_only: bool,
+        _log_dirty_pages: bool,
+        _cache: MemCacheType,
+    ) -> Result<MemSlot> {
+        let pgsz = pagesize() as u64;
+        let size = (mem.size() as u64 + pgsz - 1) / pgsz * pgsz;
+        let end_addr = guest_addr
+            .checked_add(size)
+            .ok_or_else(|| Error::new(EOVERFLOW))?;
+        if self.guest_mem.range_overlap(guest_addr, end_addr) {
+            return Err(Error::new(ENOSPC));
+        }
+        let mut regions = self.mem_regions.lock();
+        let mut gaps = self.mem_slot_gaps.lock();
+        let slot = match gaps.pop() {
+            Some(gap) => gap.0,
+            None => (regions.len() + self.guest_mem.num_regions() as usize) as MemSlot,
+        };
+
+        let mut flags = HV_MEMORY_READ | HV_MEMORY_EXEC;
+        if !read_only {
+            flags |= HV_MEMORY_WRITE;
+        }
+        let mapped_bytes = size as usize;
+        let r = unsafe {
+            hv_vm_map(
+                mem.as_ptr() as *const c_void,
+                guest_addr.offset(),
+                mapped_bytes,
+                flags,
+            )
+        };
+        if check_hv(r).is_err() {
+            gaps.push(Reverse(slot));
+            return check_hv(r);
+        }
+        if read_only {
+            let r = unsafe {
+                hv_vm_protect(
+                    guest_addr.offset(),
+                    mapped_bytes,
+                    HV_MEMORY_READ | HV_MEMORY_EXEC,
+                )
+            };
+            if check_hv(r).is_err() {
+                unsafe {
+                    let _ = hv_vm_unmap(guest_addr.offset(), mapped_bytes);
+                }
+                gaps.push(Reverse(slot));
+                return check_hv(r);
+            }
+        }
+        regions.insert(slot, (guest_addr, size, mem));
+        Ok(slot)
+    }
+
+    fn msync_memory_region(&mut self, slot: MemSlot, offset: usize, size: usize) -> Result<()> {
+        let mut regions = self.mem_regions.lock();
+        let mem = &mut regions.get_mut(&slot).ok_or_else(|| Error::new(ENOENT))?.2;
+        mem.msync(offset, size).map_err(|err| match err {
+            MmapError::InvalidAddress => Error::new(EFAULT),
+            MmapError::NotPageAligned => Error::new(EINVAL),
+            MmapError::SystemCallFailed(e) => e,
+            _ => Error::new(EIO),
+        })
+    }
+
+    fn remove_memory_region(&mut self, slot: MemSlot) -> Result<Box<dyn MappedRegion>> {
+        let mut regions = self.mem_regions.lock();
+        let (guest_addr, mapped, mem) = regions.remove(&slot).ok_or_else(|| Error::new(ENOENT))?;
+        self.mem_slot_gaps.lock().push(Reverse(slot));
+        check_hv(unsafe { hv_vm_unmap(guest_addr.offset(), mapped as usize) })?;
+        Ok(mem)
+    }
+
+    fn create_device(&self, kind: DeviceKind) -> Result<SafeDescriptor> {
+        let _ = kind;
+        Err(Error::new(ENXIO))
+    }
+
+    fn get_dirty_log(&self, _slot: MemSlot, _dirty_log: &mut [u8]) -> Result<()> {
+        Err(Error::new(ENXIO))
+    }
+
+    fn register_ioevent(
+        &mut self,
+        evt: &Event,
+        addr: IoEventAddress,
+        _datamatch: Datamatch,
+    ) -> Result<()> {
+        let mut map = self.ioevents.lock();
+        if map.insert(addr, evt.try_clone()?).is_some() {
+            return Err(Error::new(EEXIST));
+        }
+        Ok(())
+    }
+
+    fn unregister_ioevent(
+        &mut self,
+        _evt: &Event,
+        addr: IoEventAddress,
+        _datamatch: Datamatch,
+    ) -> Result<()> {
+        self.ioevents.lock().remove(&addr);
+        Ok(())
+    }
+
+    fn handle_io_events(&self, addr: IoEventAddress, data: &[u8]) -> Result<()> {
+        self.fire_ioevents(addr, data)
+    }
+
+    fn get_pvclock(&self) -> Result<ClockState> {
+        Err(Error::new(ENXIO))
+    }
+
+    fn set_pvclock(&self, _state: &ClockState) -> Result<()> {
+        Err(Error::new(ENXIO))
+    }
+
+    fn add_fd_mapping(
+        &mut self,
+        slot: u32,
+        offset: usize,
+        size: usize,
+        fd: &dyn AsRawDescriptor,
+        fd_offset: u64,
+        prot: Protection,
+    ) -> Result<()> {
+        let mut regions = self.mem_regions.lock();
+        let region = &mut regions.get_mut(&slot).ok_or_else(|| Error::new(EINVAL))?.2;
+        region
+            .add_fd_mapping(offset, size, fd, fd_offset, prot)
+            .map_err(|e| match e {
+                MmapError::SystemCallFailed(e) => e,
+                _ => Error::new(EIO),
+            })
+    }
+
+    fn remove_mapping(&mut self, slot: u32, offset: usize, size: usize) -> Result<()> {
+        let mut regions = self.mem_regions.lock();
+        let region = &mut regions.get_mut(&slot).ok_or_else(|| Error::new(EINVAL))?.2;
+        region
+            .remove_mapping(offset, size)
+            .map_err(|e| match e {
+                MmapError::SystemCallFailed(e) => e,
+                _ => Error::new(EIO),
+            })
+    }
+
+    fn handle_balloon_event(&mut self, event: BalloonEvent) -> Result<()> {
+        match event {
+            BalloonEvent::Inflate(m) => match self.guest_mem.remove_range(m.guest_address, m.size) {
+                Ok(_) => Ok(()),
+                Err(vm_memory::Error::MemoryAccess(_, MmapError::SystemCallFailed(e))) => Err(e),
+                Err(_) => Err(Error::new(EIO)),
+            },
+            BalloonEvent::Deflate(_) => Ok(()),
+            BalloonEvent::BalloonTargetReached(_) => Ok(()),
+        }
+    }
+}
+
+impl VmAArch64 for HvfVm {
+    fn get_hypervisor(&self) -> &dyn Hypervisor {
+        &self._hypervisor
+    }
+
+    fn load_protected_vm_firmware(
+        &mut self,
+        _fw_addr: GuestAddress,
+        _fw_max_size: u64,
+    ) -> Result<()> {
+        Err(Error::new(ENOSYS))
+    }
+
+    fn create_vcpu(&self, id: usize) -> Result<Box<dyn crate::VcpuAArch64>> {
+        Ok(Box::new(HvfVcpu::new(id, self.ioevents.clone())?))
+    }
+
+    fn create_fdt(&self, _fdt: &mut Fdt, _phandles: &BTreeMap<&str, u32>) -> cros_fdt::Result<()> {
+        Ok(())
+    }
+
+    fn init_arch(
+        &self,
+        _payload_entry_address: GuestAddress,
+        _fdt_address: GuestAddress,
+        _fdt_size: usize,
+    ) -> Result<()> {
+        Ok(())
+    }
+}

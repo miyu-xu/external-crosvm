@@ -6,7 +6,11 @@ use std::sync::Arc;
 
 use base::AsRawDescriptor;
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos"
+))]
 use crate::sys::linux::PollSource;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use crate::sys::linux::UringSource;
@@ -25,7 +29,11 @@ use crate::MemRegion;
 pub enum IoSource<F: base::AsRawDescriptor> {
     #[cfg(any(target_os = "android", target_os = "linux"))]
     Uring(UringSource<F>),
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "macos"
+    ))]
     Epoll(PollSource<F>),
     #[cfg(windows)]
     Handle(HandleSource<F>),
@@ -45,7 +53,11 @@ macro_rules! await_on_inner {
         match $x {
             #[cfg(any(target_os = "android", target_os = "linux"))]
             IoSource::Uring(x) => UringSource::$method(x, $($args),*).await,
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                target_os = "macos"
+            ))]
             IoSource::Epoll(x) => PollSource::$method(x, $($args),*).await,
             #[cfg(windows)]
             IoSource::Handle(x) => HandleSource::$method(x, $($args),*).await,
@@ -65,7 +77,11 @@ macro_rules! on_inner {
         match $x {
             #[cfg(any(target_os = "android", target_os = "linux"))]
             IoSource::Uring(x) => UringSource::$method(x, $($args),*),
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                target_os = "macos"
+            ))]
             IoSource::Epoll(x) => PollSource::$method(x, $($args),*),
             #[cfg(windows)]
             IoSource::Handle(x) => HandleSource::$method(x, $($args),*),
@@ -193,6 +209,10 @@ mod tests {
             kinds.push(ExecutorKindSys::Uring.into());
         }
         kinds
+    }
+    #[cfg(target_os = "macos")]
+    fn all_kinds() -> Vec<ExecutorKind> {
+        vec![ExecutorKindSys::Fd.into()]
     }
     #[cfg(windows)]
     fn all_kinds() -> Vec<ExecutorKind> {

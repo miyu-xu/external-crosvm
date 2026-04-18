@@ -2,7 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+))]
 pub(crate) mod linux;
 
 #[cfg(windows)]
@@ -18,6 +22,11 @@ cfg_if::cfg_if! {
         use windows as platform;
         #[cfg(feature = "pci-hotplug")]
         compile_error!("pci-hotplug not supported on windows");
+    } else if #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))] {
+        use linux as platform;
+
+        #[cfg(feature = "gpu")]
+        pub(crate) use linux::gpu::GpuRenderServerParameters;
     } else {
         compile_error!("Unsupported platform");
     }

@@ -756,6 +756,7 @@ pub fn arch_memory_regions(
         ));
     }
 
+    regions.sort_by_key(|(addr, _, _)| addr.offset());
     regions
 }
 
@@ -1298,13 +1299,14 @@ impl arch::LinuxArch for X8664arch {
 
     fn register_pci_device<V: VmX86_64, Vcpu: VcpuX86_64>(
         linux: &mut RunnableLinuxVm<V, Vcpu>,
-        device: Box<dyn PciDevice>,
+        mut device: Box<dyn PciDevice>,
         #[cfg(any(target_os = "android", target_os = "linux"))] minijail: Option<Minijail>,
         resources: &mut SystemAllocator,
         hp_control_tube: &mpsc::Sender<PciRootCommand>,
         #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
     ) -> Result<PciAddress> {
-        arch::configure_pci_device(
+        let debug_label = PciDevice::debug_label(&device);
+        let pci_address = arch::configure_pci_device(
             linux,
             device,
             #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -1314,7 +1316,9 @@ impl arch::LinuxArch for X8664arch {
             #[cfg(feature = "swap")]
             swap_controller,
         )
-        .map_err(Error::ConfigurePciDevice)
+        .map_err(Error::ConfigurePciDevice)?;
+        info!("registered pci device {} at {}", debug_label, pci_address);
+        Ok(pci_address)
     }
 
     fn get_host_cpu_frequencies_khz() -> Result<BTreeMap<usize, Vec<u32>>> {

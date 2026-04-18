@@ -79,7 +79,7 @@ use std::task::Poll;
 
 pub use async_types::*;
 pub use base::Event;
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
 pub use blocking::sys::linux::block_on::block_on;
 pub use blocking::unblock;
 pub use blocking::unblock_disarm;
@@ -123,7 +123,7 @@ pub enum Error {
     #[error("IO error: {0}")]
     Io(std::io::Error),
     /// Error from the polled(FD) source, which includes error from the FD executor.
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
     #[error("An error with a poll source: {0}")]
     PollSource(sys::linux::poll_source::Error),
     /// Error from Timer.

@@ -35,9 +35,11 @@ mod tests {
     use base::EventExt;
 
     use super::super::fd_executor::EpollReactor;
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     use super::super::uring_executor::UringReactor;
     use super::*;
     use crate::common_executor::RawExecutor;
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     use crate::sys::linux::uring_executor::is_uring_stable;
     use crate::ExecutorTrait;
 
@@ -49,6 +51,7 @@ mod tests {
             .map(|io_source| EventAsync { io_source })
     }
 
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub(crate) fn new_uring(
         event: Event,
         ex: &Arc<RawExecutor<UringReactor>>,
@@ -71,6 +74,7 @@ mod tests {
         assert_eq!(val, 0xaa);
     }
 
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[test]
     fn next_val_reads_value_poll_and_ring() {
         if !is_uring_stable() {

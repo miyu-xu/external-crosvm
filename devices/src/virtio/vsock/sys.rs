@@ -11,6 +11,12 @@ cfg_if::cfg_if! {
         mod windows;
         use windows as platform;
         pub use windows::Vsock;
+        pub use windows::VsockControlCommand;
+        pub use windows::VsockControlResponse;
+    } else if #[cfg(target_os = "macos")] {
+        mod macos;
+        use macos as platform;
+        pub use macos::Vsock;
     }
 }
 

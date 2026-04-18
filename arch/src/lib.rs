@@ -63,7 +63,7 @@ use gdbstub::arch::Arch;
 use hypervisor::IoEventAddress;
 use hypervisor::MemCacheType;
 use hypervisor::Vm;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use jail::FakeMinijailStub as Minijail;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;

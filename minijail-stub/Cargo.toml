@@ -1,0 +1,9 @@
+[package]
+name = "minijail-stub"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Stub minijail API for macOS crosvm builds (no libminijail)."
+
+[dependencies]
+libc = "0.2"

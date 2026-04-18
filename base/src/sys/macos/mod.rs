@@ -2,18 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::cmp::min;
 use std::fs::File;
+use std::io;
+use std::path::Path;
 
 use crate::descriptor::FromRawDescriptor;
 use crate::sys::unix::RawDescriptor;
 use crate::unix::set_descriptor_cloexec;
 use crate::unix::Pid;
-use crate::MmapError;
 
 mod event;
 pub(in crate::sys::macos) mod kqueue;
+mod ioctl;
+mod mmap;
 mod net;
+mod platform_timer_resolution;
+mod poll;
+mod shm;
 mod timer;
+
+pub use ioctl::*;
+pub use platform_timer_resolution::*;
+
+pub use mmap::*;
+
+pub use poll::EventContext;
 
 pub(crate) use event::PlatformEvent;
 pub(in crate::sys) use libc::sendmsg;
@@ -22,201 +36,72 @@ pub(in crate::sys) use net::sockaddrv4_to_lib_c;
 pub(in crate::sys) use net::sockaddrv6_to_lib_c;
 
 pub fn get_cpu_affinity() -> crate::errno::Result<Vec<usize>> {
-    todo!();
+    let n = crate::number_of_logical_cores()?;
+    Ok((0..n).collect())
 }
 
 pub fn getpid() -> Pid {
-    todo!();
+    // SAFETY: `getpid` is always successful on Darwin.
+    unsafe { libc::getpid() }
 }
 
-pub fn open_file_or_duplicate<P: AsRef<std::path::Path>>(
-    _path: P,
-    _options: &std::fs::OpenOptions,
-) -> crate::Result<std::fs::File> {
-    todo!();
-}
-
-pub mod platform_timer_resolution {
-    pub struct UnixSetTimerResolution {}
-    impl crate::EnabledHighResTimer for UnixSetTimerResolution {}
-
-    pub fn enable_high_res_timers() -> crate::Result<Box<dyn crate::EnabledHighResTimer>> {
-        todo!();
-    }
+pub fn open_file_or_duplicate<P: AsRef<Path>>(
+    path: P,
+    options: &std::fs::OpenOptions,
+) -> crate::Result<File> {
+    options.open(path.as_ref())
 }
 
 pub fn set_cpu_affinity<I: IntoIterator<Item = usize>>(_cpus: I) -> crate::errno::Result<()> {
-    todo!();
+    // CPU affinity for the current thread is not exposed like Linux `sched_setaffinity`.
+    Ok(())
 }
 
-pub struct EventContext<T: crate::EventToken> {
-    p: std::marker::PhantomData<T>,
+/// The operation to perform with `fallocate` (not supported on macOS; returns `ENOTSUP`).
+pub enum FallocateMode {
+    PunchHole,
+    ZeroRange,
+    Allocate,
 }
 
-impl<T: crate::EventToken> EventContext<T> {
-    pub fn new() -> crate::errno::Result<EventContext<T>> {
-        todo!();
-    }
-    pub fn build_with(
-        _fd_tokens: &[(&dyn crate::AsRawDescriptor, T)],
-    ) -> crate::errno::Result<EventContext<T>> {
-        todo!();
-    }
-    pub fn add_for_event(
-        &self,
-        _descriptor: &dyn crate::AsRawDescriptor,
-        _event_type: crate::EventType,
-        _token: T,
-    ) -> crate::errno::Result<()> {
-        todo!();
-    }
-    pub fn modify(
-        &self,
-        _fd: &dyn crate::AsRawDescriptor,
-        _event_type: crate::EventType,
-        _token: T,
-    ) -> crate::errno::Result<()> {
-        todo!();
-    }
-    pub fn delete(&self, _fd: &dyn crate::AsRawDescriptor) -> crate::errno::Result<()> {
-        todo!();
-    }
-    pub fn wait(&self) -> crate::errno::Result<smallvec::SmallVec<[crate::TriggeredEvent<T>; 16]>> {
-        todo!();
-    }
-    pub fn wait_timeout(
-        &self,
-        _timeout: std::time::Duration,
-    ) -> crate::errno::Result<smallvec::SmallVec<[crate::TriggeredEvent<T>; 16]>> {
-        todo!();
+impl From<FallocateMode> for i32 {
+    fn from(_value: FallocateMode) -> Self {
+        0
     }
 }
 
-impl<T: crate::EventToken> crate::AsRawDescriptor for EventContext<T> {
-    fn as_raw_descriptor(&self) -> RawDescriptor {
-        todo!();
+impl From<FallocateMode> for u32 {
+    fn from(value: FallocateMode) -> Self {
+        Into::<i32>::into(value) as u32
     }
 }
 
-pub struct MemoryMappingArena {}
-
-#[derive(Debug)]
-pub struct MemoryMapping {}
-
-impl MemoryMapping {
-    pub fn size(&self) -> usize {
-        todo!();
-    }
-    pub(crate) fn range_end(&self, _offset: usize, _count: usize) -> Result<usize, MmapError> {
-        todo!();
-    }
-    pub fn msync(&self) -> Result<(), MmapError> {
-        todo!();
-    }
-    pub fn new_protection_fixed(
-        _addr: *mut u8,
-        _size: usize,
-        _prot: crate::Protection,
-    ) -> Result<MemoryMapping, MmapError> {
-        todo!();
-    }
-    /// # Safety
-    ///
-    /// unimplemented, always aborts
-    pub unsafe fn from_descriptor_offset_protection_fixed(
-        _addr: *mut u8,
-        _fd: &dyn crate::AsRawDescriptor,
-        _size: usize,
-        _offset: u64,
-        _prot: crate::Protection,
-    ) -> Result<MemoryMapping, MmapError> {
-        todo!();
-    }
-}
-
-// SAFETY: Unimplemented, always aborts
-unsafe impl crate::MappedRegion for MemoryMapping {
-    fn as_ptr(&self) -> *mut u8 {
-        todo!();
-    }
-    fn size(&self) -> usize {
-        todo!();
-    }
-}
-
-pub mod ioctl {
-    pub type IoctlNr = std::ffi::c_ulong;
-    /// # Safety
-    ///
-    /// unimplemented, always aborts
-    pub unsafe fn ioctl<F: crate::AsRawDescriptor>(
-        _descriptor: &F,
-        _nr: IoctlNr,
-    ) -> std::ffi::c_int {
-        todo!();
-    }
-    /// # Safety
-    ///
-    /// unimplemented, always aborts
-    pub unsafe fn ioctl_with_val(
-        _descriptor: &dyn crate::AsRawDescriptor,
-        _nr: IoctlNr,
-        _arg: std::ffi::c_ulong,
-    ) -> std::ffi::c_int {
-        todo!();
-    }
-    /// # Safety
-    ///
-    /// unimplemented, always aborts
-    pub unsafe fn ioctl_with_ref<T>(
-        _descriptor: &dyn crate::AsRawDescriptor,
-        _nr: IoctlNr,
-        _arg: &T,
-    ) -> std::ffi::c_int {
-        todo!();
-    }
-    /// # Safety
-    ///
-    /// unimplemented, always aborts
-    pub unsafe fn ioctl_with_mut_ref<T>(
-        _descriptor: &dyn crate::AsRawDescriptor,
-        _nr: IoctlNr,
-        _arg: &mut T,
-    ) -> std::ffi::c_int {
-        todo!();
-    }
-    /// # Safety
-    ///
-    /// unimplemented, always aborts
-    pub unsafe fn ioctl_with_ptr<T>(
-        _descriptor: &dyn crate::AsRawDescriptor,
-        _nr: IoctlNr,
-        _arg: *const T,
-    ) -> std::ffi::c_int {
-        todo!();
-    }
-    /// # Safety
-    ///
-    /// unimplemented, always aborts
-    pub unsafe fn ioctl_with_mut_ptr<T>(
-        _descriptor: &dyn crate::AsRawDescriptor,
-        _nr: IoctlNr,
-        _arg: *mut T,
-    ) -> std::ffi::c_int {
-        todo!();
-    }
-}
-
-pub fn file_punch_hole(_file: &std::fs::File, _offset: u64, _length: u64) -> std::io::Result<()> {
-    todo!();
-}
-
-pub fn file_write_zeroes_at(
-    _file: &std::fs::File,
+/// macOS has no `posix_fallocate` in the same form; callers that need sparse files use Linux.
+pub fn fallocate<F: crate::AsRawDescriptor>(
+    _file: &F,
+    _mode: FallocateMode,
     _offset: u64,
-    _length: usize,
-) -> std::io::Result<usize> {
-    todo!();
+    _len: u64,
+) -> crate::errno::Result<()> {
+    Err(crate::Error::new(libc::ENOTSUP))
+}
+
+pub fn file_punch_hole(_file: &File, _offset: u64, _length: u64) -> io::Result<()> {
+    Err(io::Error::from_raw_os_error(libc::ENOTSUP))
+}
+
+pub fn file_write_zeroes_at(file: &File, offset: u64, length: usize) -> io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+
+    let buf_size = min(length, 0x10000);
+    let buf = vec![0u8; buf_size];
+    let mut nwritten: usize = 0;
+    while nwritten < length {
+        let remaining = length - nwritten;
+        let write_size = min(remaining, buf_size);
+        nwritten += file.write_at(&buf[0..write_size], offset + nwritten as u64)?;
+    }
+    Ok(length)
 }
 
 pub mod syslog {
@@ -233,26 +118,30 @@ pub mod syslog {
             ),
             crate::syslog::Error,
         > {
-            todo!();
+            Ok((None, None))
         }
     }
 }
 
 impl PartialEq for crate::SafeDescriptor {
-    fn eq(&self, _other: &Self) -> bool {
-        todo!();
-    }
-}
-
-impl crate::shm::PlatformSharedMemory for crate::SharedMemory {
-    fn new(_debug_name: &std::ffi::CStr, _size: u64) -> crate::Result<crate::SharedMemory> {
-        todo!();
-    }
-    fn from_safe_descriptor(
-        _descriptor: crate::SafeDescriptor,
-        _size: u64,
-    ) -> crate::Result<crate::SharedMemory> {
-        todo!();
+    fn eq(&self, other: &Self) -> bool {
+        if self.descriptor == other.descriptor {
+            return true;
+        }
+        let mut sa = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let mut sb = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: `fstat` writes only on success; we check return values.
+        unsafe {
+            if libc::fstat(self.descriptor, sa.as_mut_ptr()) != 0 {
+                return false;
+            }
+            if libc::fstat(other.descriptor, sb.as_mut_ptr()) != 0 {
+                return false;
+            }
+            let sa = sa.assume_init();
+            let sb = sb.assume_init();
+            sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino
+        }
     }
 }
 

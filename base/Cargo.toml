@@ -7,6 +7,8 @@ edition = "2021"
 [features]
 proto_tube = ["protobuf"]
 seccomp_trace = []
+## Enables the Linux-compat `base::linux` module on macOS (Apple Silicon HVF bring-up).
+hvf = []
 
 [dependencies]
 audio_streams = { path = "../common/audio_streams" } # provided by ebuild

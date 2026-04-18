@@ -12,6 +12,10 @@ cfg_if::cfg_if! {
         use windows as platform;
         pub(crate) use windows::ExitState;
         pub(crate) use windows::run_config;
+    } else if #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))] {
+        pub(crate) mod linux;
+        use linux as platform;
+        pub(crate) use crate::crosvm::sys::linux::{run_config, ExitState};
     } else {
         compile_error!("Unsupported platform");
     }

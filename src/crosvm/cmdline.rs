@@ -143,6 +143,7 @@ pub enum CrossPlatformCommands {
     #[cfg(feature = "balloon")]
     BalloonWs(BalloonWsCommand),
     Battery(BatteryCommand),
+    ConnectVsock(ConnectVsockCommand),
     #[cfg(feature = "composite-disk")]
     CreateComposite(CreateCompositeCommand),
     #[cfg(feature = "qcow")]
@@ -274,6 +275,18 @@ pub struct ResizeDiskSubcommand {
     #[argh(positional, arg_name = "NEW_SIZE")]
     /// new disk size
     pub disk_size: u64,
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "connect_vsock")]
+/// Prepare a host-initiated vsock connection to a guest port
+pub struct ConnectVsockCommand {
+    #[argh(positional, arg_name = "PORT")]
+    /// guest vsock port
+    pub port: u32,
     #[argh(positional, arg_name = "VM_SOCKET")]
     /// VM Socket path
     pub socket_path: String,

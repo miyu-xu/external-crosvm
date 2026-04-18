@@ -33,6 +33,7 @@ stats = []
 seccomp_trace = []
 swap = ["swap/enable"]
 whpx = []
+hvf = ["hypervisor/hvf", "net_util/hvf", "vm_memory/hvf"]
 pci-hotplug = []
 noncoherent-dma = []
 

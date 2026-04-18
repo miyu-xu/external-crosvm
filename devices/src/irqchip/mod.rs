@@ -35,6 +35,31 @@ cfg_if::cfg_if! {
     }
 }
 
+/// GIC sizing for AArch64 guests when the KVM irqchip module is not built (e.g. macOS hosts).
+#[cfg(all(
+    any(target_arch = "arm", target_arch = "aarch64"),
+    not(any(target_os = "android", target_os = "linux"))
+))]
+pub const AARCH64_GIC_NR_IRQS: u32 = 64;
+#[cfg(all(
+    any(target_arch = "arm", target_arch = "aarch64"),
+    not(any(target_os = "android", target_os = "linux"))
+))]
+pub const AARCH64_GIC_NR_SPIS: u32 = 32;
+
+#[cfg(all(
+    target_os = "macos",
+    target_arch = "aarch64",
+    feature = "hvf"
+))]
+mod hvf_aarch64;
+#[cfg(all(
+    target_os = "macos",
+    target_arch = "aarch64",
+    feature = "hvf"
+))]
+pub use self::hvf_aarch64::HvfKernelIrqChip;
+
 cfg_if::cfg_if! {
     if #[cfg(all(unix, any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))] {
         mod gunyah;

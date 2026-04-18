@@ -211,6 +211,13 @@ fn main_process_policy(cfg: &Config) -> sandbox::policy::Policy {
             pattern: format!("\\??\\pipe\\{}\\vsock-*", host_guid),
         };
         policy.exceptions.push(rule);
+    } else {
+        // AVF: userspace virtio-vsock connects to libbinder named pipes without a host GUID.
+        policy.exceptions.push(sandbox::policy::Rule {
+            subsystem: sandbox::SubSystem::SUBSYS_FILES,
+            semantics: sandbox::Semantics::FILES_ALLOW_ANY,
+            pattern: r"\??\pipe\binder_rpc_vsock-*".to_string(),
+        });
     }
     policy
 }

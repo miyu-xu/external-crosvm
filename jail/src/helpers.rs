@@ -18,7 +18,10 @@ use base::geteuid;
 #[cfg(feature = "seccomp_trace")]
 use base::warn;
 use libc::c_ulong;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
+#[cfg(target_os = "macos")]
+use minijail_stub::Minijail;
 #[cfg(not(feature = "seccomp_trace"))]
 use once_cell::sync::Lazy;
 #[cfg(feature = "seccomp_trace")]
@@ -113,31 +116,39 @@ impl Drop for ScopedMinijail {
 /// * `max_open_files` - The maximum number of file descriptors to allow a jailed process to open.
 #[allow(clippy::unnecessary_cast)]
 pub fn create_base_minijail(root: &Path, max_open_files: u64) -> Result<Minijail> {
-    // Validate new root directory. Path::is_dir() also checks the existence.
-    if !root.is_dir() {
-        bail!("{:?} is not a directory, cannot create jail", root);
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (root, max_open_files);
+        bail!("crosvm on macOS does not support minijail; run without --sandbox");
     }
-    // chroot accepts absolute path only.
-    if !root.is_absolute() {
-        bail!("{:?} is not absolute path", root);
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Validate new root directory. Path::is_dir() also checks the existence.
+        if !root.is_dir() {
+            bail!("{:?} is not a directory, cannot create jail", root);
+        }
+        // chroot accepts absolute path only.
+        if !root.is_absolute() {
+            bail!("{:?} is not absolute path", root);
+        }
+
+        // All child jails run in a new user namespace without any users mapped, they run as nobody
+        // unless otherwise configured.
+        let mut jail = Minijail::new().context("failed to jail device")?;
+
+        // Only pivot_root if we are not re-using the current root directory.
+        if root != Path::new("/") {
+            // It's safe to call `namespace_vfs` multiple times.
+            jail.namespace_vfs();
+            jail.enter_pivot_root(root)
+                .context("failed to pivot root device")?;
+        }
+
+        jail.set_rlimit(libc::RLIMIT_NOFILE as i32, max_open_files, max_open_files)
+            .context("error setting max open files")?;
+
+        Ok(jail)
     }
-
-    // All child jails run in a new user namespace without any users mapped, they run as nobody
-    // unless otherwise configured.
-    let mut jail = Minijail::new().context("failed to jail device")?;
-
-    // Only pivot_root if we are not re-using the current root directory.
-    if root != Path::new("/") {
-        // It's safe to call `namespace_vfs` multiple times.
-        jail.namespace_vfs();
-        jail.enter_pivot_root(root)
-            .context("failed to pivot root device")?;
-    }
-
-    jail.set_rlimit(libc::RLIMIT_NOFILE as i32, max_open_files, max_open_files)
-        .context("error setting max open files")?;
-
-    Ok(jail)
 }
 
 /// Creates a [Minijail] instance which creates a sandbox.
@@ -152,7 +163,14 @@ pub fn create_sandbox_minijail(
     max_open_files: u64,
     config: &SandboxConfig,
 ) -> Result<Minijail> {
-    let mut jail = create_base_minijail(root, max_open_files)?;
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (root, max_open_files, config);
+        bail!("crosvm on macOS does not support minijail; run without --sandbox");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut jail = create_base_minijail(root, max_open_files)?;
 
     jail.namespace_pids();
     jail.namespace_user();
@@ -301,21 +319,33 @@ pub fn create_sandbox_minijail(
     }
 
     Ok(jail)
+    }
 }
 
 /// Creates a basic [Minijail] if `jail_config` is present.
 ///
 /// Returns `None` if `jail_config` is none.
 pub fn simple_jail(jail_config: &Option<JailConfig>, policy: &str) -> Result<Option<Minijail>> {
-    if let Some(jail_config) = jail_config {
-        let config = SandboxConfig::new(jail_config, policy);
-        Ok(Some(create_sandbox_minijail(
-            &jail_config.pivot_root,
-            MAX_OPEN_FILES_DEFAULT,
-            &config,
-        )?))
-    } else {
-        Ok(None)
+    #[cfg(target_os = "macos")]
+    {
+        let _ = policy;
+        if jail_config.is_some() {
+            bail!("crosvm on macOS does not support minijail sandboxing; omit --sandbox");
+        }
+        return Ok(None);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(jail_config) = jail_config {
+            let config = SandboxConfig::new(jail_config, policy);
+            Ok(Some(create_sandbox_minijail(
+                &jail_config.pivot_root,
+                MAX_OPEN_FILES_DEFAULT,
+                &config,
+            )?))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -325,7 +355,14 @@ pub fn create_gpu_minijail(
     config: &SandboxConfig,
     render_node_only: bool,
 ) -> Result<Minijail> {
-    let mut jail = create_sandbox_minijail(root, MAX_OPEN_FILES_FOR_GPU, config)?;
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (root, config, render_node_only);
+        bail!("crosvm on macOS does not support GPU minijail");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut jail = create_sandbox_minijail(root, MAX_OPEN_FILES_FOR_GPU, config)?;
 
     // Device nodes required for DRM.
     let sys_dev_char_path = Path::new("/sys/dev/char");
@@ -387,6 +424,7 @@ pub fn create_gpu_minijail(
     }
 
     Ok(jail)
+    }
 }
 
 /// Selectively bind mount drm nodes into `jail` based on `render_node_only`

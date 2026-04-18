@@ -11,6 +11,10 @@ use std::env;
 use std::path::PathBuf;
 
 use base::linux::move_proc_to_cgroup;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+use minijail::Command as MinijailCommand;
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+use minijail_stub::Command as MinijailCommand;
 use jail::*;
 use serde::Deserialize;
 use serde::Serialize;
@@ -351,7 +355,7 @@ pub fn start_gpu_render_server(
     }
 
     let render_server_pid = jail
-        .run_command(minijail::Command::new_for_path(
+        .run_command(MinijailCommand::new_for_path(
             cmd,
             &inheritable_fds,
             &args,

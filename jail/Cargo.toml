@@ -28,6 +28,9 @@ zerocopy = { version = "0.7", features = ["derive"] }
 [target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
 minijail = "*"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+minijail-stub = { path = "../minijail-stub" }
+
 [build-dependencies]
 which = "4"
 rayon = "1.5.3"

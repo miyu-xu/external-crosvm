@@ -118,6 +118,37 @@ cfg_if::cfg_if! {
         pub use linux::UnlinkUnixListener;
         pub use linux::EventExt;
         pub use linux::Gid;
+    } else if #[cfg(all(target_os = "macos", feature = "hvf"))] {
+        pub use sys::linux;
+
+        pub use linux::{
+            clone_descriptor, safe_descriptor_from_path,
+            validate_raw_descriptor, clear_descriptor_cloexec,
+            safe_descriptor_from_cmdline_fd,
+        };
+
+        pub use linux::{
+            block_signal, clear_signal, get_blocked_signals, new_pipe_full,
+            register_rt_signal_handler, signal, unblock_signal, Killable, SIGRTMIN,
+            AcpiNotifyEvent, NetlinkGenericSocket, SignalFd, Terminal,
+        };
+
+        pub use linux::{
+            drop_capabilities, pipe, read_raw_stdin
+        };
+        pub use linux::{enable_core_scheduling, set_rt_prio_limit, set_rt_round_robin};
+        pub use linux::{flock, FlockOperation};
+        pub use linux::{getegid, geteuid};
+        pub use linux::{gettid, kill_process_group, reap_child};
+        pub use linux::logical_core_capacity;
+        pub use linux::logical_core_cluster_id;
+        pub use linux::logical_core_frequencies_khz;
+        pub use linux::logical_core_max_freq_khz;
+        pub use linux::sched_attr;
+        pub use linux::sched_setattr;
+        pub use linux::UnlinkUnixListener;
+        pub use linux::EventExt;
+        pub use linux::Gid;
     }
 }
 

@@ -15,7 +15,7 @@ use devices::Serial;
 use hypervisor::ProtectionType;
 #[cfg(feature = "seccomp_trace")]
 use jail::read_jail_addr;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use jail::FakeMinijailStub as Minijail;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;

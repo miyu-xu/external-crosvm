@@ -77,6 +77,7 @@ members = [
     "media/ffmpeg",
     "metrics",
     "metrics_events",
+    "minijail-stub",
     "net_sys",
     "net_util",
     "power_monitor",
@@ -275,6 +276,21 @@ haxm = ["hypervisor/haxm"]
 
 ## Enables the use of the WHPX hypervisor
 whpx = ["devices/whpx", "hypervisor/whpx"]
+
+#! ### macOS-specific feature flags
+#!
+#! These feature flags apply when building crosvm for macOS hosts.
+
+## Links Apple Hypervisor.framework and exposes the `hypervisor::hvf` module (work in progress).
+hvf = [
+    "aarch64/hvf",
+    "arch/hvf",
+    "base/hvf",
+    "devices/hvf",
+    "hypervisor/hvf",
+    "net_util/hvf",
+    "vm_memory/hvf",
+]
 
 ## Enables a libslirp based network device. Currently only supported on Windows.
 slirp = ["devices/slirp", "net_util/slirp"]
@@ -526,6 +542,9 @@ minijail = "*" # provided by ebuild
 p9 = "0.2.3"
 vhost = { path = "vhost" }
 android_audio = { path = "android_audio"}
+
+[target.'cfg(target_os = "macos")'.dependencies]
+minijail-stub = { path = "minijail-stub" }
 
 [target.'cfg(windows)'.dependencies]
 anti_tamper = { path = "vendor/generic/anti_tamper" }

@@ -165,7 +165,10 @@ use jail_warden::JailWardenImpl;
 use jail_warden::PermissiveJailWarden;
 use libc;
 use metrics::MetricsController;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+use minijail_stub::Minijail;
 #[cfg(feature = "pci-hotplug")]
 use pci_hotplug_manager::PciHotPlugManager;
 use resources::AddressRange;
@@ -1682,8 +1685,63 @@ fn run_gunyah(
     )
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))]
+fn run_hvf(cfg: Config, components: VmComponents) -> Result<ExitState> {
+    use devices::HvfKernelIrqChip;
+    use hypervisor::hvf::HvfHypervisor;
+    use hypervisor::hvf::HvfVcpu;
+    use hypervisor::hvf::HvfVm;
+
+    let hvf = HvfHypervisor::new().context("failed to create HVF hypervisor")?;
+    let guest_mem = create_guest_memory(&cfg, &components, &hvf)?;
+
+    #[cfg(feature = "swap")]
+    let swap_controller = if let Some(swap_dir) = cfg.swap_dir.as_ref() {
+        Some(
+            SwapController::launch(guest_mem.clone(), swap_dir, &cfg.jail_config)
+                .context("launch vmm-swap monitor process")?,
+        )
+    } else {
+        None
+    };
+
+    let vm = HvfVm::new(&hvf, guest_mem, components.hv_cfg).context("failed to create vm")?;
+
+    if cfg.protection_type.isolates_memory() && !vm.check_capability(VmCap::Protected) {
+        bail!("Failed to create protected VM");
+    }
+    let vm_clone = vm.try_clone().context("failed to clone vm")?;
+
+    let ioapic_host_tube;
+    let mut irq_chip = match cfg.irq_chip.unwrap_or(IrqChipKind::Kernel) {
+        IrqChipKind::Split | IrqChipKind::Userspace => {
+            bail!("HVF only supports kernel irqchip mode (--irqchip kernel)");
+        }
+        IrqChipKind::Kernel => {
+            ioapic_host_tube = None;
+            HvfKernelIrqChip::new(vm_clone, components.vcpu_count)
+                .context("failed to create IRQ chip")?
+        }
+    };
+
+    run_vm::<HvfVcpu, HvfVm>(
+        cfg,
+        components,
+        vm,
+        &mut irq_chip,
+        ioapic_host_tube,
+        #[cfg(feature = "swap")]
+        swap_controller,
+    )
+}
+
 /// Choose a default hypervisor if no `--hypervisor` option was specified.
 fn get_default_hypervisor() -> Option<HypervisorKind> {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))]
+    {
+        return Some(HypervisorKind::Hvf);
+    }
+
     let kvm_path = Path::new(KVM_PATH);
     if kvm_path.exists() {
         return Some(HypervisorKind::Kvm {
@@ -1741,6 +1799,8 @@ pub fn run_config(cfg: Config) -> Result<ExitState> {
             feature = "gunyah"
         ))]
         HypervisorKind::Gunyah { device } => run_gunyah(device.as_deref(), cfg, components),
+        #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))]
+        HypervisorKind::Hvf => run_hvf(cfg, components),
     }
 }
 

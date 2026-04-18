@@ -10,6 +10,7 @@ gdb = ["gdbstub", "gdbstub_arch"]
 trace_marker = ["cros_tracing/trace_marker"]
 seccomp_trace = []
 swap = ["swap/enable"]
+hvf = []
 
 [dependencies]
 acpi_tables = { path = "../acpi_tables" }
@@ -41,6 +42,9 @@ vm_memory = { path = "../vm_memory" }
 [target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
 minijail = "*" # provided by ebuild
 power_monitor = { path = "../power_monitor" }
+
+[target.'cfg(all(target_os = "macos", feature = "hvf"))'.dependencies]
+minijail-stub = { path = "../minijail-stub" }
 
 [target.'cfg(windows)'.dependencies]
 winapi = "0.3"

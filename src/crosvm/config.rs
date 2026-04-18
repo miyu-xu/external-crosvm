@@ -1145,7 +1145,7 @@ impl Default for Config {
             #[cfg(feature = "vtpm")]
             vtpm_proxy: false,
             wayland_socket_paths: BTreeMap::new(),
-            #[cfg(windows)]
+            #[cfg(all(windows, feature = "gpu"))]
             window_procedure_thread_split_config: None,
             x_display: None,
         }

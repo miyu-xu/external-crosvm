@@ -233,6 +233,10 @@ fn sleepbtn_vms(cmd: cmdline::SleepCommand) -> std::result::Result<(), ()> {
     vms_request(&VmRequest::Sleepbtn, cmd.socket_path)
 }
 
+fn connect_vsock(cmd: cmdline::ConnectVsockCommand) -> std::result::Result<(), ()> {
+    vms_request(&VmRequest::ConnectVsock { port: cmd.port }, cmd.socket_path)
+}
+
 fn inject_gpe(cmd: cmdline::GpeCommand) -> std::result::Result<(), ()> {
     vms_request(
         &VmRequest::Gpe {
@@ -823,6 +827,9 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
                     }
                     CrossPlatformCommands::Battery(cmd) => {
                         modify_battery(cmd).map_err(|_| anyhow!("battery subcommand failed"))
+                    }
+                    CrossPlatformCommands::ConnectVsock(cmd) => {
+                        connect_vsock(cmd).map_err(|_| anyhow!("connect_vsock subcommand failed"))
                     }
                     #[cfg(feature = "composite-disk")]
                     CrossPlatformCommands::CreateComposite(cmd) => create_composite(cmd)

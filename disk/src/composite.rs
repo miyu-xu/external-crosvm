@@ -575,6 +575,9 @@ fn align_to_power_of_2(val: u64, align_log: u8) -> u64 {
 
 impl PartitionInfo {
     fn aligned_size(&self) -> u64 {
+        if self.size == 0 {
+            return 1 << PARTITION_SIZE_SHIFT;
+        }
         align_to_power_of_2(self.size, PARTITION_SIZE_SHIFT)
     }
 }
@@ -682,6 +685,18 @@ fn create_component_disks(
     zero_filler_path: &str,
 ) -> Result<Vec<ComponentDisk>> {
     let aligned_size = partition.aligned_size();
+
+    if partition.size == 0 {
+        if partition.writable {
+            return Err(Error::UnalignedReadWrite(partition.to_owned()));
+        }
+        return Ok(vec![ComponentDisk {
+            offset,
+            file_path: zero_filler_path.to_owned(),
+            read_write_capability: ReadWriteCapability::READ_ONLY.into(),
+            ..ComponentDisk::new()
+        }]);
+    }
 
     let mut component_disks = vec![ComponentDisk {
         offset,

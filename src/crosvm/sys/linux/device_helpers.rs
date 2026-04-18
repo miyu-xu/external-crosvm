@@ -78,7 +78,15 @@ use hypervisor::MemCacheType;
 use hypervisor::ProtectionType;
 use hypervisor::Vm;
 use jail::*;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+use minijail_stub::Minijail;
+
+#[cfg(any(target_os = "android", target_os = "linux"))]
+type MinijailError = minijail::Error;
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+type MinijailError = minijail_stub::Error;
 #[cfg(feature = "net")]
 use net_util::sys::linux::Tap;
 #[cfg(feature = "net")]
@@ -1419,7 +1427,7 @@ pub fn create_iommu_device(
     })
 }
 
-fn add_bind_mounts(param: &SerialParameters, jail: &mut Minijail) -> Result<(), minijail::Error> {
+fn add_bind_mounts(param: &SerialParameters, jail: &mut Minijail) -> Result<(), MinijailError> {
     if let Some(path) = &param.path {
         if let SerialType::SystemSerialType = param.type_ {
             if let Some(parent) = path.as_path().parent() {

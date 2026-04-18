@@ -5,6 +5,14 @@
 #[cfg(any(target_os = "android", target_os = "linux"))]
 pub mod linux;
 
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+mod linux_macos;
+
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+pub mod linux {
+    pub use super::linux_macos::*;
+}
+
 #[cfg(target_os = "macos")]
 pub mod macos;
 

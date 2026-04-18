@@ -171,6 +171,7 @@ cfg_if::cfg_if! {
         pub use self::virtio::vfio_wrapper;
 
     } else if #[cfg(windows)] {
+    } else if #[cfg(all(target_os = "macos", feature = "hvf"))] {
     } else {
         compile_error!("Unsupported platform");
     }

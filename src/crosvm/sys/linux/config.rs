@@ -35,6 +35,9 @@ pub enum HypervisorKind {
     Gunyah {
         device: Option<PathBuf>,
     },
+    /// Apple Hypervisor.framework on Apple Silicon hosts (`--features hvf`).
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))]
+    Hvf,
 }
 
 // Doesn't do anything on unix.
@@ -560,6 +563,20 @@ mod tests {
                 device: Some(PathBuf::from("/not/default"))
             })
         );
+    }
+
+    #[test]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))]
+    fn hypervisor_hvf() {
+        let config: Config = crate::crosvm::cmdline::RunCommand::from_args(
+            &[],
+            &["--hypervisor", "hvf", "/dev/null"],
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        assert_eq!(config.hypervisor, Some(HypervisorKind::Hvf));
     }
 
     #[test]

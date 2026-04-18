@@ -12,6 +12,7 @@ pub enum AsyncErrorSys {
     #[cfg(feature = "tokio")]
     #[error("Tokio source error: {0}")]
     Tokio(#[from] super::tokio_source::Error),
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("Uring source error: {0}")]
     Uring(#[from] super::uring_executor::Error),
 }
@@ -22,6 +23,7 @@ impl From<AsyncErrorSys> for io::Error {
             AsyncErrorSys::Poll(e) => e.into(),
             #[cfg(feature = "tokio")]
             AsyncErrorSys::Tokio(e) => e.into(),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             AsyncErrorSys::Uring(e) => e.into(),
         }
     }

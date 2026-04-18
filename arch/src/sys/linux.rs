@@ -18,7 +18,10 @@ use devices::ProxyDevice;
 use devices::VfioPlatformDevice;
 use hypervisor::ProtectionType;
 use hypervisor::Vm;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+use minijail_stub::Minijail;
 use resources::AllocOptions;
 use resources::SystemAllocator;
 use sync::Mutex;

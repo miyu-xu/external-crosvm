@@ -63,11 +63,14 @@ use hypervisor::VcpuInitAArch64;
 use hypervisor::VcpuRegAArch64;
 use hypervisor::Vm;
 use hypervisor::VmAArch64;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use jail::FakeMinijailStub as Minijail;
 use kernel_loader::LoadedKernel;
 #[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail::Minijail;
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+use minijail_stub::Minijail;
 use remain::sorted;
 use resources::address_allocator::AddressAllocator;
 use resources::AddressRange;

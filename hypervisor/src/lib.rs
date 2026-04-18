@@ -15,6 +15,8 @@ pub mod caps;
 pub mod gunyah;
 #[cfg(all(windows, feature = "haxm"))]
 pub mod haxm;
+#[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))]
+pub mod hvf;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 pub mod kvm;
 #[cfg(target_arch = "riscv64")]

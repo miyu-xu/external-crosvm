@@ -6,6 +6,7 @@ edition = "2021"
 
 [features]
 gdb = ["gdbstub", "gdbstub_arch", "arch/gdb"]
+hvf = ["arch/hvf"]
 swap = ["swap/enable"]
 
 [dependencies]
@@ -32,3 +33,6 @@ vm_memory = { path = "../vm_memory" }
 
 [target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
 minijail = "*"
+
+[target.'cfg(all(target_os = "macos", feature = "hvf"))'.dependencies]
+minijail-stub = { path = "../minijail-stub" }

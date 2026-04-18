@@ -94,6 +94,8 @@ use devices::tsc::standard_deviation;
 use devices::tsc::TscSyncMitigations;
 use devices::virtio;
 use devices::virtio::block::DiskOption;
+use devices::virtio::vsock::VsockControlCommand;
+use devices::virtio::vsock::VsockControlResponse;
 #[cfg(feature = "audio")]
 use devices::virtio::snd::common_backend::VirtioSnd;
 #[cfg(feature = "audio")]
@@ -476,9 +478,11 @@ fn create_balloon_device(
     })
 }
 
-fn create_vsock_device(cfg: &Config) -> DeviceResult {
+fn create_vsock_device(cfg: &Config) -> DeviceResult<(VirtioDeviceStub, Tube)> {
     // We only support a single guest, so we can confidently assign a default
     // CID if one isn't provided. We choose the lowest non-reserved value.
+    let (vsock_control_host_tube, vsock_control_device_tube) =
+        Tube::pair().context("failed to create vsock control tube")?;
     let dev = virtio::vsock::Vsock::new(
         cfg.vsock
             .as_ref()
@@ -486,16 +490,20 @@ fn create_vsock_device(cfg: &Config) -> DeviceResult {
             .unwrap_or(DEFAULT_GUEST_CID),
         cfg.host_guid.clone(),
         virtio::base_features(cfg.protection_type),
+        Some(vsock_control_device_tube),
     )
     .exit_context(
         Exit::UserspaceVsockDeviceNew,
         "failed to create userspace vsock device",
     )?;
 
-    Ok(VirtioDeviceStub {
-        dev: Box::new(dev),
-        jail: None,
-    })
+    Ok((
+        VirtioDeviceStub {
+            dev: Box::new(dev),
+            jail: None,
+        },
+        vsock_control_host_tube,
+    ))
 }
 
 fn create_virtio_devices(
@@ -512,24 +520,9 @@ fn create_virtio_devices(
     tsc_frequency: u64,
     virtio_snd_state_device_tube: Option<Tube>,
     virtio_snd_control_device_tube: Option<Tube>,
-) -> DeviceResult<Vec<VirtioDeviceStub>> {
+) -> DeviceResult<(Vec<VirtioDeviceStub>, Option<Tube>)> {
     let mut devs = Vec::new();
-
-    if cfg.block_vhost_user_tube.is_empty() {
-        // Disk devices must precede virtio-console devices or the kernel does not boot.
-        // TODO(b/171215421): figure out why this ordering is required and fix it.
-        for disk in &cfg.disks {
-            let disk_device_tube = disk_device_tubes.remove(0);
-            devs.push(create_block_device(cfg, disk, disk_device_tube)?);
-        }
-    } else {
-        info!("Starting up vhost user block backends...");
-        for _disk in &cfg.disks {
-            let disk_device_tube = cfg.block_vhost_user_tube.remove(0);
-            let connection = Connection::<FrontendReq>::from(disk_device_tube);
-            devs.push(create_vhost_user_block_device(cfg, connection)?);
-        }
-    }
+    let mut vsock_control_tube = None;
 
     for (_, param) in cfg
         .serial_parameters
@@ -564,13 +557,33 @@ fn create_virtio_devices(
         product::push_pvclock_device(cfg, &mut devs, tsc_frequency, tube);
     }
 
-    devs.push(create_rng_device(cfg)?);
-
     #[cfg(feature = "slirp")]
     if let Some(net_vhost_user_tube) = cfg.net_vhost_user_tube.take() {
         let connection = Connection::<FrontendReq>::from(net_vhost_user_tube);
         devs.push(create_vhost_user_net_device(cfg, connection)?);
     }
+
+    let (vsock_device, host_tube) = create_vsock_device(cfg)?;
+    vsock_control_tube = Some(host_tube);
+    devs.push(vsock_device);
+
+    // Match the x86_64 Microdroid bootconfig contract, which assumes the bootable block devices
+    // come right after the virtio-console and vsock devices on the PCI bus.
+    if cfg.block_vhost_user_tube.is_empty() {
+        for disk in &cfg.disks {
+            let disk_device_tube = disk_device_tubes.remove(0);
+            devs.push(create_block_device(cfg, disk, disk_device_tube)?);
+        }
+    } else {
+        info!("Starting up vhost user block backends...");
+        for _disk in &cfg.disks {
+            let disk_device_tube = cfg.block_vhost_user_tube.remove(0);
+            let connection = Connection::<FrontendReq>::from(disk_device_tube);
+            devs.push(create_vhost_user_block_device(cfg, connection)?);
+        }
+    }
+
+    devs.push(create_rng_device(cfg)?);
 
     #[cfg(feature = "balloon")]
     if let (Some(balloon_device_tube), Some(dynamic_mapping_device_tube)) =
@@ -584,8 +597,6 @@ fn create_virtio_devices(
             init_balloon_size,
         )?);
     }
-
-    devs.push(create_vsock_device(cfg)?);
 
     #[cfg(feature = "gpu")]
     let event_devices = if let Some(InputEventSplitConfig {
@@ -634,7 +645,7 @@ fn create_virtio_devices(
         )?);
     }
 
-    Ok(devs)
+    Ok((devs, vsock_control_tube))
 }
 
 #[cfg(feature = "gpu")]
@@ -794,8 +805,8 @@ fn create_devices(
     tsc_frequency: u64,
     virtio_snd_state_device_tube: Option<Tube>,
     virtio_snd_control_device_tube: Option<Tube>,
-) -> DeviceResult<Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>> {
-    let stubs = create_virtio_devices(
+) -> DeviceResult<(Vec<(Box<dyn BusDeviceObj>, Option<Minijail>)>, Option<Tube>)> {
+    let (stubs, vsock_control_tube) = create_virtio_devices(
         cfg,
         exit_evt_wrtube,
         control_tubes,
@@ -853,7 +864,7 @@ fn create_devices(
         pci_devices.push((dev, stub.jail));
     }
 
-    Ok(pci_devices)
+    Ok((pci_devices, vsock_control_tube))
 }
 
 #[derive(Debug)]
@@ -883,6 +894,7 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     vm_control_server: Option<&mut ControlServer>,
     irq_handler_control: &Tube,
     device_ctrl_tube: &Tube,
+    vsock_control_tube: Option<&Tube>,
     wait_ctx: &WaitContext<Token>,
     force_s2idle: bool,
     vcpu_control_channels: &[mpsc::Sender<VcpuControl>],
@@ -1031,6 +1043,38 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                                     } else {
                                         error!("balloon not enabled");
                                         None
+                                    }
+                                }
+                                VmRequest::ConnectVsock { port } => {
+                                    if let Some(vsock_control_tube) = vsock_control_tube {
+                                        match vsock_control_tube.send(
+                                            &VsockControlCommand::ConnectHostVsock {
+                                                guest_port: port,
+                                            },
+                                        ) {
+                                            Ok(()) => match vsock_control_tube
+                                                .recv::<VsockControlResponse>()
+                                            {
+                                                Ok(VsockControlResponse::Ok) => {
+                                                    Some(VmResponse::Ok)
+                                                }
+                                                Ok(VsockControlResponse::ErrString(err)) => {
+                                                    Some(VmResponse::ErrString(err))
+                                                }
+                                                Err(err) => Some(VmResponse::ErrString(format!(
+                                                    "failed receiving vsock control response: {}",
+                                                    err
+                                                ))),
+                                            },
+                                            Err(err) => Some(VmResponse::ErrString(format!(
+                                                "failed sending vsock control request: {}",
+                                                err
+                                            ))),
+                                        }
+                                    } else {
+                                        Some(VmResponse::ErrString(
+                                            "vsock control tube is not available".to_string(),
+                                        ))
                                     }
                                 }
                                 _ => {
@@ -1283,6 +1327,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     control_server_path: Option<PathBuf>,
     force_s2idle: bool,
     suspended: bool,
+    vsock_control_tube: Option<Tube>,
 ) -> Result<ExitState> {
     let (ipc_main_loop_tube, proto_main_loop_tube, _service_ipc) =
         start_service_ipc_listener(service_pipe_name)?;
@@ -1544,6 +1589,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                 vm_control_server.as_mut(),
                 &irq_handler_control,
                 &device_ctrl_tube,
+                vsock_control_tube.as_ref(),
                 &wait_ctx,
                 force_s2idle,
                 &vcpu_control_channels,
@@ -2616,7 +2662,7 @@ where
 
     let mut initial_audio_session_states: Vec<InitialAudioSessionState> = Vec::new();
 
-    let pci_devices = create_devices(
+    let (pci_devices, vsock_control_tube) = create_devices(
         &mut cfg,
         vm.get_memory(),
         &vm_evt_wrtube,
@@ -2701,6 +2747,7 @@ where
         cfg.socket_path,
         cfg.force_s2idle,
         cfg.suspended,
+        vsock_control_tube,
     )
 }
 

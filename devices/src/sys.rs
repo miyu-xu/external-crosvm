@@ -7,6 +7,12 @@ cfg_if::cfg_if! {
         pub(crate) mod linux;
         use linux as platform;
         pub(crate) use linux::*;
+    } else if #[cfg(all(target_os = "macos", feature = "hvf"))] {
+        mod macos_hvf;
+        #[path = "sys/linux/serial_device.rs"]
+        pub(crate) mod serial_device;
+        use macos_hvf as platform;
+        pub(crate) use macos_hvf::*;
     } else if #[cfg(windows)] {
         mod windows;
         use windows as platform;

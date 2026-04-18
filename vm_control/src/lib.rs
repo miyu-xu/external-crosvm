@@ -1453,6 +1453,8 @@ pub enum VmRequest {
     Swap(SwapCommand),
     /// Resume the VM's VCPUs that were previously suspended.
     ResumeVcpus,
+    /// Prepare a host-initiated vsock connection to a guest service port.
+    ConnectVsock { port: u32 },
     /// Inject a general-purpose event. If `clear_evt` is provided, when the irq associated
     /// with the GPE is resampled, it will be re-asserted as long as `clear_evt` is not
     /// signaled.
@@ -1883,6 +1885,7 @@ impl VmRequest {
                 kick_vcpus(VcpuControl::RunState(VmRunMode::Running));
                 VmResponse::Ok
             }
+            VmRequest::ConnectVsock { port: _ } => VmResponse::Err(SysError::new(ENOTSUP)),
             VmRequest::Swap(SwapCommand::Enable) => {
                 #[cfg(feature = "swap")]
                 if let Some(swap_controller) = swap_controller {
