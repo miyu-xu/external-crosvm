@@ -68,7 +68,7 @@ use jail::FakeMinijailStub as Minijail;
 use kernel_loader::LoadedKernel;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail::Minijail;
+use minijail_stub::Minijail;
 #[cfg(all(target_os = "macos", feature = "hvf"))]
 use minijail_stub::Minijail;
 use remain::sorted;

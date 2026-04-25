@@ -11,7 +11,7 @@ mod test {
     use base::AsRawDescriptor;
     use base::Tube;
     use jail::fork::fork_process;
-    use minijail::Minijail;
+    use minijail_stub::Minijail;
 
     pub fn pid_diff() {
         let (tube, fork_tube) = Tube::pair().expect("failed to create tube");

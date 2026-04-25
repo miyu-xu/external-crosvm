@@ -79,12 +79,12 @@ use hypervisor::ProtectionType;
 use hypervisor::Vm;
 use jail::*;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail::Minijail;
+use minijail_stub::Minijail;
 #[cfg(all(target_os = "macos", feature = "hvf"))]
 use minijail_stub::Minijail;
 
 #[cfg(any(target_os = "android", target_os = "linux"))]
-type MinijailError = minijail::Error;
+type MinijailError = minijail_stub::Error;
 #[cfg(all(target_os = "macos", feature = "hvf"))]
 type MinijailError = minijail_stub::Error;
 #[cfg(feature = "net")]

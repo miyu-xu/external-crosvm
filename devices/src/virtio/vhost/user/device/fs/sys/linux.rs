@@ -13,7 +13,7 @@ use base::RawDescriptor;
 use cros_async::Executor;
 use jail::create_base_minijail;
 use jail::set_embedded_bpf_program;
-use minijail::Minijail;
+use minijail_stub::Minijail;
 
 use crate::virtio::vhost::user::device::connection::sys::VhostUserListener;
 use crate::virtio::vhost::user::device::connection::sys::VhostUserStream;

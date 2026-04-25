@@ -9,7 +9,7 @@ use devices::serial_device::SerialParameters;
 use devices::BusDevice;
 use devices::ProxyDevice;
 use devices::Serial;
-use minijail::Minijail;
+use minijail_stub::Minijail;
 use sync::Mutex;
 
 use crate::DeviceRegistrationError;

@@ -13,7 +13,7 @@ use std::path::Path;
 
 pub type rlim_t = u64;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Error {
     Unsupported,
     StrToCString(String),

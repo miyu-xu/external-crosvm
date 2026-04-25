@@ -18,9 +18,6 @@ use base::geteuid;
 #[cfg(feature = "seccomp_trace")]
 use base::warn;
 use libc::c_ulong;
-#[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail::Minijail;
-#[cfg(target_os = "macos")]
 use minijail_stub::Minijail;
 #[cfg(not(feature = "seccomp_trace"))]
 use once_cell::sync::Lazy;

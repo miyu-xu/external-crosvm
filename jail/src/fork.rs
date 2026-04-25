@@ -18,7 +18,7 @@ use base::RawDescriptor;
 #[cfg(feature = "seccomp_trace")]
 use log::debug;
 use log::warn;
-use minijail::Minijail;
+use minijail_stub::Minijail;
 
 /// Child represents the forked process.
 pub struct Child {
@@ -87,7 +87,7 @@ pub fn fork_process<F>(
     mut keep_rds: Vec<RawDescriptor>,
     debug_label: Option<String>,
     post_fork_cb: F,
-) -> minijail::Result<Child>
+) -> minijail_stub::Result<Child>
 where
     F: FnOnce(),
 {

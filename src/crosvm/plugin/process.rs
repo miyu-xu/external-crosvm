@@ -51,7 +51,7 @@ use libc::WIFEXITED;
 use libc::WNOHANG;
 use libc::WTERMSIG;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail::Minijail;
+use minijail_stub::Minijail;
 #[cfg(all(target_os = "macos", feature = "hvf"))]
 use minijail_stub::Minijail;
 use net_util::Error as NetError;

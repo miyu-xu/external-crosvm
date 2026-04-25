@@ -66,7 +66,7 @@ use hypervisor::Vm;
 #[cfg(any(windows, target_os = "macos"))]
 use jail::FakeMinijailStub as Minijail;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail::Minijail;
+use minijail_stub::Minijail;
 use remain::sorted;
 #[cfg(target_arch = "x86_64")]
 use resources::AddressRange;
@@ -626,7 +626,7 @@ pub enum DeviceRegistrationError {
     /// Unable to clone a jail for the device.
     #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to clone jail: {0}")]
-    CloneJail(minijail::Error),
+    CloneJail(minijail_stub::Error),
     /// Appending to kernel command line failed.
     #[error("unable to add device to kernel command line: {0}")]
     Cmdline(kernel_cmdline::Error),

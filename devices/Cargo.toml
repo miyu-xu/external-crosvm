@@ -97,7 +97,7 @@ android_audio = { path = "../android_audio" }
 fuse = {path = "../fuse" }
 jail = { path = "../jail" }
 libcras = { version = "*", optional = true }
-minijail = "*"
+minijail-stub = { path = "../minijail-stub" }
 net_sys = { path = "../net_sys" }
 p9 = "0.2"
 usb_util = { path = "../usb_util" }

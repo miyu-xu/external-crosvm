@@ -120,7 +120,7 @@ use jail::read_jail_addr;
 #[cfg(windows)]
 use jail::FakeMinijailStub as Minijail;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail::Minijail;
+use minijail_stub::Minijail;
 use once_cell::sync::OnceCell;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -162,7 +162,7 @@ pub enum Error {
     CloneIrqChip(base::Error),
     #[cfg(any(target_os = "android", target_os = "linux"))]
     #[error("failed to clone jail: {0}")]
-    CloneJail(minijail::Error),
+    CloneJail(minijail_stub::Error),
     #[error("unable to clone a Tube: {0}")]
     CloneTube(TubeError),
     #[error("the given kernel command line was invalid: {0}")]

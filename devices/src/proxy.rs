@@ -18,7 +18,7 @@ use base::Tube;
 use base::TubeError;
 use jail::fork::fork_process;
 use libc::pid_t;
-use minijail::Minijail;
+use minijail_stub::Minijail;
 use remain::sorted;
 use serde::Deserialize;
 use serde::Serialize;
@@ -41,7 +41,7 @@ pub enum Error {
     #[error("Failed to activate ProxyDevice")]
     ActivatingProxyDevice,
     #[error("Failed to fork jail process: {0}")]
-    ForkingJail(#[from] minijail::Error),
+    ForkingJail(#[from] minijail_stub::Error),
     #[error("Failed to configure swap: {0}")]
     Swap(anyhow::Error),
     #[error("Failed to configure tube: {0}")]

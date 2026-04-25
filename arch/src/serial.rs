@@ -18,7 +18,7 @@ use jail::read_jail_addr;
 #[cfg(any(windows, target_os = "macos"))]
 use jail::FakeMinijailStub as Minijail;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail::Minijail;
+use minijail_stub::Minijail;
 use remain::sorted;
 use thiserror::Error as ThisError;
 

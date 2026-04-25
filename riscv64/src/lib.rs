@@ -51,7 +51,7 @@ use hypervisor::VmRiscv64;
 #[cfg(windows)]
 use jail::FakeMinijailStub as Minijail;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail::Minijail;
+use minijail_stub::Minijail;
 use remain::sorted;
 use resources::AddressRange;
 use resources::SystemAllocator;
