@@ -29,8 +29,9 @@ const RTCSTAT: u64 = 0x8;
 const RTCEOI: u64 = 0x8;
 // Counter load register
 const RTCLR: u64 = 0xC;
-// Counter register
+// Control register
 const RTCCR: u64 = 0x10;
+const RTCCR_MIE: u32 = 1 << 0;
 
 // A single 4K page is mapped for this device
 pub const PL030_AMBA_IOMEM_SIZE: u64 = 0x1000;
@@ -59,6 +60,9 @@ pub struct Pl030 {
     // status flag to keep track of whether the interrupt is cleared
     // or not
     interrupt_active: bool,
+
+    // interrupt control register
+    control: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -66,6 +70,7 @@ struct Pl030Snapshot {
     counter_delta_time: u32,
     match_value: u32,
     interrupt_active: bool,
+    control: u32,
 }
 
 fn get_epoch_time() -> u32 {
@@ -80,10 +85,15 @@ impl Pl030 {
     pub fn new(evt: IrqEdgeEvent) -> Pl030 {
         Pl030 {
             alarm_evt: evt,
-            counter_delta_time: get_epoch_time(),
+            counter_delta_time: 0,
             match_value: 0,
             interrupt_active: false,
+            control: 0,
         }
+    }
+
+    fn counter_value(&self) -> u32 {
+        get_epoch_time().wrapping_sub(self.counter_delta_time)
     }
 }
 
@@ -118,22 +128,14 @@ impl BusDevice for Pl030 {
                 warn!("Not implemented: VM tried to set an RTC alarm");
             }
             RTCEOI => {
-                if reg_val == 0 {
-                    self.interrupt_active = false;
-                } else {
-                    self.alarm_evt.trigger().unwrap();
-                    self.interrupt_active = true;
-                }
+                let _ = reg_val;
+                self.interrupt_active = false;
             }
             RTCLR => {
-                // TODO(sonnyrao): if we ever need to let the VM set it's own time
-                // then we'll need to keep track of the delta between
-                // the rtc time it sets and the host's rtc time and
-                // record that here
-                warn!("Not implemented: VM tried to set the RTC");
+                self.counter_delta_time = get_epoch_time().wrapping_sub(reg_val);
             }
             RTCCR => {
-                self.counter_delta_time = get_epoch_time();
+                self.control = reg_val & RTCCR_MIE;
             }
             o => panic!("pl030: bad write {}", o),
         }
@@ -149,14 +151,14 @@ impl BusDevice for Pl030 {
         };
 
         let reg_content: u32 = match info.offset {
-            RTCDR => get_epoch_time(),
+            RTCDR => self.counter_value(),
             RTCMR => self.match_value,
             RTCSTAT => self.interrupt_active as u32,
             RTCLR => {
                 warn!("invalid read of RTCLR register");
                 0
             }
-            RTCCR => get_epoch_time() - self.counter_delta_time,
+            RTCCR => self.control,
             AMBA_ID_OFFSET => PL030_AMBA_ID,
             AMBA_MASK_OFFSET => PL030_AMBA_MASK,
 
@@ -172,6 +174,7 @@ impl Suspendable for Pl030 {
             counter_delta_time: self.counter_delta_time,
             match_value: self.match_value,
             interrupt_active: self.interrupt_active,
+            control: self.control,
         })
         .with_context(|| format!("error serializing {}", self.debug_label()))
     }
@@ -182,6 +185,7 @@ impl Suspendable for Pl030 {
         self.counter_delta_time = deser.counter_delta_time;
         self.match_value = deser.match_value;
         self.interrupt_active = deser.interrupt_active;
+        self.control = deser.control;
         Ok(())
     }
 
@@ -211,18 +215,16 @@ mod tests {
 
     #[test]
     fn test_interrupt_status_register() {
-        let event = IrqEdgeEvent::new().unwrap();
-        let mut device = Pl030::new(event.try_clone().unwrap());
+        let mut device = Pl030::new(IrqEdgeEvent::new().unwrap());
         let mut register = [0, 0, 0, 0];
 
         // set interrupt
-        device.write(pl030_bus_address(RTCEOI), &[1, 0, 0, 0]);
+        device.interrupt_active = true;
         device.read(pl030_bus_address(RTCSTAT), &mut register);
         assert_eq!(register, [1, 0, 0, 0]);
-        event.get_trigger().wait().unwrap();
 
         // clear interrupt
-        device.write(pl030_bus_address(RTCEOI), &[0, 0, 0, 0]);
+        device.write(pl030_bus_address(RTCEOI), &[1, 0, 0, 0]);
         device.read(pl030_bus_address(RTCSTAT), &mut register);
         assert_eq!(register, [0, 0, 0, 0]);
     }

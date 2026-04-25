@@ -12,6 +12,7 @@ use libc::c_char;
 
 use crate::errno_result;
 use crate::shm::PlatformSharedMemory;
+use crate::AsRawDescriptor;
 use crate::FromRawDescriptor;
 use crate::Result;
 use crate::SafeDescriptor;
@@ -34,13 +35,8 @@ impl PlatformSharedMemory for SharedMemory {
         let name = shm_object_name(debug_name);
         let name_ptr = name.as_ptr() as *const c_char;
         // SAFETY: `name` is NUL-terminated and obeys `shm_open` naming rules.
-        let fd = unsafe {
-            libc::shm_open(
-                name_ptr,
-                libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
-                0o600,
-            )
-        };
+        let fd =
+            unsafe { libc::shm_open(name_ptr, libc::O_CREAT | libc::O_EXCL | libc::O_RDWR, 0o600) };
         if fd < 0 {
             return errno_result();
         }

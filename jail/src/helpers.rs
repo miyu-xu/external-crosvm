@@ -8,6 +8,8 @@
 use std::path::Path;
 use std::str;
 
+#[cfg(target_os = "macos")]
+use crate::FakeMinijailStub as Minijail;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
@@ -18,6 +20,7 @@ use base::geteuid;
 #[cfg(feature = "seccomp_trace")]
 use base::warn;
 use libc::c_ulong;
+#[cfg(not(target_os = "macos"))]
 use minijail_stub::Minijail;
 #[cfg(not(feature = "seccomp_trace"))]
 use once_cell::sync::Lazy;
@@ -169,153 +172,153 @@ pub fn create_sandbox_minijail(
     {
         let mut jail = create_base_minijail(root, max_open_files)?;
 
-    jail.namespace_pids();
-    jail.namespace_user();
-    jail.namespace_user_disable_setgroups();
-    if config.limit_caps {
-        // Don't need any capabilities.
-        jail.use_caps(0);
-    }
-    match config.run_as {
-        RunAsUser::Unspecified => {
-            if config.bind_mounts && config.ugid_map.is_none() {
-                // Minijail requires to set user/group map to mount extra directories.
+        jail.namespace_pids();
+        jail.namespace_user();
+        jail.namespace_user_disable_setgroups();
+        if config.limit_caps {
+            // Don't need any capabilities.
+            jail.use_caps(0);
+        }
+        match config.run_as {
+            RunAsUser::Unspecified => {
+                if config.bind_mounts && config.ugid_map.is_none() {
+                    // Minijail requires to set user/group map to mount extra directories.
+                    add_current_user_to_jail(&mut jail)?;
+                }
+            }
+            RunAsUser::CurrentUser => {
                 add_current_user_to_jail(&mut jail)?;
             }
-        }
-        RunAsUser::CurrentUser => {
-            add_current_user_to_jail(&mut jail)?;
-        }
-        RunAsUser::Root => {
-            // Add the current user as root in the jail.
-            let crosvm_uid = geteuid();
-            let crosvm_gid = getegid();
-            jail.uidmap(&format!("0 {} 1", crosvm_uid))
-                .context("error setting UID map")?;
-            jail.gidmap(&format!("0 {} 1", crosvm_gid))
-                .context("error setting GID map")?;
-        }
-        RunAsUser::Specified(uid, gid) => {
-            if uid != 0 {
-                jail.change_uid(uid)
+            RunAsUser::Root => {
+                // Add the current user as root in the jail.
+                let crosvm_uid = geteuid();
+                let crosvm_gid = getegid();
+                jail.uidmap(&format!("0 {} 1", crosvm_uid))
+                    .context("error setting UID map")?;
+                jail.gidmap(&format!("0 {} 1", crosvm_gid))
+                    .context("error setting GID map")?;
             }
-            if gid != 0 {
-                jail.change_gid(gid)
+            RunAsUser::Specified(uid, gid) => {
+                if uid != 0 {
+                    jail.change_uid(uid)
+                }
+                if gid != 0 {
+                    jail.change_gid(gid)
+                }
             }
         }
-    }
-    if config.bind_mounts {
-        // Create a tmpfs in the device's root directory so that we can bind mount files.
-        // The size=67108864 is size=64*1024*1024 or size=64MB.
-        // TODO(b/267581374): Use appropriate size for tmpfs.
-        jail.mount_with_data(
-            Path::new("none"),
-            Path::new("/"),
-            "tmpfs",
-            (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC) as usize,
-            "size=67108864",
-        )?;
-    }
-    if let Some((uid_map, gid_map)) = config.ugid_map {
-        jail.uidmap(uid_map).context("error setting UID map")?;
-        jail.gidmap(gid_map).context("error setting GID map")?;
-    }
-    // Run in a new mount namespace.
-    jail.namespace_vfs();
+        if config.bind_mounts {
+            // Create a tmpfs in the device's root directory so that we can bind mount files.
+            // The size=67108864 is size=64*1024*1024 or size=64MB.
+            // TODO(b/267581374): Use appropriate size for tmpfs.
+            jail.mount_with_data(
+                Path::new("none"),
+                Path::new("/"),
+                "tmpfs",
+                mount_common_flags(false),
+                "size=67108864",
+            )?;
+        }
+        if let Some((uid_map, gid_map)) = config.ugid_map {
+            jail.uidmap(uid_map).context("error setting UID map")?;
+            jail.gidmap(gid_map).context("error setting GID map")?;
+        }
+        // Run in a new mount namespace.
+        jail.namespace_vfs();
 
-    if config.namespace_net {
-        // Run in an empty network namespace.
-        jail.namespace_net();
-    }
-
-    // Don't allow the device to gain new privileges.
-    jail.no_new_privs();
-
-    #[cfg(feature = "seccomp_trace")]
-    {
-        #[repr(C)]
-        #[derive(AsBytes)]
-        struct sock_filter {
-            /* Filter block */
-            code: u16, /* Actual filter code */
-            jt: u8,    /* Jump true */
-            jf: u8,    /* Jump false */
-            k: u32,    /* Generic multiuse field */
+        if config.namespace_net {
+            // Run in an empty network namespace.
+            jail.namespace_net();
         }
 
-        // BPF constant is defined in https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/bpf_common.h
-        // BPF parser/assembler is defined in https://elixir.bootlin.com/linux/v4.9/source/tools/net/bpf_exp.y
-        const SECCOMP_RET_TRACE: u32 = 0x7ff00000;
-        const SECCOMP_RET_LOG: u32 = 0x7ffc0000;
-        const BPF_RET: u16 = 0x06;
-        const BPF_K: u16 = 0x00;
+        // Don't allow the device to gain new privileges.
+        jail.no_new_privs();
 
-        // return SECCOMP_RET_LOG for all syscalls
-        const FILTER_RET_LOG_BLOCK: sock_filter = sock_filter {
-            code: BPF_RET | BPF_K,
-            jt: 0,
-            jf: 0,
-            k: SECCOMP_RET_LOG,
-        };
+        #[cfg(feature = "seccomp_trace")]
+        {
+            #[repr(C)]
+            #[derive(AsBytes)]
+            struct sock_filter {
+                /* Filter block */
+                code: u16, /* Actual filter code */
+                jt: u8,    /* Jump true */
+                jf: u8,    /* Jump false */
+                k: u32,    /* Generic multiuse field */
+            }
 
-        warn!("The running crosvm is compiled with seccomp_trace feature, and is striclty used for debugging purpose only. DO NOT USE IN PRODUCTION!!!");
-        debug!(
+            // BPF constant is defined in https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/bpf_common.h
+            // BPF parser/assembler is defined in https://elixir.bootlin.com/linux/v4.9/source/tools/net/bpf_exp.y
+            const SECCOMP_RET_TRACE: u32 = 0x7ff00000;
+            const SECCOMP_RET_LOG: u32 = 0x7ffc0000;
+            const BPF_RET: u16 = 0x06;
+            const BPF_K: u16 = 0x00;
+
+            // return SECCOMP_RET_LOG for all syscalls
+            const FILTER_RET_LOG_BLOCK: sock_filter = sock_filter {
+                code: BPF_RET | BPF_K,
+                jt: 0,
+                jf: 0,
+                k: SECCOMP_RET_LOG,
+            };
+
+            warn!("The running crosvm is compiled with seccomp_trace feature, and is striclty used for debugging purpose only. DO NOT USE IN PRODUCTION!!!");
+            debug!(
             "seccomp_trace {{\"event\": \"minijail_create\", \"name\": \"{}\", \"jail_addr\": \"0x{:x}\"}}",
             config.seccomp_policy_name,
             read_jail_addr(&jail),
         );
-        jail.parse_seccomp_bytes(FILTER_RET_LOG_BLOCK.as_bytes())
-            .unwrap();
-    }
-
-    #[cfg(not(feature = "seccomp_trace"))]
-    if let Some(seccomp_policy_dir) = config.seccomp_policy_dir {
-        let seccomp_policy_path = seccomp_policy_dir.join(config.seccomp_policy_name);
-        // By default we'll prioritize using the pre-compiled .bpf over the .policy file (the .bpf
-        // is expected to be compiled using "trap" as the failure behavior instead of the default
-        // "kill" behavior) when a policy path is supplied in the command line arugments. Otherwise
-        // the built-in pre-compiled policies will be used.
-        // Refer to the code comment for the "seccomp-log-failures" command-line parameter for an
-        // explanation about why the |log_failures| flag forces the use of .policy files (and the
-        // build-time alternative to this run-time flag).
-        let bpf_policy_file = seccomp_policy_path.with_extension("bpf");
-        if bpf_policy_file.exists() && !config.log_failures {
-            jail.parse_seccomp_program(&bpf_policy_file)
-                .with_context(|| {
-                    format!(
-                        "failed to parse precompiled seccomp policy: {}",
-                        bpf_policy_file.display()
-                    )
-                })?;
-        } else {
-            // Use TSYNC only for the side effect of it using SECCOMP_RET_TRAP, which will correctly
-            // kill the entire device process if a worker thread commits a seccomp violation.
-            jail.set_seccomp_filter_tsync();
-            if config.log_failures {
-                jail.log_seccomp_filter_failures();
-            }
-            let bpf_policy_file = seccomp_policy_path.with_extension("policy");
-            jail.parse_seccomp_filters(&bpf_policy_file)
-                .with_context(|| {
-                    format!(
-                        "failed to parse seccomp policy: {}",
-                        bpf_policy_file.display()
-                    )
-                })?;
+            jail.parse_seccomp_bytes(FILTER_RET_LOG_BLOCK.as_bytes())
+                .unwrap();
         }
-    } else {
-        set_embedded_bpf_program(&mut jail, config.seccomp_policy_name)?;
-    }
 
-    jail.use_seccomp_filter();
-    // Don't do init setup.
-    jail.run_as_init();
-    // Set up requested remount mode instead of default MS_PRIVATE.
-    if let Some(mode) = config.remount_mode {
-        jail.set_remount_mode(mode);
-    }
+        #[cfg(not(feature = "seccomp_trace"))]
+        if let Some(seccomp_policy_dir) = config.seccomp_policy_dir {
+            let seccomp_policy_path = seccomp_policy_dir.join(config.seccomp_policy_name);
+            // By default we'll prioritize using the pre-compiled .bpf over the .policy file (the .bpf
+            // is expected to be compiled using "trap" as the failure behavior instead of the default
+            // "kill" behavior) when a policy path is supplied in the command line arugments. Otherwise
+            // the built-in pre-compiled policies will be used.
+            // Refer to the code comment for the "seccomp-log-failures" command-line parameter for an
+            // explanation about why the |log_failures| flag forces the use of .policy files (and the
+            // build-time alternative to this run-time flag).
+            let bpf_policy_file = seccomp_policy_path.with_extension("bpf");
+            if bpf_policy_file.exists() && !config.log_failures {
+                jail.parse_seccomp_program(&bpf_policy_file)
+                    .with_context(|| {
+                        format!(
+                            "failed to parse precompiled seccomp policy: {}",
+                            bpf_policy_file.display()
+                        )
+                    })?;
+            } else {
+                // Use TSYNC only for the side effect of it using SECCOMP_RET_TRAP, which will correctly
+                // kill the entire device process if a worker thread commits a seccomp violation.
+                jail.set_seccomp_filter_tsync();
+                if config.log_failures {
+                    jail.log_seccomp_filter_failures();
+                }
+                let bpf_policy_file = seccomp_policy_path.with_extension("policy");
+                jail.parse_seccomp_filters(&bpf_policy_file)
+                    .with_context(|| {
+                        format!(
+                            "failed to parse seccomp policy: {}",
+                            bpf_policy_file.display()
+                        )
+                    })?;
+            }
+        } else {
+            set_embedded_bpf_program(&mut jail, config.seccomp_policy_name)?;
+        }
 
-    Ok(jail)
+        jail.use_seccomp_filter();
+        // Don't do init setup.
+        jail.run_as_init();
+        // Set up requested remount mode instead of default MS_PRIVATE.
+        if let Some(mode) = config.remount_mode {
+            jail.set_remount_mode(mode);
+        }
+
+        Ok(jail)
     }
 }
 
@@ -361,66 +364,66 @@ pub fn create_gpu_minijail(
     {
         let mut jail = create_sandbox_minijail(root, MAX_OPEN_FILES_FOR_GPU, config)?;
 
-    // Device nodes required for DRM.
-    let sys_dev_char_path = Path::new("/sys/dev/char");
-    jail.mount_bind(sys_dev_char_path, sys_dev_char_path, false)?;
+        // Device nodes required for DRM.
+        let sys_dev_char_path = Path::new("/sys/dev/char");
+        jail.mount_bind(sys_dev_char_path, sys_dev_char_path, false)?;
 
-    // Necessary for CGROUP control of the vGPU threads
-    // This is not necessary UNLESS one wants to make use
-    // of the gpu cgroup command line options.
-    let sys_cpuset_path = Path::new("/sys/fs/cgroup/cpuset");
-    if sys_cpuset_path.exists() {
-        jail.mount_bind(sys_cpuset_path, sys_cpuset_path, true)?;
-    }
+        // Necessary for CGROUP control of the vGPU threads
+        // This is not necessary UNLESS one wants to make use
+        // of the gpu cgroup command line options.
+        let sys_cpuset_path = Path::new("/sys/fs/cgroup/cpuset");
+        if sys_cpuset_path.exists() {
+            jail.mount_bind(sys_cpuset_path, sys_cpuset_path, true)?;
+        }
 
-    let sys_devices_path = Path::new("/sys/devices");
-    jail.mount_bind(sys_devices_path, sys_devices_path, false)?;
+        let sys_devices_path = Path::new("/sys/devices");
+        jail.mount_bind(sys_devices_path, sys_devices_path, false)?;
 
-    jail_mount_bind_drm(&mut jail, render_node_only)?;
+        jail_mount_bind_drm(&mut jail, render_node_only)?;
 
-    // If the ARM specific devices exist on the host, bind mount them in.
-    let mali0_path = Path::new("/dev/mali0");
-    if mali0_path.exists() {
-        jail.mount_bind(mali0_path, mali0_path, true)?;
-    }
+        // If the ARM specific devices exist on the host, bind mount them in.
+        let mali0_path = Path::new("/dev/mali0");
+        if mali0_path.exists() {
+            jail.mount_bind(mali0_path, mali0_path, true)?;
+        }
 
-    let pvr_sync_path = Path::new("/dev/pvr_sync");
-    if pvr_sync_path.exists() {
-        jail.mount_bind(pvr_sync_path, pvr_sync_path, true)?;
-    }
+        let pvr_sync_path = Path::new("/dev/pvr_sync");
+        if pvr_sync_path.exists() {
+            jail.mount_bind(pvr_sync_path, pvr_sync_path, true)?;
+        }
 
-    // If the udmabuf driver exists on the host, bind mount it in.
-    let udmabuf_path = Path::new("/dev/udmabuf");
-    if udmabuf_path.exists() {
-        jail.mount_bind(udmabuf_path, udmabuf_path, true)?;
-    }
+        // If the udmabuf driver exists on the host, bind mount it in.
+        let udmabuf_path = Path::new("/dev/udmabuf");
+        if udmabuf_path.exists() {
+            jail.mount_bind(udmabuf_path, udmabuf_path, true)?;
+        }
 
-    // Libraries that are required when mesa drivers are dynamically loaded.
-    jail_mount_bind_if_exists(
-        &mut jail,
-        &[
-            "/usr/lib",
-            "/usr/lib64",
-            "/lib",
-            "/lib64",
-            "/usr/share/drirc.d",
-            "/usr/share/glvnd",
-            "/usr/share/libdrm",
-            "/usr/share/vulkan",
-        ],
-    )?;
+        // Libraries that are required when mesa drivers are dynamically loaded.
+        jail_mount_bind_if_exists(
+            &mut jail,
+            &[
+                "/usr/lib",
+                "/usr/lib64",
+                "/lib",
+                "/lib64",
+                "/usr/share/drirc.d",
+                "/usr/share/glvnd",
+                "/usr/share/libdrm",
+                "/usr/share/vulkan",
+            ],
+        )?;
 
-    // pvr driver requires read access to /proc/self/task/*/comm.
-    mount_proc(&mut jail)?;
+        // pvr driver requires read access to /proc/self/task/*/comm.
+        mount_proc(&mut jail)?;
 
-    // To enable perfetto tracing, we need to give access to the perfetto service IPC
-    // endpoints.
-    let perfetto_path = Path::new("/run/perfetto");
-    if perfetto_path.exists() {
-        jail.mount_bind(perfetto_path, perfetto_path, true)?;
-    }
+        // To enable perfetto tracing, we need to give access to the perfetto service IPC
+        // endpoints.
+        let perfetto_path = Path::new("/run/perfetto");
+        if perfetto_path.exists() {
+            jail.mount_bind(perfetto_path, perfetto_path, true)?;
+        }
 
-    Ok(jail)
+        Ok(jail)
     }
 }
 
@@ -466,13 +469,31 @@ pub fn jail_mount_bind_if_exists<P: AsRef<std::ffi::OsStr>>(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn mount_common_flags(read_only: bool) -> usize {
+    let mut flags = libc::MNT_NOSUID | libc::MNT_NODEV | libc::MNT_NOEXEC;
+    if read_only {
+        flags |= libc::MNT_RDONLY;
+    }
+    flags as usize
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mount_common_flags(read_only: bool) -> usize {
+    let mut flags = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
+    if read_only {
+        flags |= libc::MS_RDONLY;
+    }
+    flags as usize
+}
+
 /// Mount proc in the sandbox.
 pub fn mount_proc(jail: &mut Minijail) -> Result<()> {
     jail.mount(
         Path::new("proc"),
         Path::new("/proc"),
         "proc",
-        (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC | libc::MS_RDONLY) as usize,
+        mount_common_flags(true),
     )?;
     Ok(())
 }

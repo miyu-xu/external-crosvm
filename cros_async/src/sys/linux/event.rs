@@ -9,6 +9,7 @@ use crate::AsyncResult;
 use crate::EventAsync;
 use crate::Executor;
 
+#[cfg(not(target_os = "macos"))]
 impl EventAsync {
     pub fn new(event: Event, ex: &Executor) -> AsyncResult<EventAsync> {
         ex.async_from(event)
@@ -25,6 +26,27 @@ impl EventAsync {
             return Err(AsyncError::EventAsync(base::Error::new(libc::ENODATA)));
         }
         Ok(u64::from_ne_bytes(v.try_into().unwrap()))
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl EventAsync {
+    pub fn new(event: Event, ex: &Executor) -> AsyncResult<EventAsync> {
+        Ok(EventAsync {
+            ex: ex.clone(),
+            event,
+        })
+    }
+
+    pub async fn next_val(&self) -> AsyncResult<u64> {
+        let event = self.event.try_clone().map_err(AsyncError::EventAsync)?;
+        self.ex
+            .spawn_blocking(move || {
+                event.wait()?;
+                Ok(1)
+            })
+            .await
+            .map_err(AsyncError::EventAsync)
     }
 }
 

@@ -94,8 +94,6 @@ use devices::tsc::standard_deviation;
 use devices::tsc::TscSyncMitigations;
 use devices::virtio;
 use devices::virtio::block::DiskOption;
-use devices::virtio::vsock::VsockControlCommand;
-use devices::virtio::vsock::VsockControlResponse;
 #[cfg(feature = "audio")]
 use devices::virtio::snd::common_backend::VirtioSnd;
 #[cfg(feature = "audio")]
@@ -116,6 +114,8 @@ use devices::virtio::vhost::user::snd::sys::windows::product::SndBackendConfig a
 use devices::virtio::vhost::user::snd::sys::windows::run_snd_device_worker;
 #[cfg(feature = "audio")]
 use devices::virtio::vhost::user::snd::sys::windows::SndSplitConfig;
+use devices::virtio::vsock::VsockControlCommand;
+use devices::virtio::vsock::VsockControlResponse;
 #[cfg(feature = "balloon")]
 use devices::virtio::BalloonFeatures;
 use devices::virtio::Console;

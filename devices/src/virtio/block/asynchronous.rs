@@ -34,9 +34,11 @@ use base::WorkerThread;
 use cros_async::sync::RwLock as AsyncRwLock;
 use cros_async::AsyncError;
 use cros_async::AsyncTube;
+#[cfg(not(target_os = "macos"))]
 use cros_async::EventAsync;
 use cros_async::Executor;
 use cros_async::ExecutorKind;
+#[cfg(not(target_os = "macos"))]
 use cros_async::TimerAsync;
 use data_model::Le16;
 use data_model::Le32;
@@ -227,10 +229,101 @@ struct WorkerSharedState {
     disk_size: Arc<AtomicU64>,
 }
 
+struct FlushTimer {
+    #[cfg(not(target_os = "macos"))]
+    inner: TimerAsync<Timer>,
+}
+
+enum QueueKick {
+    #[cfg(not(target_os = "macos"))]
+    Async(EventAsync),
+    #[cfg(target_os = "macos")]
+    Blocking { ex: Executor, evt: Event },
+}
+
+impl QueueKick {
+    fn new(evt: Event, ex: &Executor) -> cros_async::AsyncResult<Self> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            EventAsync::new(evt, ex).map(Self::Async)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Ok(Self::Blocking {
+                ex: ex.clone(),
+                evt,
+            })
+        }
+    }
+
+    async fn wait(&self) -> cros_async::AsyncResult<()> {
+        #[cfg(not(target_os = "macos"))]
+        match self {
+            Self::Async(evt) => {
+                let _ = evt.next_val().await?;
+                Ok(())
+            }
+        }
+        #[cfg(target_os = "macos")]
+        match self {
+            Self::Blocking { ex, evt } => {
+                let evt = evt
+                    .try_clone()
+                    .map_err(cros_async::AsyncError::EventAsync)?;
+                ex.spawn_blocking(move || evt.wait())
+                    .await
+                    .map_err(cros_async::AsyncError::EventAsync)
+            }
+        }
+    }
+}
+
+impl FlushTimer {
+    fn new(timer: Timer, ex: &Executor) -> cros_async::AsyncResult<Self> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            TimerAsync::new(timer, ex).map(|inner| Self { inner })
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = (timer, ex);
+            Ok(Self {})
+        }
+    }
+
+    fn reset_oneshot(&mut self, dur: Duration) -> SysResult<()> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.inner.reset_oneshot(dur)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = dur;
+            Ok(())
+        }
+    }
+
+    fn clear(&mut self) -> SysResult<()> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.inner.clear()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Ok(())
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    async fn wait(&self) -> cros_async::AsyncResult<()> {
+        self.inner.wait().await
+    }
+}
+
 async fn process_one_request(
     avail_desc: &mut DescriptorChain,
     disk_state: &AsyncRwLock<DiskState>,
-    flush_timer: &RefCell<TimerAsync<Timer>>,
+    flush_timer: &RefCell<FlushTimer>,
     flush_timer_armed: &RefCell<bool>,
 ) -> result::Result<usize, ExecuteError> {
     let reader = &mut avail_desc.reader;
@@ -275,7 +368,7 @@ async fn process_one_chain(
     queue: &RefCell<Queue>,
     mut avail_desc: DescriptorChain,
     disk_state: &AsyncRwLock<DiskState>,
-    flush_timer: &RefCell<TimerAsync<Timer>>,
+    flush_timer: &RefCell<FlushTimer>,
     flush_timer_armed: &RefCell<bool>,
 ) {
     let _trace = cros_tracing::trace_event!(VirtioBlk, "process_one_chain");
@@ -300,14 +393,14 @@ async fn process_one_chain(
 async fn handle_queue(
     disk_state: Rc<AsyncRwLock<DiskState>>,
     queue: Queue,
-    evt: EventAsync,
-    flush_timer: Rc<RefCell<TimerAsync<Timer>>>,
+    evt: QueueKick,
+    flush_timer: Rc<RefCell<FlushTimer>>,
     flush_timer_armed: Rc<RefCell<bool>>,
     mut stop_rx: oneshot::Receiver<()>,
 ) -> Queue {
     let queue = RefCell::new(queue);
     let mut background_tasks = FuturesUnordered::new();
-    let evt_future = evt.next_val().fuse();
+    let evt_future = evt.wait().fuse();
     pin_mut!(evt_future);
     loop {
         // Wait for the next signal from `evt` and process `background_tasks` in the meantime.
@@ -319,7 +412,7 @@ async fn handle_queue(
         futures::select! {
             _ = background_tasks.next() => continue,
             res = evt_future => {
-                evt_future.set(evt.next_val().fuse());
+                evt_future.set(evt.wait().fuse());
                 if let Err(e) = res {
                     error!("Failed to read the next queue event: {:#}", e);
                     continue;
@@ -418,11 +511,18 @@ async fn resize(disk_state: &AsyncRwLock<DiskState>, new_size: u64) -> DiskContr
 /// Periodically flushes the disk when the given timer fires.
 async fn flush_disk(
     disk_state: Rc<AsyncRwLock<DiskState>>,
-    timer: TimerAsync<Timer>,
+    timer: FlushTimer,
     armed: Rc<RefCell<bool>>,
 ) -> Result<(), ControlError> {
     loop {
+        #[cfg(not(target_os = "macos"))]
         timer.wait().await.map_err(ControlError::FlushTimer)?;
+        #[cfg(target_os = "macos")]
+        {
+            let _ = (&disk_state, &timer, &armed);
+            futures::future::pending::<()>().await;
+            unreachable!();
+        }
         if !*armed.borrow() {
             continue;
         }
@@ -484,8 +584,8 @@ async fn run_worker(
 
     // Handle all the queues in one sub-select call.
     let flush_timer = Rc::new(RefCell::new(
-        TimerAsync::new(
-            // Call try_clone() to share the same underlying FD with the `flush_disk` task.
+        FlushTimer::new(
+            // Call try_clone() to share the same underlying handle with the `flush_disk` task.
             timer.try_clone().expect("Failed to clone flush_timer"),
             ex,
         )
@@ -493,7 +593,7 @@ async fn run_worker(
     ));
 
     // Flushes the disk periodically.
-    let flush_timer2 = TimerAsync::new(timer, ex).expect("Failed to create an async timer");
+    let flush_timer2 = FlushTimer::new(timer, ex).expect("Failed to create an async timer");
     let disk_flush = flush_disk(disk_state.clone(), flush_timer2, flush_timer_armed.clone()).fuse();
     pin_mut!(disk_flush);
 
@@ -539,7 +639,8 @@ async fn run_worker(
                         let (handle_queue_future, remote_handle) = handle_queue(
                             Rc::clone(disk_state),
                             queue,
-                            EventAsync::new(kick_evt, ex).expect("Failed to create async event for queue"),
+                            QueueKick::new(kick_evt, ex)
+                                .expect("Failed to create async event for queue"),
                             Rc::clone(&flush_timer),
                             Rc::clone(&flush_timer_armed),
                             rx,
@@ -776,7 +877,7 @@ impl BlockAsync {
         reader: &mut Reader,
         writer: &mut Writer,
         disk_state: &AsyncRwLock<DiskState>,
-        flush_timer: &RefCell<TimerAsync<Timer>>,
+        flush_timer: &RefCell<FlushTimer>,
         flush_timer_armed: &RefCell<bool>,
     ) -> result::Result<(), ExecuteError> {
         // Acquire immutable access to prevent tasks from resizing disk.
@@ -854,6 +955,7 @@ impl BlockAsync {
                         desc_error,
                     })?;
 
+                #[cfg(not(target_os = "macos"))]
                 if !*flush_timer_armed.borrow() {
                     *flush_timer_armed.borrow_mut() = true;
 
@@ -863,6 +965,12 @@ impl BlockAsync {
                         .reset_oneshot(flush_delay)
                         .map_err(ExecuteError::TimerReset)?;
                 }
+                #[cfg(target_os = "macos")]
+                disk_state
+                    .disk_image
+                    .fsync()
+                    .await
+                    .map_err(ExecuteError::Flush)?;
             }
             VIRTIO_BLK_T_DISCARD | VIRTIO_BLK_T_WRITE_ZEROES => {
                 #[allow(clippy::if_same_then_else)]
@@ -1398,7 +1506,7 @@ mod tests {
 
         let timer = Timer::new().expect("Failed to create a timer");
         let flush_timer = Rc::new(RefCell::new(
-            TimerAsync::new(timer, &ex).expect("Failed to create an async timer"),
+            FlushTimer::new(timer, &ex).expect("Failed to create an async timer"),
         ));
         let flush_timer_armed = Rc::new(RefCell::new(false));
 
@@ -1467,7 +1575,7 @@ mod tests {
         let af = SingleFileDisk::new(f, &ex).expect("Failed to create SFD");
         let timer = Timer::new().expect("Failed to create a timer");
         let flush_timer = Rc::new(RefCell::new(
-            TimerAsync::new(timer, &ex).expect("Failed to create an async timer"),
+            FlushTimer::new(timer, &ex).expect("Failed to create an async timer"),
         ));
         let flush_timer_armed = Rc::new(RefCell::new(false));
         let disk_state = Rc::new(AsyncRwLock::new(DiskState {
@@ -1534,7 +1642,7 @@ mod tests {
         let af = SingleFileDisk::new(f, &ex).expect("Failed to create SFD");
         let timer = Timer::new().expect("Failed to create a timer");
         let flush_timer = Rc::new(RefCell::new(
-            TimerAsync::new(timer, &ex).expect("Failed to create an async timer"),
+            FlushTimer::new(timer, &ex).expect("Failed to create an async timer"),
         ));
         let flush_timer_armed = Rc::new(RefCell::new(false));
 

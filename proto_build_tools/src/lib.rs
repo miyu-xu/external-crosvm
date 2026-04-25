@@ -71,7 +71,10 @@ fn to_includes(proto_paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn gen_protos(out_dir: &PathBuf, proto_paths: &[PathBuf], includes: &[PathBuf]) {
+    let protoc = protoc_bin_vendored::protoc_bin_path().expect("vendored protoc must be available");
     Codegen::new()
+        .protoc()
+        .protoc_path(&protoc)
         .out_dir(out_dir)
         .inputs(proto_paths)
         .includes(includes)

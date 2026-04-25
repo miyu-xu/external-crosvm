@@ -9,9 +9,9 @@ use std::sync::Arc;
 use base::NetlinkGenericSocket;
 use sync::Mutex;
 
+use crate::ac_adapter::AcAdapter;
 use crate::acpi::ACPIPMError;
 use crate::acpi::GpeResource;
-use crate::AcAdapter;
 use crate::IrqLevelEvent;
 
 pub(crate) fn get_acpi_event_sock() -> Result<Option<NetlinkGenericSocket>, ACPIPMError> {

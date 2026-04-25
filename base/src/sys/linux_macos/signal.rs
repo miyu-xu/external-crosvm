@@ -144,7 +144,7 @@ pub enum Signal {
     Winch = libc::SIGWINCH,
     Xcpu = libc::SIGXCPU,
     // Rt signal numbers are be adjusted in the conversion to integer.
-    Rt0 = libc::SIGSYS + 1,
+    Rt0 = super::RT_SIGNAL_SENTINEL_BASE,
     Rt1,
     Rt2,
     Rt3,

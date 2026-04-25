@@ -47,17 +47,9 @@ pub const AARCH64_GIC_NR_IRQS: u32 = 64;
 ))]
 pub const AARCH64_GIC_NR_SPIS: u32 = 32;
 
-#[cfg(all(
-    target_os = "macos",
-    target_arch = "aarch64",
-    feature = "hvf"
-))]
+#[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))]
 mod hvf_aarch64;
-#[cfg(all(
-    target_os = "macos",
-    target_arch = "aarch64",
-    feature = "hvf"
-))]
+#[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))]
 pub use self::hvf_aarch64::HvfKernelIrqChip;
 
 cfg_if::cfg_if! {

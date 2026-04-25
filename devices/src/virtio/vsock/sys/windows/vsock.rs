@@ -14,10 +14,10 @@ use std::io::Write;
 use std::os::windows::io::RawHandle;
 use std::rc::Rc;
 use std::result;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 
 use anyhow::anyhow;
@@ -898,17 +898,35 @@ impl Worker {
         let host_port = loop {
             let candidate = self.next_host_port.fetch_add(1, Ordering::Relaxed);
             let candidate = if candidate < 49152 { 49152 } else { candidate };
-            let port = PortPair { host: candidate, guest: guest_port };
+            let port = PortPair {
+                host: candidate,
+                guest: guest_port,
+            };
             if !self.connections.read_lock().await.contains_key(&port)
-                && !self.pending_host_connections.read_lock().await.contains_key(&port)
+                && !self
+                    .pending_host_connections
+                    .read_lock()
+                    .await
+                    .contains_key(&port)
             {
                 break candidate;
             }
         };
-        let port = PortPair { host: host_port, guest: guest_port };
+        let port = PortPair {
+            host: host_port,
+            guest: guest_port,
+        };
         if self.connections.read_lock().await.contains_key(&port)
-            || self.pending_host_connections.read_lock().await.contains_key(&port)
-            || self.pending_listener_ports.lock().unwrap().contains(&guest_port)
+            || self
+                .pending_host_connections
+                .read_lock()
+                .await
+                .contains_key(&port)
+            || self
+                .pending_listener_ports
+                .lock()
+                .unwrap()
+                .contains(&guest_port)
         {
             return VsockControlResponse::ErrString(format!(
                 "guest vsock port {guest_port} already has an active or pending host connection"
@@ -937,7 +955,10 @@ impl Worker {
             }
         };
 
-        self.pending_listener_ports.lock().unwrap().insert(guest_port);
+        self.pending_listener_ports
+            .lock()
+            .unwrap()
+            .insert(guest_port);
         let pending_listener_ports = Arc::clone(&self.pending_listener_ports);
         let pending_listener_ports_for_thread = Arc::clone(&pending_listener_ports);
         let mut accepted_host_connect_tx = accepted_host_connect_tx.clone();
@@ -1025,7 +1046,10 @@ impl Worker {
                 request_header.as_bytes(),
             )
             .await?;
-            info!("vsock: port {}: sent host-initiated connection request", port);
+            info!(
+                "vsock: port {}: sent host-initiated connection request",
+                port
+            );
         }
         Ok(())
     }
@@ -1047,7 +1071,8 @@ impl Worker {
             };
             let response = match command {
                 Ok(VsockControlCommand::ConnectHostVsock { guest_port }) => {
-                    self.start_host_listener(guest_port, &accepted_host_connect_tx).await
+                    self.start_host_listener(guest_port, &accepted_host_connect_tx)
+                        .await
                 }
                 Err(err) => {
                     warn!("vsock: control tube closed: {}", err);
@@ -1503,16 +1528,34 @@ impl Worker {
                         },
                     );
                     self.connection_event.signal().unwrap_or_else(|_| {
-                        panic!("Failed to signal host-initiated connection ready for {}", port)
+                        panic!(
+                            "Failed to signal host-initiated connection ready for {}",
+                            port
+                        )
                     });
-                    info!("vsock: port {}: host-initiated connection established", port);
+                    info!(
+                        "vsock: port {}: host-initiated connection established",
+                        port
+                    );
                 } else {
-                    warn!("vsock: port {}: unexpected response with no pending host connect", port);
+                    warn!(
+                        "vsock: port {}: unexpected response with no pending host connect",
+                        port
+                    );
                 }
             }
             vsock_op::VIRTIO_VSOCK_OP_RST => {
-                if self.pending_host_connections.lock().await.remove(&port).is_some() {
-                    warn!("vsock: port {}: guest rejected host-initiated connection", port);
+                if self
+                    .pending_host_connections
+                    .lock()
+                    .await
+                    .remove(&port)
+                    .is_some()
+                {
+                    warn!(
+                        "vsock: port {}: guest rejected host-initiated connection",
+                        port
+                    );
                 }
             }
             vsock_op::VIRTIO_VSOCK_OP_SHUTDOWN => {
@@ -1840,7 +1883,8 @@ impl Worker {
 
             let stop_rx = create_stop_oneshot(&mut stop_queue_oneshots);
             let async_control_tube = self.control_tube.take().map(|control_tube| {
-                AsyncTube::new(&ex, control_tube).expect("Failed to create async vsock control tube")
+                AsyncTube::new(&ex, control_tube)
+                    .expect("Failed to create async vsock control tube")
             });
             let rx_handler =
                 self.process_rx_queue(rx_queue_arc.clone(), rx_evt_async, &ex, stop_rx);
@@ -1888,11 +1932,7 @@ impl Worker {
 
             let stop_rx = create_stop_oneshot(&mut stop_queue_oneshots);
             let control_handler = self
-                .process_control_tube(
-                    async_control_tube,
-                    accepted_host_connect_tx,
-                    stop_rx,
-                )
+                .process_control_tube(async_control_tube, accepted_host_connect_tx, stop_rx)
                 .fuse();
             pin_mut!(control_handler);
 

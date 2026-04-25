@@ -22,6 +22,7 @@ use hypervisor::IrqSource;
 use hypervisor::IrqSourceChip;
 use hypervisor::MPState;
 use hypervisor::Vcpu;
+use hypervisor::Vm;
 use sync::Mutex;
 
 use super::AARCH64_GIC_NR_SPIS;
@@ -183,9 +184,7 @@ impl IrqChip for HvfKernelIrqChip {
         let routes: Vec<IrqRoute> = self.routes.lock().clone();
         let matches: Vec<IrqRoute> = routes.into_iter().filter(|r| r.gsi == irq).collect();
         if matches.is_empty() {
-            return self
-                .vm
-                .set_gic_spi(Self::gsi_to_spi_intid(irq), level);
+            return self.vm.set_gic_spi(Self::gsi_to_spi_intid(irq), level);
         }
         for route in matches {
             match route.source {
@@ -198,11 +197,13 @@ impl IrqChip for HvfKernelIrqChip {
                     chip: IrqSourceChip::Gic,
                     pin,
                 } => {
-                    self.vm
-                        .set_gic_spi(Self::gsi_to_spi_intid(pin), level)?;
+                    self.vm.set_gic_spi(Self::gsi_to_spi_intid(pin), level)?;
                 }
                 _ => {
-                    error!("HvfKernelIrqChip: unexpected route source {:?}", route.source);
+                    error!(
+                        "HvfKernelIrqChip: unexpected route source {:?}",
+                        route.source
+                    );
                     return Err(Error::new(libc::EINVAL));
                 }
             }

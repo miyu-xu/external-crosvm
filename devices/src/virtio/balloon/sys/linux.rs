@@ -25,10 +25,12 @@ pub(in crate::virtio::balloon) fn reclaim_memory(
     guest_address: &GuestAddress,
     len: u64,
     _vm_memory_client: &VmMemoryClient,
-) {}
+) {
+}
 
 // no-op
 pub(in crate::virtio::balloon) fn balloon_target_reached(
     size: u64,
     _vm_memory_client: &VmMemoryClient,
-) {}
+) {
+}

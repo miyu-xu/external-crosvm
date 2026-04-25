@@ -2,8 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#[cfg(target_os = "macos")]
+use std::fs::File;
 use std::future::Future;
 use std::io;
+#[cfg(target_os = "macos")]
+use std::io::Read;
+#[cfg(target_os = "macos")]
+use std::io::Write;
 use std::mem;
 use std::os::fd::AsRawFd;
 use std::pin::Pin;
@@ -17,6 +23,7 @@ use base::add_fd_flags;
 use base::warn;
 use base::AsRawDescriptor;
 use base::AsRawDescriptors;
+#[cfg(not(target_os = "macos"))]
 use base::Event;
 use base::EventType;
 use base::RawDescriptor;
@@ -45,6 +52,9 @@ pub enum Error {
     /// Failed to create the Event for waking the executor.
     #[error("Failed to create the Event for waking the executor: {0}")]
     CreateEvent(base::Error),
+    #[cfg(target_os = "macos")]
+    #[error("Failed to create the wake pipe: {0}")]
+    CreateWakePipe(base::Error),
     /// Creating a context to wait on FDs failed.
     #[error("An error creating the fd waiting context: {0}")]
     CreatingContext(base::Error),
@@ -78,6 +88,8 @@ impl From<Error> for io::Error {
             CantClearWakeEvent(e) => e.into(),
             CloneEvent(e) => e.into(),
             CreateEvent(e) => e.into(),
+            #[cfg(target_os = "macos")]
+            CreateWakePipe(e) => e.into(),
             DuplicatingFd(e) => e,
             ExecutorError(e) => io::Error::new(io::ErrorKind::Other, e),
             ExecutorGone => io::Error::new(io::ErrorKind::Other, e),
@@ -208,23 +220,45 @@ impl Drop for PendingOperation {
 pub struct EpollReactor {
     poll_ctx: WaitContext<usize>,
     ops: Mutex<Slab<OpStatus>>,
-    // This event is always present in `poll_ctx` with the special op status `WakeEvent`. It is
-    // used by `RawExecutor::wake` to break other threads out of `poll_ctx.wait()` calls (usually
-    // to notify them that `queue` has new work).
+    // This wake source is always present in `poll_ctx` with the special op status `WakeEvent`. It
+    // is used by `RawExecutor::wake` to break other threads out of `poll_ctx.wait()` calls
+    // (usually to notify them that `queue` has new work).
+    #[cfg(not(target_os = "macos"))]
     wake_event: Event,
+    #[cfg(target_os = "macos")]
+    wake_read: File,
+    #[cfg(target_os = "macos")]
+    wake_write: File,
 }
 
 impl EpollReactor {
     fn new() -> Result<Self> {
+        #[cfg(not(target_os = "macos"))]
+        let wake_event = {
+            let wake_event = Event::new().map_err(Error::CreateEvent)?;
+            add_fd_flags(wake_event.as_raw_descriptor(), libc::O_NONBLOCK)
+                .map_err(Error::SettingNonBlocking)?;
+            wake_event
+        };
+        #[cfg(target_os = "macos")]
+        let (wake_read, wake_write) = {
+            let (wake_read, wake_write) = base::pipe().map_err(Error::CreateWakePipe)?;
+            add_fd_flags(wake_read.as_raw_descriptor(), libc::O_NONBLOCK)
+                .map_err(Error::SettingNonBlocking)?;
+            add_fd_flags(wake_write.as_raw_descriptor(), libc::O_NONBLOCK)
+                .map_err(Error::SettingNonBlocking)?;
+            (wake_read, wake_write)
+        };
+
         let reactor = EpollReactor {
             poll_ctx: WaitContext::new().map_err(Error::CreatingContext)?,
             ops: Mutex::new(Slab::with_capacity(64)),
-            wake_event: {
-                let wake_event = Event::new().map_err(Error::CreateEvent)?;
-                add_fd_flags(wake_event.as_raw_descriptor(), libc::O_NONBLOCK)
-                    .map_err(Error::SettingNonBlocking)?;
-                wake_event
-            },
+            #[cfg(not(target_os = "macos"))]
+            wake_event,
+            #[cfg(target_os = "macos")]
+            wake_read,
+            #[cfg(target_os = "macos")]
+            wake_write,
         };
 
         // Add the special "wake up" op.
@@ -234,12 +268,37 @@ impl EpollReactor {
             let next_token = entry.key();
             reactor
                 .poll_ctx
-                .add_for_event(&reactor.wake_event, EventType::Read, next_token)
+                .add_for_event(reactor.wake_descriptor(), EventType::Read, next_token)
                 .map_err(Error::SubmittingWaker)?;
             entry.insert(OpStatus::WakeEvent);
         }
 
         Ok(reactor)
+    }
+
+    fn wake_descriptor(&self) -> &dyn AsRawDescriptor {
+        #[cfg(not(target_os = "macos"))]
+        {
+            &self.wake_event
+        }
+        #[cfg(target_os = "macos")]
+        {
+            &self.wake_read
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn drain_wake_pipe(&self) -> std::io::Result<()> {
+        let mut buf = [0u8; 64];
+        loop {
+            match (&self.wake_read).read(&mut buf) {
+                Ok(0) => return Ok(()),
+                Ok(n) if n < buf.len() => return Ok(()),
+                Ok(_) => continue,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     fn add_operation(
@@ -297,8 +356,15 @@ impl Reactor for EpollReactor {
     }
 
     fn wake(&self) {
+        #[cfg(not(target_os = "macos"))]
         if let Err(e) = self.wake_event.signal() {
             warn!("Failed to notify executor that a future is ready: {}", e);
+        }
+        #[cfg(target_os = "macos")]
+        if let Err(e) = (&self.wake_write).write_all(&[1]) {
+            if e.kind() != io::ErrorKind::WouldBlock {
+                warn!("Failed to notify executor that a future is ready: {}", e);
+            }
         }
     }
 
@@ -350,11 +416,14 @@ impl Reactor for EpollReactor {
                     OpStatus::Completed => panic!("poll operation completed more than once"),
                     OpStatus::WakeEvent => {
                         *op = OpStatus::WakeEvent;
+                        #[cfg(not(target_os = "macos"))]
                         match self.wake_event.wait() {
                             Ok(_) => {}
                             Err(e) if e.errno() == libc::EWOULDBLOCK => {}
                             Err(e) => return Err(e.into()),
                         }
+                        #[cfg(target_os = "macos")]
+                        self.drain_wake_pipe()?;
                         continue;
                     }
                 };
@@ -388,10 +457,15 @@ impl Reactor for EpollReactor {
 
 impl AsRawDescriptors for EpollReactor {
     fn as_raw_descriptors(&self) -> Vec<RawDescriptor> {
-        vec![
-            self.poll_ctx.as_raw_descriptor(),
-            self.wake_event.as_raw_descriptor(),
-        ]
+        let mut descriptors = vec![self.poll_ctx.as_raw_descriptor()];
+        #[cfg(not(target_os = "macos"))]
+        descriptors.push(self.wake_event.as_raw_descriptor());
+        #[cfg(target_os = "macos")]
+        {
+            descriptors.push(self.wake_read.as_raw_descriptor());
+            descriptors.push(self.wake_write.as_raw_descriptor());
+        }
+        descriptors
     }
 }
 

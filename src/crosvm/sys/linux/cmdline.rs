@@ -8,6 +8,7 @@ use argh::FromArgValue;
 use argh::FromArgs;
 use cros_async::ExecutorKind;
 use devices::virtio::block::DiskOption;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use devices::virtio::vhost::user::device;
 use devices::virtio::vhost::user::VhostUserParams;
 use devices::virtio::vsock::VsockConfig;
@@ -22,9 +23,13 @@ use crate::crosvm::config::validate_serial_parameters;
 #[argh(subcommand)]
 /// Unix Devices
 pub enum DeviceSubcommand {
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     Console(device::ConsoleOptions),
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     Fs(device::FsOptions),
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     Vsock(device::VsockOptions),
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     Wl(device::WlOptions),
 }
 

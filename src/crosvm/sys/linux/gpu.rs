@@ -11,11 +11,11 @@ use std::env;
 use std::path::PathBuf;
 
 use base::linux::move_proc_to_cgroup;
+use jail::*;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use minijail_stub::Command as MinijailCommand;
 #[cfg(all(target_os = "macos", feature = "hvf"))]
 use minijail_stub::Command as MinijailCommand;
-use jail::*;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_keyvalue::FromKeyValues;

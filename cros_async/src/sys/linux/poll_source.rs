@@ -108,12 +108,21 @@ impl<F: AsRawDescriptor> PollSource<F> {
                 // SAFETY:
                 // Safe because this will only modify `vec` and we check the return value.
                 unsafe {
-                    libc::pread64(
+                    #[cfg(any(target_os = "android", target_os = "linux"))]
+                    let res = libc::pread64(
                         self.registered_source.duped_fd.as_raw_fd(),
                         vec.as_mut_ptr() as *mut libc::c_void,
                         vec.len(),
                         offset as libc::off64_t,
-                    )
+                    );
+                    #[cfg(target_os = "macos")]
+                    let res = libc::pread(
+                        self.registered_source.duped_fd.as_raw_fd(),
+                        vec.as_mut_ptr() as *mut libc::c_void,
+                        vec.len(),
+                        offset as libc::off_t,
+                    );
+                    res
                 }
             } else {
                 // SAFETY:
@@ -163,12 +172,21 @@ impl<F: AsRawDescriptor> PollSource<F> {
                 // length is guaranteed to be valid from the pointer by
                 // io_slice_mut.
                 unsafe {
-                    libc::preadv64(
+                    #[cfg(any(target_os = "android", target_os = "linux"))]
+                    let res = libc::preadv64(
                         self.registered_source.duped_fd.as_raw_fd(),
                         iovecs.as_mut_ptr() as *mut _,
                         iovecs.len() as i32,
                         offset as libc::off64_t,
-                    )
+                    );
+                    #[cfg(target_os = "macos")]
+                    let res = libc::preadv(
+                        self.registered_source.duped_fd.as_raw_fd(),
+                        iovecs.as_mut_ptr() as *mut _,
+                        iovecs.len() as i32,
+                        offset as libc::off_t,
+                    );
+                    res
                 }
             } else {
                 // SAFETY:
@@ -222,12 +240,21 @@ impl<F: AsRawDescriptor> PollSource<F> {
                 // SAFETY:
                 // Safe because this will not modify any memory and we check the return value.
                 unsafe {
-                    libc::pwrite64(
+                    #[cfg(any(target_os = "android", target_os = "linux"))]
+                    let res = libc::pwrite64(
                         self.registered_source.duped_fd.as_raw_fd(),
                         vec.as_ptr() as *const libc::c_void,
                         vec.len(),
                         offset as libc::off64_t,
-                    )
+                    );
+                    #[cfg(target_os = "macos")]
+                    let res = libc::pwrite(
+                        self.registered_source.duped_fd.as_raw_fd(),
+                        vec.as_ptr() as *const libc::c_void,
+                        vec.len(),
+                        offset as libc::off_t,
+                    );
+                    res
                 }
             } else {
                 // SAFETY:
@@ -278,12 +305,21 @@ impl<F: AsRawDescriptor> PollSource<F> {
                 // length is guaranteed to be valid from the pointer by
                 // io_slice_mut.
                 unsafe {
-                    libc::pwritev64(
+                    #[cfg(any(target_os = "android", target_os = "linux"))]
+                    let res = libc::pwritev64(
                         self.registered_source.duped_fd.as_raw_fd(),
                         iovecs.as_ptr() as *mut _,
                         iovecs.len() as i32,
                         offset as libc::off64_t,
-                    )
+                    );
+                    #[cfg(target_os = "macos")]
+                    let res = libc::pwritev(
+                        self.registered_source.duped_fd.as_raw_fd(),
+                        iovecs.as_ptr() as *mut _,
+                        iovecs.len() as i32,
+                        offset as libc::off_t,
+                    );
+                    res
                 }
             } else {
                 // SAFETY:
@@ -354,8 +390,8 @@ impl<F: AsRawDescriptor> PollSource<F> {
     /// Sync all data of completed write operations to the backing storage, avoiding updating extra
     /// metadata.
     pub async fn fdatasync(&self) -> AsyncResult<()> {
-        // SAFETY: the duped_fd is valid and return value is checked.
-        let ret = unsafe { libc::fdatasync(self.registered_source.duped_fd.as_raw_fd()) };
+        let ret = do_fdatasync(self.registered_source.duped_fd.as_raw_fd());
+
         if ret == 0 {
             Ok(())
         } else {
@@ -377,6 +413,18 @@ impl<F: AsRawDescriptor> PollSource<F> {
     pub fn as_source(&self) -> &F {
         &self.registered_source.source
     }
+}
+
+#[cfg(any(target_os = "android", target_os = "linux"))]
+fn do_fdatasync(fd: std::os::fd::RawFd) -> libc::c_int {
+    // SAFETY: the fd is valid and the caller checks the return value.
+    unsafe { libc::fdatasync(fd) }
+}
+
+#[cfg(target_os = "macos")]
+fn do_fdatasync(fd: std::os::fd::RawFd) -> libc::c_int {
+    // SAFETY: the fd is valid and the caller checks the return value.
+    unsafe { libc::fsync(fd) }
 }
 
 // NOTE: Prefer adding tests to io_source.rs if not backend specific.

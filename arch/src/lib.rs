@@ -83,8 +83,12 @@ pub use serial::GetSerialCmdlineError;
 pub use serial::SERIAL_ADDR;
 use sync::Condvar;
 use sync::Mutex;
-#[cfg(any(target_os = "android", target_os = "linux"))]
-pub use sys::linux::PlatformBusResources;
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
+pub use sys::PlatformBusResources;
 use thiserror::Error;
 use uuid::Uuid;
 use vm_control::BatControl;
@@ -350,7 +354,11 @@ pub struct VmComponents {
     pub cpu_clusters: Vec<CpuSet>,
     #[cfg(all(
         any(target_arch = "arm", target_arch = "aarch64"),
-        any(target_os = "android", target_os = "linux")
+        any(
+            target_os = "android",
+            target_os = "linux",
+            all(target_os = "macos", feature = "hvf")
+        )
     ))]
     pub cpu_frequencies: BTreeMap<usize, Vec<u32>>,
     pub delay_rt: bool,
@@ -373,7 +381,11 @@ pub struct VmComponents {
     pub no_smt: bool,
     #[cfg(all(
         any(target_arch = "arm", target_arch = "aarch64"),
-        any(target_os = "android", target_os = "linux")
+        any(
+            target_os = "android",
+            target_os = "linux",
+            all(target_os = "macos", feature = "hvf")
+        )
     ))]
     pub normalized_cpu_capacities: BTreeMap<usize, u32>,
     #[cfg(target_arch = "x86_64")]
@@ -692,6 +704,9 @@ pub enum DeviceRegistrationError {
     /// Could not setup VFIO platform IRQ for the device.
     #[error("Setting up VFIO platform IRQ: {0}")]
     SetupVfioPlatformIrq(anyhow::Error),
+    /// The feature is not implemented on this host backend.
+    #[error("{0} is not supported on this host backend")]
+    UnsupportedHostFeature(&'static str),
 }
 
 /// Config a PCI device for used by this vm.
@@ -778,7 +793,7 @@ pub fn configure_pci_device<V: VmArch, Vcpu: VcpuArch>(
         Arc::new(Mutex::new(device))
     };
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let arced_dev = {
         device.on_sandboxed();
         Arc::new(Mutex::new(device))
@@ -816,7 +831,7 @@ pub fn generate_virtio_mmio_bus(
     sdts: Vec<SDT>,
     #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
 ) -> Result<(BTreeMap<u32, String>, Vec<SDT>), DeviceRegistrationError> {
-    #[cfg_attr(windows, allow(unused_mut))]
+    #[cfg_attr(any(windows, target_os = "macos"), allow(unused_mut))]
     let mut pid_labels = BTreeMap::new();
 
     // sdts can be updated only on x86 platforms.
@@ -825,7 +840,7 @@ pub fn generate_virtio_mmio_bus(
     for dev_value in devices.into_iter() {
         #[cfg(any(target_os = "android", target_os = "linux"))]
         let (mut device, jail) = dev_value;
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let (mut device, _) = dev_value;
 
         let ranges = device
@@ -878,7 +893,7 @@ pub fn generate_virtio_mmio_bus(
             Arc::new(Mutex::new(device))
         };
 
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let arced_dev = {
             device.on_sandboxed();
             Arc::new(Mutex::new(device))
@@ -1054,7 +1069,7 @@ pub fn generate_pci_root(
         root_bus,
     )
     .map_err(DeviceRegistrationError::CreateRoot)?;
-    #[cfg_attr(windows, allow(unused_mut))]
+    #[cfg_attr(any(windows, target_os = "macos"), allow(unused_mut))]
     let mut pid_labels = BTreeMap::new();
 
     // Allocate legacy INTx
@@ -1156,7 +1171,7 @@ pub fn generate_pci_root(
     for (dev_idx, dev_value) in devices {
         #[cfg(any(target_os = "android", target_os = "linux"))]
         let (mut device, jail) = dev_value;
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let (mut device, _) = dev_value;
         let address = device_addrs[dev_idx];
 
@@ -1205,7 +1220,7 @@ pub fn generate_pci_root(
             device.on_sandboxed();
             Arc::new(Mutex::new(device))
         };
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let arced_dev = {
             device.on_sandboxed();
             Arc::new(Mutex::new(device))

@@ -16,7 +16,7 @@ pub mod gdb;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
 use base::linux::MemoryMappingBuilderUnix;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use base::sys::call_with_extended_max_files;
@@ -412,7 +412,14 @@ pub enum VmMemorySource {
 fn to_rutabaga_desciptor(s: SafeDescriptor) -> RutabagaDescriptor {
     // SAFETY:
     // Safe because we own the SafeDescriptor at this point.
-    unsafe { RutabagaDescriptor::from_raw_descriptor(s.into_raw_descriptor()) }
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    unsafe {
+        RutabagaDescriptor::from_raw_descriptor(s.into_raw_descriptor())
+    }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        RutabagaDescriptor::from_raw_descriptor(i64::from(s.into_raw_descriptor()))
+    }
 }
 
 struct RutabagaMemoryRegion {

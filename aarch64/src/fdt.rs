@@ -3,6 +3,11 @@
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 use std::collections::HashSet;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -13,7 +18,11 @@ use arch::apply_device_tree_overlays;
 use arch::serial::SerialDeviceInfo;
 use arch::CpuSet;
 use arch::DtbOverlay;
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 use arch::PlatformBusResources;
 use base::open_file_or_duplicate;
 use cros_fdt::Error;
@@ -22,6 +31,11 @@ use cros_fdt::Result;
 // This is a Battery related constant
 use devices::bat::GOLDFISHBAT_MMIO_LEN;
 use devices::pl030::PL030_AMBA_ID;
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 use devices::IommuDevType;
 use devices::PciAddress;
 use devices::PciInterruptPin;
@@ -35,6 +49,8 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
 // These are GIC address-space location constants.
+#[cfg(target_os = "macos")]
+use crate::AARCH64_AXI_BASE;
 use crate::AARCH64_GIC_CPUI_BASE;
 use crate::AARCH64_GIC_CPUI_SIZE;
 use crate::AARCH64_GIC_DIST_BASE;
@@ -203,8 +219,25 @@ fn create_gic_node(fdt: &mut Fdt, is_gicv3: bool, num_cpus: u64) -> Result<()> {
     let intc_node = fdt.root_mut().subnode_mut("intc")?;
     if is_gicv3 {
         intc_node.set_prop("compatible", "arm,gic-v3")?;
-        gic_reg_prop[2] = AARCH64_GIC_DIST_BASE - (AARCH64_GIC_REDIST_SIZE * num_cpus);
-        gic_reg_prop[3] = AARCH64_GIC_REDIST_SIZE * num_cpus;
+        let redist_size = AARCH64_GIC_REDIST_SIZE * num_cpus;
+        #[cfg(target_os = "macos")]
+        {
+            gic_reg_prop[0] = AARCH64_AXI_BASE - redist_size - AARCH64_GIC_DIST_SIZE;
+            gic_reg_prop[2] = AARCH64_AXI_BASE - redist_size;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            gic_reg_prop[2] = AARCH64_GIC_DIST_BASE - redist_size;
+        }
+        gic_reg_prop[3] = redist_size;
+        #[cfg(target_os = "macos")]
+        {
+            intc_node.set_prop("ranges", ())?;
+            intc_node.set_prop(
+                "interrupts",
+                &[GIC_FDT_IRQ_TYPE_PPI, 9u32, IRQ_TYPE_LEVEL_HIGH],
+            )?;
+        }
     } else {
         intc_node.set_prop("compatible", "arm,cortex-a15-gic")?;
         gic_reg_prop[2] = AARCH64_GIC_CPUI_BASE;
@@ -314,6 +347,9 @@ fn create_psci_node(fdt: &mut Fdt, version: &PsciVersion) -> Result<()> {
     let psci_node = fdt.root_mut().subnode_mut("psci")?;
     psci_node.set_prop("compatible", compatible.as_slice())?;
     // Only support aarch64 guest
+    #[cfg(target_os = "macos")]
+    psci_node.set_prop("method", "smc")?;
+    #[cfg(not(target_os = "macos"))]
     psci_node.set_prop("method", "hvc")?;
     Ok(())
 }
@@ -370,7 +406,11 @@ fn create_kvm_cpufreq_node(fdt: &mut Fdt) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 fn get_pkvm_pviommu_ids(platform_dev_resources: &Vec<PlatformBusResources>) -> Result<Vec<u32>> {
     let mut ids = HashSet::new();
 
@@ -516,7 +556,7 @@ fn create_pci_nodes(
         masks.push(0x7); // allow INTA#-INTD# (1 | 2 | 3 | 4)
     }
 
-    let pci_node = fdt.root_mut().subnode_mut("pci")?;
+    let pci_node = fdt.root_mut().subnode_mut(&format!("pci@{:x}", cfg.base))?;
     pci_node.set_prop("compatible", "pci-host-cam-generic")?;
     pci_node.set_prop("device_type", "pci")?;
     pci_node.set_prop("ranges", ranges)?;
@@ -632,7 +672,7 @@ fn add_symbols_entry(fdt: &mut Fdt, symbol: &str, path: &str) -> Result<()> {
 /// * `psci_version` - the current PSCI version
 /// * `swiotlb` - Reserve a memory pool for DMA. Tuple of base address and size.
 /// * `bat_mmio_base_and_irq` - The battery base address and irq number
-/// * `vmwdt_cfg` - The virtual watchdog configuration
+/// * `vmwdt_cfg` - Optional virtual watchdog configuration
 /// * `dump_device_tree_blob` - Option path to write DTB to
 /// * `vm_generator` - Callback to add additional nodes to DTB. create_vm uses Aarch64Vm::create_fdt
 pub fn create_fdt(
@@ -641,9 +681,12 @@ pub fn create_fdt(
     pci_irqs: Vec<(PciAddress, u32, PciInterruptPin)>,
     pci_cfg: PciConfigRegion,
     pci_ranges: &[PciRange],
-    #[cfg(any(target_os = "android", target_os = "linux"))] platform_dev_resources: Vec<
-        PlatformBusResources,
-    >,
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", feature = "hvf")
+    ))]
+    platform_dev_resources: Vec<PlatformBusResources>,
     num_cpus: u32,
     cpu_mpidr_generator: &impl Fn(usize) -> Option<u64>,
     cpu_clusters: Vec<CpuSet>,
@@ -659,7 +702,7 @@ pub fn create_fdt(
     psci_version: PsciVersion,
     swiotlb: Option<(Option<GuestAddress>, u64)>,
     bat_mmio_base_and_irq: Option<(u64, u32)>,
-    vmwdt_cfg: VmWdtConfig,
+    vmwdt_cfg: Option<VmWdtConfig>,
     dump_device_tree_blob: Option<PathBuf>,
     vm_generator: &impl Fn(&mut Fdt, &BTreeMap<&str, u32>) -> cros_fdt::Result<()>,
     dynamic_power_coefficient: BTreeMap<usize, u32>,
@@ -715,13 +758,20 @@ pub fn create_fdt(
     if let Some((bat_mmio_base, bat_irq)) = bat_mmio_base_and_irq {
         create_battery_node(&mut fdt, bat_mmio_base, bat_irq)?;
     }
-    create_vmwdt_node(&mut fdt, vmwdt_cfg, num_cpus)?;
+    if let Some(vmwdt_cfg) = vmwdt_cfg {
+        create_vmwdt_node(&mut fdt, vmwdt_cfg, num_cpus)?;
+    }
     create_kvm_cpufreq_node(&mut fdt)?;
     vm_generator(&mut fdt, &phandles)?;
     if !cpu_frequencies.is_empty() {
         create_virt_cpufreq_node(&mut fdt, num_cpus as u64)?;
     }
 
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", feature = "hvf")
+    ))]
     let pviommu_ids = get_pkvm_pviommu_ids(&platform_dev_resources)?;
 
     let cache_offset = phandles_key_cache.len();
@@ -738,9 +788,17 @@ pub fn create_fdt(
     apply_device_tree_overlays(
         &mut fdt,
         device_tree_overlays,
-        #[cfg(any(target_os = "android", target_os = "linux"))]
+        #[cfg(any(
+            target_os = "android",
+            target_os = "linux",
+            all(target_os = "macos", feature = "hvf")
+        ))]
         platform_dev_resources,
-        #[cfg(any(target_os = "android", target_os = "linux"))]
+        #[cfg(any(
+            target_os = "android",
+            target_os = "linux",
+            all(target_os = "macos", feature = "hvf")
+        ))]
         &phandles,
     )?;
 

@@ -11,7 +11,10 @@ use anyhow::anyhow;
 use anyhow::Context;
 use base::debug;
 use base::error;
+use base::info;
 use base::trace;
+#[cfg(target_os = "macos")]
+use base::warn;
 use base::AsRawDescriptor;
 use base::AsRawDescriptors;
 use base::Event;
@@ -629,6 +632,8 @@ impl VirtioPciDevice {
 
         let bar0 = self.config_regs.get_bar_addr(self.settings_bar);
         let notify_base = bar0 + NOTIFICATION_BAR_OFFSET;
+        #[cfg(target_os = "macos")]
+        let device_label = self.debug_label();
 
         // Use ready queues and their events.
         let queues = self
@@ -639,14 +644,31 @@ impl VirtioPciDevice {
             .filter(|((_, q), _)| q.ready())
             .map(|((queue_index, queue), evt)| {
                 if !evt.ioevent_registered {
-                    self.ioevent_vm_memory_client
+                    let register_result = self
+                        .ioevent_vm_memory_client
                         .register_io_event(
                             evt.event.try_clone().context("failed to clone Event")?,
                             notify_base + queue_index as u64 * u64::from(NOTIFY_OFF_MULTIPLIER),
                             Datamatch::AnyLength,
-                        )
-                        .context("failed to register ioevent")?;
-                    evt.ioevent_registered = true;
+                        );
+                    match register_result {
+                        Ok(()) => {
+                            evt.ioevent_registered = true;
+                        }
+                        #[cfg(target_os = "macos")]
+                        Err(e) => {
+                            warn!(
+                                "{} failed to register ioevent for queue {} on macOS, falling back to MMIO notify path: {:#}",
+                                device_label,
+                                queue_index,
+                                e
+                            );
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        Err(e) => {
+                            return Err(e).context("failed to register ioevent");
+                        }
+                    }
                 }
                 let queue_evt = evt.event.try_clone().context("failed to clone queue_evt")?;
                 Ok((
@@ -946,7 +968,11 @@ impl PciDevice for VirtioPciDevice {
                     // triggers its event, which is equivalent to what the ioevent would do.
                     let queue_index = (offset - NOTIFICATION_BAR_OFFSET) as usize
                         / NOTIFY_OFF_MULTIPLIER as usize;
-                    trace!("write_bar notification fallback for queue {}", queue_index);
+                    info!(
+                        "{} MMIO notification fallback for queue {}",
+                        self.device.debug_label(),
+                        queue_index
+                    );
                     if let Some(evt) = self.queue_evts.get(queue_index) {
                         let _ = evt.event.signal();
                     }
@@ -1413,14 +1439,29 @@ impl Suspendable for VirtioPciDevice {
             .filter(|((_, q), _)| q.ready())
             .try_for_each(|((queue_index, _queue), evt)| {
                 if !evt.ioevent_registered {
-                    self.ioevent_vm_memory_client
+                    let register_result = self
+                        .ioevent_vm_memory_client
                         .register_io_event(
                             evt.event.try_clone().context("failed to clone Event")?,
                             notify_base + queue_index as u64 * u64::from(NOTIFY_OFF_MULTIPLIER),
                             Datamatch::AnyLength,
-                        )
-                        .context("failed to register ioevent")?;
-                    evt.ioevent_registered = true;
+                        );
+                    match register_result {
+                        Ok(()) => {
+                            evt.ioevent_registered = true;
+                        }
+                        #[cfg(target_os = "macos")]
+                        Err(e) => {
+                            warn!(
+                                "failed to restore ioevent for queue {} on macOS, falling back to MMIO notify path: {:#}",
+                                queue_index, e
+                            );
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        Err(e) => {
+                            return Err(e).context("failed to register ioevent");
+                        }
+                    }
                 }
                 Ok::<(), anyhow::Error>(())
             })?;

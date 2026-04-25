@@ -5,8 +5,13 @@
 #[cfg(target_os = "android")]
 mod android;
 pub mod cmdline;
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+#[path = "macos/config.rs"]
+pub mod config;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 pub mod config;
 mod device_helpers;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 pub(crate) mod ext2;
 #[cfg(feature = "gpu")]
 pub(crate) mod gpu;
@@ -80,6 +85,7 @@ use devices::create_devices_worker_thread;
 use devices::serial_device::SerialHardware;
 #[cfg(all(feature = "pvclock", target_arch = "x86_64"))]
 use devices::tsc::get_tsc_sync_mitigations;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::vfio::VfioContainerManager;
 #[cfg(feature = "gpu")]
 use devices::virtio;
@@ -104,6 +110,7 @@ use devices::virtio::VirtioTransportType;
 use devices::Bus;
 use devices::BusDeviceObj;
 use devices::BusType;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::CoIommuDev;
 #[cfg(feature = "usb")]
 use devices::DeviceProvider;
@@ -135,7 +142,9 @@ use devices::PcieHostPort;
 use devices::PcieRootPort;
 #[cfg(target_arch = "x86_64")]
 use devices::PcieUpstreamPort;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::PvPanicCode;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::PvPanicPciDevice;
 #[cfg(feature = "pci-hotplug")]
 use devices::ResourceCarrier;
@@ -156,6 +165,8 @@ use hypervisor::MemCacheType;
 use hypervisor::ProtectionType;
 use hypervisor::Vm;
 use hypervisor::VmCap;
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+use jail::FakeMinijailStub as Minijail;
 use jail::*;
 #[cfg(feature = "pci-hotplug")]
 use jail_warden::JailWarden;
@@ -166,8 +177,6 @@ use jail_warden::PermissiveJailWarden;
 use libc;
 use metrics::MetricsController;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail_stub::Minijail;
-#[cfg(all(target_os = "macos", feature = "hvf"))]
 use minijail_stub::Minijail;
 #[cfg(feature = "pci-hotplug")]
 use pci_hotplug_manager::PciHotPlugManager;
@@ -184,6 +193,8 @@ use swap::SwapController;
 use sync::Condvar;
 use sync::Mutex;
 use vm_control::api::VmMemoryClient;
+use vm_control::sys::FsMappingRequest;
+use vm_control::sys::VmMemoryMappingRequest;
 use vm_control::*;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
@@ -206,10 +217,45 @@ use crate::crosvm::gdb::gdb_thread;
 use crate::crosvm::gdb::GdbStub;
 #[cfg(target_arch = "x86_64")]
 use crate::crosvm::ratelimit::Ratelimit;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use crate::crosvm::sys::cmdline::DevicesCommand;
 use crate::crosvm::sys::config::SharedDir;
 use crate::crosvm::sys::config::SharedDirKind;
-use crate::crosvm::sys::platform::vcpu::VcpuPidTid;
+
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+#[derive(Default)]
+struct VfioContainerManager;
+
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+impl VfioContainerManager {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PvPanicCode {
+    Unknown,
+    Panicked,
+}
+
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+impl PvPanicCode {
+    fn from_u8(_val: u8) -> Self {
+        Self::Panicked
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+impl std::fmt::Display for PvPanicCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown => write!(f, "unknown"),
+            Self::Panicked => write!(f, "panicked"),
+        }
+    }
+}
 
 const KVM_PATH: &str = "/dev/kvm";
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
@@ -243,6 +289,12 @@ fn create_virtio_devices(
     #[cfg(any(feature = "gpu", feature = "video-decoder", feature = "video-encoder"))]
     let mut resource_bridges = Vec::<Tube>::new();
 
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    if !cfg.wayland_socket_paths.is_empty() {
+        anyhow::bail!("Wayland devices are not supported on macOS");
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "hvf")))]
     if !cfg.wayland_socket_paths.is_empty() {
         #[cfg_attr(not(feature = "gpu"), allow(unused_mut))]
         let mut wl_resource_bridge = None::<Tube>;
@@ -389,6 +441,12 @@ fn create_virtio_devices(
         );
     }
 
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    if !cfg.scsis.is_empty() {
+        anyhow::bail!("SCSI devices are not supported on macOS");
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "hvf")))]
     if !cfg.scsis.is_empty() {
         let scsi_config = ScsiConfig(&cfg.scsis);
         devs.push(
@@ -396,6 +454,12 @@ fn create_virtio_devices(
         );
     }
 
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    if !cfg.pmems.is_empty() {
+        anyhow::bail!("pmem devices are not supported on macOS");
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "hvf")))]
     for (index, pmem_disk) in cfg.pmems.iter().enumerate() {
         let pmem_device_tube = pmem_device_tubes.remove(0);
         devs.push(create_pmem_device(
@@ -409,6 +473,12 @@ fn create_virtio_devices(
         )?);
     }
 
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    if !cfg.pmem_ext2.is_empty() {
+        anyhow::bail!("pmem-ext2 is not supported on macOS");
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "hvf")))]
     for (index, pmem_ext2) in cfg.pmem_ext2.iter().enumerate() {
         let pmem_device_tube = pmem_device_tubes.remove(0);
         let vm_memory_client = pmem_ext2_mem_clients.remove(0);
@@ -712,6 +782,12 @@ fn create_virtio_devices(
 
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     {
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        if cfg.vhost_scmi {
+            anyhow::bail!("vhost-scmi is not supported on macOS");
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hvf")))]
         if cfg.vhost_scmi {
             devs.push(create_vhost_scmi_device(
                 cfg.protection_type,
@@ -720,6 +796,13 @@ fn create_virtio_devices(
             )?);
         }
     }
+
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    if !cfg.vhost_user_fs.is_empty() {
+        anyhow::bail!("vhost-user-fs is not supported on macOS");
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "hvf")))]
     for vhost_user_fs in &cfg.vhost_user_fs {
         devs.push(create_vhost_user_fs_device(
             cfg.protection_type,
@@ -727,6 +810,12 @@ fn create_virtio_devices(
         )?);
     }
 
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    if !cfg.shared_dirs.is_empty() {
+        anyhow::bail!("shared directories are not supported on macOS yet");
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "hvf")))]
     for shared_dir in &cfg.shared_dirs {
         let SharedDir {
             src,
@@ -745,7 +834,7 @@ fn create_virtio_devices(
                 create_fs_device(
                     cfg.protection_type,
                     &cfg.jail_config,
-                    *ugid,
+                    ugid,
                     uid_map,
                     gid_map,
                     src,
@@ -757,13 +846,17 @@ fn create_virtio_devices(
             SharedDirKind::P9 => create_9p_device(
                 cfg.protection_type,
                 &cfg.jail_config,
-                *ugid,
-                uid_map,
-                gid_map,
-                src,
-                tag,
+                ugid,
+                &uid_map,
+                &gid_map,
+                &src,
+                &tag,
                 p9_cfg.clone(),
             )?,
+            #[cfg(all(target_os = "macos", feature = "hvf"))]
+            SharedDirKind::P9 => {
+                anyhow::bail!("9p shared directories are not supported on macOS");
+            }
         };
         devs.push(dev);
     }
@@ -819,6 +912,12 @@ fn create_devices(
     let mut balloon_inflate_tube: Option<Tube> = None;
     #[cfg(feature = "gpu")]
     let mut has_vfio_gfx_device = false;
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    if !cfg.vfio.is_empty() {
+        anyhow::bail!("VFIO passthrough is not supported on macOS");
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "hvf")))]
     if !cfg.vfio.is_empty() {
         let mut coiommu_attached_endpoints = Vec::new();
 
@@ -1033,6 +1132,7 @@ fn create_devices(
         devices.push((Box::new(StubPciDevice::new(params)), None));
     }
 
+    #[cfg(not(all(target_os = "macos", feature = "hvf")))]
     devices.push((
         Box::new(PvPanicPciDevice::new(vm_evt_wrtube.try_clone()?)),
         None,
@@ -1540,6 +1640,7 @@ fn run_gz(device_path: Option<&Path>, cfg: Config, components: VmComponents) -> 
     )
 }
 
+#[cfg(any(target_os = "android", target_os = "linux"))]
 fn run_kvm(device_path: Option<&Path>, cfg: Config, components: VmComponents) -> Result<ExitState> {
     use devices::KvmKernelIrqChip;
     #[cfg(target_arch = "x86_64")]
@@ -1636,6 +1737,15 @@ fn run_kvm(device_path: Option<&Path>, cfg: Config, components: VmComponents) ->
         #[cfg(feature = "swap")]
         swap_controller,
     )
+}
+
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+fn run_kvm(
+    _device_path: Option<&Path>,
+    _cfg: Config,
+    _components: VmComponents,
+) -> Result<ExitState> {
+    Err(anyhow!("KVM is not available on macOS hosts"))
 }
 
 #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), feature = "gunyah"))]
@@ -3742,7 +3852,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
 
     let mut vcpus_pid_tid = BTreeMap::new();
     for _ in 0..vcpu_handles.len() {
-        let vcpu_pid_tid: VcpuPidTid = vcpu_pid_tid_receiver
+        let vcpu_pid_tid = vcpu_pid_tid_receiver
             .recv()
             .context("failed receiving vcpu pid/tid")?;
         if vcpus_pid_tid
@@ -4147,11 +4257,13 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         linux.irq_chip.as_irq_chip(),
         VcpuControl::RunState(VmRunMode::Exiting),
     );
+    eprintln!("crosvm: cleanup begin join_vcpus");
     for (handle, _) in vcpu_handles {
         if let Err(e) = handle.join() {
             error!("failed to join vcpu thread: {:?}", e);
         }
     }
+    eprintln!("crosvm: cleanup done join_vcpus");
 
     // After joining all vcpu threads, unregister the process-wide signal handler.
     if let Err(e) = vcpu::remove_vcpu_signal_handler() {
@@ -4172,6 +4284,7 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     }
 
     if linux.devices_thread.is_some() {
+        eprintln!("crosvm: cleanup begin devices_thread");
         if let Err(e) = device_ctrl_tube.send(&DeviceControlCommand::Exit) {
             error!("failed to stop device control loop: {}", e);
         };
@@ -4180,9 +4293,11 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                 error!("failed to exit devices thread: {:?}", e);
             }
         }
+        eprintln!("crosvm: cleanup done devices_thread");
     }
 
     // Shut down the VM Memory handler thread.
+    eprintln!("crosvm: cleanup begin vm_memory_handler");
     if let Err(e) = vm_memory_handler_control.send(&VmMemoryHandlerRequest::Exit) {
         error!(
             "failed to request exit from VM Memory handler thread: {}",
@@ -4192,14 +4307,17 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     if let Err(e) = vm_memory_handler_thread.join() {
         error!("failed to exit VM Memory handler thread: {:?}", e);
     }
+    eprintln!("crosvm: cleanup done vm_memory_handler");
 
     // Shut down the IRQ handler thread.
+    eprintln!("crosvm: cleanup begin irq_handler");
     if let Err(e) = irq_handler_control.send(&IrqHandlerRequest::Exit) {
         error!("failed to request exit from IRQ handler thread: {}", e);
     }
     if let Err(e) = irq_handler_thread.join() {
         error!("failed to exit irq handler thread: {:?}", e);
     }
+    eprintln!("crosvm: cleanup done irq_handler");
 
     // At this point, the only remaining `Arc` references to the `Bus` objects should be the ones
     // inside `linux`. If the checks below fail, then some other thread is probably still running
@@ -4364,7 +4482,8 @@ fn irq_handler_thread(
                         }
                         Err(e) => {
                             if let TubeError::Disconnected = e {
-                                panic!("irq handler control tube disconnected.");
+                                warn!("irq handler control tube disconnected during teardown");
+                                break 'wait;
                             } else {
                                 error!("failed to recv IrqHandlerRequest: {}", e);
                             }
@@ -4552,7 +4671,8 @@ fn vm_memory_handler_thread(
                     },
                     Err(e) => {
                         if let TubeError::Disconnected = e {
-                            panic!("vm memory control tube disconnected.");
+                            warn!("vm memory control tube disconnected during teardown");
+                            break 'wait;
                         } else {
                             error!("failed to recv VmMemoryHandlerRequest: {}", e);
                         }
@@ -4566,8 +4686,21 @@ fn vm_memory_handler_thread(
                     {
                         match tube.recv::<VmMemoryRequest>() {
                             Ok(request) => {
+                                #[cfg(any(target_os = "android", target_os = "linux"))]
                                 let response = request.execute(
                                     tube,
+                                    &mut vm,
+                                    &mut sys_allocator_mutex.lock(),
+                                    &mut gralloc,
+                                    if *expose_with_viommu {
+                                        iommu_client.as_mut()
+                                    } else {
+                                        None
+                                    },
+                                    &mut region_state,
+                                );
+                                #[cfg(all(target_os = "macos", feature = "hvf"))]
+                                let response = request.execute(
                                     &mut vm,
                                     &mut sys_allocator_mutex.lock(),
                                     &mut gralloc,
@@ -4674,6 +4807,7 @@ where
 /// call outside of `start_devices`!
 ///
 /// Returns the pid of the jailed device process.
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
     jail_config: &Option<JailConfig>,
     params: T,
@@ -4728,6 +4862,7 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
 
             // Make sure the child process does not survive its parent.
             // SAFETY: trivially safe
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } < 0 {
                 panic!("call to prctl(PR_SET_DEATHSIG, SIGKILL) failed. Aborting child process.");
             }
@@ -4739,7 +4874,10 @@ fn jail_and_start_vu_device<T: VirtioDeviceBuilder>(
             // SAFETY:
             // Safe because we trimmed the name to 15 characters (and pthread_setname_np will return
             // an error if we don't anyway).
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             let _ = unsafe { libc::pthread_setname_np(libc::pthread_self(), thread_name.as_ptr()) };
+            #[cfg(all(target_os = "macos", feature = "hvf"))]
+            let _ = unsafe { libc::pthread_setname_np(thread_name.as_ptr()) };
 
             // Run the device loop and terminate the child process once it exits.
             let res = match listener.run_device(ex, device) {
@@ -4822,6 +4960,7 @@ fn start_vhost_user_control_server(
     }
 }
 
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 pub fn start_devices(opts: DevicesCommand) -> anyhow::Result<()> {
     if let Some(async_executor) = opts.async_executor {
         Executor::set_default_executor_kind(async_executor)

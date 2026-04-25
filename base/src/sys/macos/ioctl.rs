@@ -20,20 +20,12 @@ pub unsafe fn ioctl<F: AsRawDescriptor>(descriptor: &F, nr: IoctlNr) -> c_int {
 }
 
 /// Run an ioctl with a single value argument.
-pub unsafe fn ioctl_with_val(
-    descriptor: &dyn AsRawDescriptor,
-    nr: IoctlNr,
-    arg: c_ulong,
-) -> c_int {
+pub unsafe fn ioctl_with_val(descriptor: &dyn AsRawDescriptor, nr: IoctlNr, arg: c_ulong) -> c_int {
     libc::ioctl(descriptor.as_raw_descriptor(), nr, arg)
 }
 
 /// Run an ioctl with an immutable reference.
-pub unsafe fn ioctl_with_ref<T>(
-    descriptor: &dyn AsRawDescriptor,
-    nr: IoctlNr,
-    arg: &T,
-) -> c_int {
+pub unsafe fn ioctl_with_ref<T>(descriptor: &dyn AsRawDescriptor, nr: IoctlNr, arg: &T) -> c_int {
     libc::ioctl(
         descriptor.as_raw_descriptor(),
         nr,

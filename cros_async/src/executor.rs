@@ -56,11 +56,7 @@ static DEFAULT_EXECUTOR_KIND: OnceCell<ExecutorKind> = OnceCell::new();
 
 impl Default for ExecutorKind {
     fn default() -> Self {
-        #[cfg(any(
-            target_os = "android",
-            target_os = "linux",
-            target_os = "macos"
-        ))]
+        #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
         let default_fn = || ExecutorKindSys::Fd.into();
         #[cfg(windows)]
         let default_fn = || ExecutorKindSys::Handle.into();
@@ -90,11 +86,7 @@ impl FromArgValue for ExecutorKind {
             let mut des = KeyValueDeserializer::from(value);
 
             let kind: ExecutorKind = match (des.parse_identifier()?, des.next_char()) {
-                #[cfg(any(
-                    target_os = "android",
-                    target_os = "linux",
-                    target_os = "macos"
-                ))]
+                #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
                 ("epoll", None) => ExecutorKindSys::Fd.into(),
                 #[cfg(any(target_os = "android", target_os = "linux"))]
                 ("uring", None) => ExecutorKindSys::Uring.into(),
@@ -163,11 +155,7 @@ impl<'de> Deserialize<'de> for ExecutorKind {
 ///
 /// `await`ing the `TaskHandle` waits for the task to finish and yields its result.
 pub enum TaskHandle<R> {
-    #[cfg(any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos"
-    ))]
+    #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
     Fd(common_executor::RawTaskHandle<linux::EpollReactor, R>),
     #[cfg(any(target_os = "android", target_os = "linux"))]
     Uring(common_executor::RawTaskHandle<linux::UringReactor, R>),
@@ -180,11 +168,7 @@ pub enum TaskHandle<R> {
 impl<R: Send + 'static> TaskHandle<R> {
     pub fn detach(self) {
         match self {
-            #[cfg(any(
-                target_os = "android",
-                target_os = "linux",
-                target_os = "macos"
-            ))]
+            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
             TaskHandle::Fd(f) => f.detach(),
             #[cfg(any(target_os = "android", target_os = "linux"))]
             TaskHandle::Uring(u) => u.detach(),
@@ -199,11 +183,7 @@ impl<R: Send + 'static> TaskHandle<R> {
     // finished.
     pub async fn cancel(self) -> Option<R> {
         match self {
-            #[cfg(any(
-                target_os = "android",
-                target_os = "linux",
-                target_os = "macos"
-            ))]
+            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
             TaskHandle::Fd(f) => f.cancel().await,
             #[cfg(any(target_os = "android", target_os = "linux"))]
             TaskHandle::Uring(u) => u.cancel().await,
@@ -220,11 +200,7 @@ impl<R: 'static> Future for TaskHandle<R> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context) -> std::task::Poll<Self::Output> {
         match self.get_mut() {
-            #[cfg(any(
-                target_os = "android",
-                target_os = "linux",
-                target_os = "macos"
-            ))]
+            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
             TaskHandle::Fd(f) => Pin::new(f).poll(cx),
             #[cfg(any(target_os = "android", target_os = "linux"))]
             TaskHandle::Uring(u) => Pin::new(u).poll(cx),
@@ -355,11 +331,7 @@ pub(crate) trait ExecutorTrait {
 /// ```
 #[derive(Clone)]
 pub enum Executor {
-    #[cfg(any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos"
-    ))]
+    #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
     Fd(Arc<RawExecutor<linux::EpollReactor>>),
     #[cfg(any(target_os = "android", target_os = "linux"))]
     Uring(Arc<RawExecutor<linux::UringReactor>>),
@@ -380,11 +352,7 @@ impl Executor {
     /// Create a new `Executor` of the given `ExecutorKind`.
     pub fn with_executor_kind(kind: ExecutorKind) -> AsyncResult<Self> {
         Ok(match kind {
-            #[cfg(any(
-                target_os = "android",
-                target_os = "linux",
-                target_os = "macos"
-            ))]
+            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
             ExecutorKind::SysVariants(ExecutorKindSys::Fd) => Executor::Fd(RawExecutor::new()?),
             #[cfg(target_os = "macos")]
             ExecutorKind::SysVariants(ExecutorKindSys::Uring) => {
@@ -442,11 +410,7 @@ impl Executor {
     /// executor.
     pub fn async_from<'a, F: IntoAsync + 'a>(&self, f: F) -> AsyncResult<IoSource<F>> {
         match self {
-            #[cfg(any(
-                target_os = "android",
-                target_os = "linux",
-                target_os = "macos"
-            ))]
+            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
             Executor::Fd(ex) => ex.async_from(f),
             #[cfg(any(target_os = "android", target_os = "linux"))]
             Executor::Uring(ex) => ex.async_from(f),
@@ -509,11 +473,7 @@ impl Executor {
         F::Output: Send + 'static,
     {
         match self {
-            #[cfg(any(
-                target_os = "android",
-                target_os = "linux",
-                target_os = "macos"
-            ))]
+            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
             Executor::Fd(ex) => ex.spawn(f),
             #[cfg(any(target_os = "android", target_os = "linux"))]
             Executor::Uring(ex) => ex.spawn(f),
@@ -559,11 +519,7 @@ impl Executor {
         F::Output: 'static,
     {
         match self {
-            #[cfg(any(
-                target_os = "android",
-                target_os = "linux",
-                target_os = "macos"
-            ))]
+            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
             Executor::Fd(ex) => ex.spawn_local(f),
             #[cfg(any(target_os = "android", target_os = "linux"))]
             Executor::Uring(ex) => ex.spawn_local(f),
@@ -611,11 +567,7 @@ impl Executor {
         R: Send + 'static,
     {
         match self {
-            #[cfg(any(
-                target_os = "android",
-                target_os = "linux",
-                target_os = "macos"
-            ))]
+            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
             Executor::Fd(ex) => ex.spawn_blocking(f),
             #[cfg(any(target_os = "android", target_os = "linux"))]
             Executor::Uring(ex) => ex.spawn_blocking(f),
@@ -694,11 +646,7 @@ impl Executor {
     /// ```
     pub fn run_until<F: Future>(&self, f: F) -> AsyncResult<F::Output> {
         match self {
-            #[cfg(any(
-                target_os = "android",
-                target_os = "linux",
-                target_os = "macos"
-            ))]
+            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
             Executor::Fd(ex) => ex.run_until(f),
             #[cfg(any(target_os = "android", target_os = "linux"))]
             Executor::Uring(ex) => ex.run_until(f),
@@ -712,11 +660,7 @@ impl Executor {
     }
 }
 
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos"
-))]
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
 impl AsRawDescriptors for Executor {
     fn as_raw_descriptors(&self) -> Vec<RawDescriptor> {
         match self {

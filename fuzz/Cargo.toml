@@ -16,7 +16,7 @@ kernel_loader = { path = "../kernel_loader" }
 libc = "0.2"
 rand = "0.8"
 base = { path = "../base" }
-tempfile = "3"
+tempfile = "=3.14.0"
 usb_util = { path = "../usb_util" }
 vm_memory = { path = "../vm_memory" }
 p9 = "0.2"
@@ -70,4 +70,3 @@ name = "zimage_fuzzer"
 path = "fuzz_targets/zimage_fuzzer.rs"
 test = false
 doc = false
-

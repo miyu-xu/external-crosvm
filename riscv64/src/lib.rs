@@ -264,7 +264,7 @@ impl arch::LinuxArch for Riscv64 {
             .map(|(dev, jail_orig)| (*(dev.into_platform_device().unwrap()), jail_orig))
             .collect();
         let (platform_devices, mut platform_pid_debug_label_map, dev_resources) =
-            arch::sys::linux::generate_platform_bus(
+            arch::sys::generate_platform_bus(
                 platform_devices,
                 irq_chip.as_irq_chip_mut(),
                 &mmio_bus,

@@ -4,17 +4,25 @@
 
 use base::Event;
 
+#[cfg(target_os = "macos")]
+use crate::Executor;
 use crate::IntoAsync;
 use crate::IoSource;
 
 /// An async version of `base::Event`.
 pub struct EventAsync {
+    #[cfg(not(target_os = "macos"))]
     pub(crate) io_source: IoSource<Event>,
+    #[cfg(target_os = "macos")]
+    pub(crate) ex: Executor,
+    #[cfg(target_os = "macos")]
+    pub(crate) event: Event,
     #[cfg(windows)]
     pub(crate) reset_after_read: bool,
 }
 
 impl EventAsync {
+    #[cfg(not(target_os = "macos"))]
     pub fn get_io_source_ref(&self) -> &IoSource<Event> {
         &self.io_source
     }

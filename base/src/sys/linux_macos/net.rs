@@ -14,6 +14,8 @@ use std::path::Path;
 use std::ptr::null_mut;
 
 use libc::c_int;
+use libc::close;
+use libc::fcntl;
 use libc::in6_addr;
 use libc::in_addr;
 use libc::msghdr;
@@ -24,7 +26,8 @@ use libc::sockaddr_in6;
 use libc::ssize_t;
 use libc::AF_INET;
 use libc::AF_INET6;
-use libc::SOCK_CLOEXEC;
+use libc::FD_CLOEXEC;
+use libc::F_SETFD;
 use libc::SOCK_STREAM;
 
 use crate::descriptor::AsRawDescriptor;
@@ -40,6 +43,17 @@ use crate::StreamChannel;
 use crate::UnixSeqpacket;
 use crate::UnixSeqpacketListener;
 
+fn cloexec_or_close<Raw: AsRawDescriptor>(raw: Raw) -> io::Result<Raw> {
+    let res = unsafe { fcntl(raw.as_raw_descriptor(), F_SETFD, FD_CLOEXEC) };
+    if res >= 0 {
+        Ok(raw)
+    } else {
+        let err = io::Error::last_os_error();
+        unsafe { close(raw.as_raw_descriptor()) };
+        Err(err)
+    }
+}
+
 pub(in crate::sys) unsafe fn sendmsg_nosignal(
     fd: RawFd,
     msg: *const msghdr,
@@ -50,6 +64,7 @@ pub(in crate::sys) unsafe fn sendmsg_nosignal(
 
 pub(in crate::sys) fn sockaddrv4_to_lib_c(s: &SocketAddrV4) -> sockaddr_in {
     sockaddr_in {
+        sin_len: std::mem::size_of::<sockaddr_in>() as u8,
         sin_family: AF_INET as sa_family_t,
         sin_port: s.port().to_be(),
         sin_addr: in_addr {
@@ -61,6 +76,7 @@ pub(in crate::sys) fn sockaddrv4_to_lib_c(s: &SocketAddrV4) -> sockaddr_in {
 
 pub(in crate::sys) fn sockaddrv6_to_lib_c(s: &SocketAddrV6) -> sockaddr_in6 {
     sockaddr_in6 {
+        sin6_len: std::mem::size_of::<sockaddr_in6>() as u8,
         sin6_family: AF_INET6 as sa_family_t,
         sin6_port: s.port().to_be(),
         sin6_flowinfo: 0,
@@ -76,6 +92,7 @@ pub(in crate::sys) fn sockaddr_un<P: AsRef<Path>>(
     path: P,
 ) -> io::Result<(libc::sockaddr_un, libc::socklen_t)> {
     let mut addr = libc::sockaddr_un {
+        sun_len: 0,
         sun_family: libc::AF_UNIX as libc::sa_family_t,
         sun_path: std::array::from_fn(|_| 0),
     };
@@ -117,11 +134,11 @@ impl TcpSocket {
     pub fn new(inet_version: InetVersion) -> io::Result<Self> {
         Ok(TcpSocket {
             inet_version,
-            descriptor: socket(
+            descriptor: cloexec_or_close(socket(
                 Into::<sa_family_t>::into(inet_version) as libc::c_int,
-                SOCK_STREAM | SOCK_CLOEXEC,
+                SOCK_STREAM,
                 0,
-            )?,
+            )?)?,
         })
     }
 }
@@ -131,8 +148,11 @@ impl UnixSeqpacket {
     ///
     /// Both returned file descriptors have the `CLOEXEC` flag set.
     pub fn pair() -> io::Result<(UnixSeqpacket, UnixSeqpacket)> {
-        socketpair(libc::AF_UNIX, libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC, 0)
-            .map(|(s0, s1)| (UnixSeqpacket::from(s0), UnixSeqpacket::from(s1)))
+        let (s0, s1) = socketpair(libc::AF_UNIX, libc::SOCK_SEQPACKET, 0)?;
+        Ok((
+            UnixSeqpacket::from(cloexec_or_close(s0)?),
+            UnixSeqpacket::from(cloexec_or_close(s1)?),
+        ))
     }
 }
 
@@ -144,21 +164,11 @@ impl UnixSeqpacketListener {
     pub fn accept(&self) -> io::Result<UnixSeqpacket> {
         // SAFETY:
         // Safe because we own this fd and the kernel will not write to null pointers.
-        match unsafe {
-            libc::accept4(
-                self.as_raw_descriptor(),
-                null_mut(),
-                null_mut(),
-                SOCK_CLOEXEC,
-            )
-        } {
+        match unsafe { libc::accept(self.as_raw_descriptor(), null_mut(), null_mut()) } {
             -1 => Err(io::Error::last_os_error()),
             fd => {
-                Ok(UnixSeqpacket::from(
-                    // SAFETY: Safe because we checked the return value of accept. Therefore, the
-                    // return value must be a valid socket.
-                    unsafe { SafeDescriptor::from_raw_descriptor(fd) },
-                ))
+                let safe_desc = unsafe { SafeDescriptor::from_raw_descriptor(fd) };
+                Ok(UnixSeqpacket::from(cloexec_or_close(safe_desc)?))
             }
         }
     }

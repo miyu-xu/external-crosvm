@@ -132,7 +132,7 @@ impl TapTCommon for Tap {
 }
 
 impl TapTLinux for Tap {
-    fn set_vnet_hdr_size(&self, _size: usize) -> Result<(), Error> {
+    fn set_vnet_hdr_size(&self, _size: usize) -> Result<()> {
         Err(enotsup())
     }
 
@@ -242,7 +242,7 @@ pub mod fakes {
     }
 
     impl TapTLinux for FakeTap {
-        fn set_vnet_hdr_size(&self, _: usize) -> Result<(), Error> {
+        fn set_vnet_hdr_size(&self, _: usize) -> Result<()> {
             Ok(())
         }
 

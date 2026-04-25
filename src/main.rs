@@ -179,6 +179,11 @@ fn run_vm(cmd: RunCommand, log_config: LogConfig) -> Result<CommandStatus> {
         cros_async::Executor::set_default_executor_kind(async_executor)
             .context("Failed to set the default async executor")?;
     }
+    #[cfg(all(target_os = "macos", feature = "tokio"))]
+    if cfg.async_executor.is_none() {
+        cros_async::Executor::set_default_executor_kind(cros_async::ExecutorKind::Tokio)
+            .context("Failed to set the default macOS async executor")?;
+    }
 
     let exit_state = crate::sys::run_config(cfg)?;
     Ok(CommandStatus::from(exit_state))
@@ -785,122 +790,121 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
         ..Default::default()
     };
 
-    let ret = match args.command {
-        Command::CrossPlatform(command) => {
-            // Past this point, usage of exit is in danger of leaking zombie processes.
-            if let CrossPlatformCommands::Run(cmd) = command {
-                if let Some(syslog_tag) = &cmd.syslog_tag {
-                    base::warn!(
-                        "`crosvm run --syslog-tag` is deprecated; please use \
+    let ret =
+        match args.command {
+            Command::CrossPlatform(command) => {
+                // Past this point, usage of exit is in danger of leaking zombie processes.
+                if let CrossPlatformCommands::Run(cmd) = command {
+                    if let Some(syslog_tag) = &cmd.syslog_tag {
+                        base::warn!(
+                            "`crosvm run --syslog-tag` is deprecated; please use \
                          `crosvm --syslog-tag=\"{}\" run` instead",
-                        syslog_tag
-                    );
-                    log_config.log_args.proc_name.clone_from(syslog_tag);
+                            syslog_tag
+                        );
+                        log_config.log_args.proc_name.clone_from(syslog_tag);
+                    }
+                    // We handle run_vm separately because it does not simply signal success/error
+                    // but also indicates whether the guest requested reset or stop.
+                    run_vm(cmd, log_config)
+                } else if let CrossPlatformCommands::Device(cmd) = command {
+                    // On windows, the device command handles its own logging setup, so we can't handle
+                    // it below otherwise logging will double init.
+                    if cfg!(unix) {
+                        syslog::init_with(log_config).context("failed to initialize syslog")?;
+                    }
+                    start_device(cmd)
+                        .map_err(|_| anyhow!("start_device subcommand failed"))
+                        .map(|_| CommandStatus::SuccessOrVmStop)
+                } else {
+                    syslog::init_with(log_config).context("failed to initialize syslog")?;
+
+                    match command {
+                        #[cfg(feature = "balloon")]
+                        CrossPlatformCommands::Balloon(cmd) => {
+                            balloon_vms(cmd).map_err(|_| anyhow!("balloon subcommand failed"))
+                        }
+                        #[cfg(feature = "balloon")]
+                        CrossPlatformCommands::BalloonStats(cmd) => balloon_stats(cmd)
+                            .map_err(|_| anyhow!("balloon_stats subcommand failed")),
+                        #[cfg(feature = "balloon")]
+                        CrossPlatformCommands::BalloonWs(cmd) => {
+                            balloon_ws(cmd).map_err(|_| anyhow!("balloon_ws subcommand failed"))
+                        }
+                        CrossPlatformCommands::Battery(cmd) => {
+                            modify_battery(cmd).map_err(|_| anyhow!("battery subcommand failed"))
+                        }
+                        CrossPlatformCommands::ConnectVsock(cmd) => connect_vsock(cmd)
+                            .map_err(|_| anyhow!("connect_vsock subcommand failed")),
+                        #[cfg(feature = "composite-disk")]
+                        CrossPlatformCommands::CreateComposite(cmd) => create_composite(cmd)
+                            .map_err(|_| anyhow!("create_composite subcommand failed")),
+                        #[cfg(feature = "qcow")]
+                        CrossPlatformCommands::CreateQcow2(cmd) => {
+                            create_qcow2(cmd).map_err(|_| anyhow!("create_qcow2 subcommand failed"))
+                        }
+                        CrossPlatformCommands::Device(_) => unreachable!(),
+                        CrossPlatformCommands::Disk(cmd) => {
+                            disk_cmd(cmd).map_err(|_| anyhow!("disk subcommand failed"))
+                        }
+                        #[cfg(feature = "gpu")]
+                        CrossPlatformCommands::Gpu(cmd) => {
+                            modify_gpu(cmd).map_err(|_| anyhow!("gpu subcommand failed"))
+                        }
+                        CrossPlatformCommands::MakeRT(cmd) => {
+                            make_rt(cmd).map_err(|_| anyhow!("make_rt subcommand failed"))
+                        }
+                        CrossPlatformCommands::Resume(cmd) => {
+                            resume_vms(cmd).map_err(|_| anyhow!("resume subcommand failed"))
+                        }
+                        CrossPlatformCommands::Run(_) => unreachable!(),
+                        CrossPlatformCommands::Stop(cmd) => {
+                            stop_vms(cmd).map_err(|_| anyhow!("stop subcommand failed"))
+                        }
+                        CrossPlatformCommands::Suspend(cmd) => {
+                            suspend_vms(cmd).map_err(|_| anyhow!("suspend subcommand failed"))
+                        }
+                        CrossPlatformCommands::Swap(cmd) => {
+                            swap_vms(cmd).map_err(|_| anyhow!("swap subcommand failed"))
+                        }
+                        CrossPlatformCommands::Powerbtn(cmd) => {
+                            powerbtn_vms(cmd).map_err(|_| anyhow!("powerbtn subcommand failed"))
+                        }
+                        CrossPlatformCommands::Sleepbtn(cmd) => {
+                            sleepbtn_vms(cmd).map_err(|_| anyhow!("sleepbtn subcommand failed"))
+                        }
+                        CrossPlatformCommands::Gpe(cmd) => {
+                            inject_gpe(cmd).map_err(|_| anyhow!("gpe subcommand failed"))
+                        }
+                        CrossPlatformCommands::Usb(cmd) => {
+                            modify_usb(cmd).map_err(|_| anyhow!("usb subcommand failed"))
+                        }
+                        CrossPlatformCommands::Version(_) => {
+                            pkg_version().map_err(|_| anyhow!("version subcommand failed"))
+                        }
+                        CrossPlatformCommands::Vfio(cmd) => {
+                            modify_vfio(cmd).map_err(|_| anyhow!("vfio subcommand failed"))
+                        }
+                        #[cfg(feature = "pci-hotplug")]
+                        CrossPlatformCommands::VirtioNet(cmd) => {
+                            modify_virtio_net(cmd).map_err(|_| anyhow!("virtio subcommand failed"))
+                        }
+                        CrossPlatformCommands::Snapshot(cmd) => {
+                            snapshot_vm(cmd).map_err(|_| anyhow!("snapshot subcommand failed"))
+                        }
+                    }
+                    .map(|_| CommandStatus::SuccessOrVmStop)
                 }
-                // We handle run_vm separately because it does not simply signal success/error
-                // but also indicates whether the guest requested reset or stop.
-                run_vm(cmd, log_config)
-            } else if let CrossPlatformCommands::Device(cmd) = command {
-                // On windows, the device command handles its own logging setup, so we can't handle
-                // it below otherwise logging will double init.
+            }
+            cmdline::Command::Sys(command) => {
+                let log_args = log_config.log_args.clone();
+                // On windows, the sys commands handle their own logging setup, so we can't handle it
+                // below otherwise logging will double init.
                 if cfg!(unix) {
                     syslog::init_with(log_config).context("failed to initialize syslog")?;
                 }
-                start_device(cmd)
-                    .map_err(|_| anyhow!("start_device subcommand failed"))
-                    .map(|_| CommandStatus::SuccessOrVmStop)
-            } else {
-                syslog::init_with(log_config).context("failed to initialize syslog")?;
-
-                match command {
-                    #[cfg(feature = "balloon")]
-                    CrossPlatformCommands::Balloon(cmd) => {
-                        balloon_vms(cmd).map_err(|_| anyhow!("balloon subcommand failed"))
-                    }
-                    #[cfg(feature = "balloon")]
-                    CrossPlatformCommands::BalloonStats(cmd) => {
-                        balloon_stats(cmd).map_err(|_| anyhow!("balloon_stats subcommand failed"))
-                    }
-                    #[cfg(feature = "balloon")]
-                    CrossPlatformCommands::BalloonWs(cmd) => {
-                        balloon_ws(cmd).map_err(|_| anyhow!("balloon_ws subcommand failed"))
-                    }
-                    CrossPlatformCommands::Battery(cmd) => {
-                        modify_battery(cmd).map_err(|_| anyhow!("battery subcommand failed"))
-                    }
-                    CrossPlatformCommands::ConnectVsock(cmd) => {
-                        connect_vsock(cmd).map_err(|_| anyhow!("connect_vsock subcommand failed"))
-                    }
-                    #[cfg(feature = "composite-disk")]
-                    CrossPlatformCommands::CreateComposite(cmd) => create_composite(cmd)
-                        .map_err(|_| anyhow!("create_composite subcommand failed")),
-                    #[cfg(feature = "qcow")]
-                    CrossPlatformCommands::CreateQcow2(cmd) => {
-                        create_qcow2(cmd).map_err(|_| anyhow!("create_qcow2 subcommand failed"))
-                    }
-                    CrossPlatformCommands::Device(_) => unreachable!(),
-                    CrossPlatformCommands::Disk(cmd) => {
-                        disk_cmd(cmd).map_err(|_| anyhow!("disk subcommand failed"))
-                    }
-                    #[cfg(feature = "gpu")]
-                    CrossPlatformCommands::Gpu(cmd) => {
-                        modify_gpu(cmd).map_err(|_| anyhow!("gpu subcommand failed"))
-                    }
-                    CrossPlatformCommands::MakeRT(cmd) => {
-                        make_rt(cmd).map_err(|_| anyhow!("make_rt subcommand failed"))
-                    }
-                    CrossPlatformCommands::Resume(cmd) => {
-                        resume_vms(cmd).map_err(|_| anyhow!("resume subcommand failed"))
-                    }
-                    CrossPlatformCommands::Run(_) => unreachable!(),
-                    CrossPlatformCommands::Stop(cmd) => {
-                        stop_vms(cmd).map_err(|_| anyhow!("stop subcommand failed"))
-                    }
-                    CrossPlatformCommands::Suspend(cmd) => {
-                        suspend_vms(cmd).map_err(|_| anyhow!("suspend subcommand failed"))
-                    }
-                    CrossPlatformCommands::Swap(cmd) => {
-                        swap_vms(cmd).map_err(|_| anyhow!("swap subcommand failed"))
-                    }
-                    CrossPlatformCommands::Powerbtn(cmd) => {
-                        powerbtn_vms(cmd).map_err(|_| anyhow!("powerbtn subcommand failed"))
-                    }
-                    CrossPlatformCommands::Sleepbtn(cmd) => {
-                        sleepbtn_vms(cmd).map_err(|_| anyhow!("sleepbtn subcommand failed"))
-                    }
-                    CrossPlatformCommands::Gpe(cmd) => {
-                        inject_gpe(cmd).map_err(|_| anyhow!("gpe subcommand failed"))
-                    }
-                    CrossPlatformCommands::Usb(cmd) => {
-                        modify_usb(cmd).map_err(|_| anyhow!("usb subcommand failed"))
-                    }
-                    CrossPlatformCommands::Version(_) => {
-                        pkg_version().map_err(|_| anyhow!("version subcommand failed"))
-                    }
-                    CrossPlatformCommands::Vfio(cmd) => {
-                        modify_vfio(cmd).map_err(|_| anyhow!("vfio subcommand failed"))
-                    }
-                    #[cfg(feature = "pci-hotplug")]
-                    CrossPlatformCommands::VirtioNet(cmd) => {
-                        modify_virtio_net(cmd).map_err(|_| anyhow!("virtio subcommand failed"))
-                    }
-                    CrossPlatformCommands::Snapshot(cmd) => {
-                        snapshot_vm(cmd).map_err(|_| anyhow!("snapshot subcommand failed"))
-                    }
-                }
-                .map(|_| CommandStatus::SuccessOrVmStop)
+                sys::run_command(command, log_args).map(|_| CommandStatus::SuccessOrVmStop)
             }
-        }
-        cmdline::Command::Sys(command) => {
-            let log_args = log_config.log_args.clone();
-            // On windows, the sys commands handle their own logging setup, so we can't handle it
-            // below otherwise logging will double init.
-            if cfg!(unix) {
-                syslog::init_with(log_config).context("failed to initialize syslog")?;
-            }
-            sys::run_command(command, log_args).map(|_| CommandStatus::SuccessOrVmStop)
-        }
-    };
+        };
 
     sys::cleanup();
 

@@ -7,6 +7,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use base::Event;
+#[cfg(not(target_os = "macos"))]
 use cros_async::EventAsync;
 use cros_async::Executor;
 
@@ -15,7 +16,16 @@ use super::Interrupt;
 /// Async task that waits for a signal from `event`.  Once this event is readable, exit. Exiting
 /// this future will cause the main loop to break and the worker thread to exit.
 pub async fn await_and_exit(ex: &Executor, event: Event) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        ex.spawn_blocking(move || event.wait())
+            .await
+            .context("failed to wait on kill event")?;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
     let event_async = EventAsync::new(event, ex).context("failed to create EventAsync")?;
+    #[cfg(not(target_os = "macos"))]
     let _ = event_async.next_val().await;
     Ok(())
 }
@@ -31,8 +41,22 @@ pub async fn handle_irq_resample(ex: &Executor, interrupt: Interrupt) -> Result<
         let resample_evt = resample_evt
             .try_clone()
             .context("resample_evt.try_clone() failed")?;
+        #[cfg(target_os = "macos")]
+        loop {
+            ex.spawn_blocking({
+                let resample_evt = resample_evt
+                    .try_clone()
+                    .context("resample_evt.try_clone() failed")?;
+                move || resample_evt.wait()
+            })
+            .await
+            .context("failed to wait on resample event")?;
+            interrupt.do_interrupt_resample();
+        }
+        #[cfg(not(target_os = "macos"))]
         let resample_evt =
             EventAsync::new(resample_evt, ex).context("failed to create async resample event")?;
+        #[cfg(not(target_os = "macos"))]
         loop {
             let _ = resample_evt
                 .next_val()

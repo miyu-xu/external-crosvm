@@ -12,10 +12,10 @@ use libc::PROT_READ;
 use libc::PROT_WRITE;
 use log::warn;
 
-use crate::Error as ErrnoError;
 use crate::pagesize;
 use crate::AsRawDescriptor;
 use crate::Descriptor;
+use crate::Error as ErrnoError;
 use crate::MappedRegion;
 use crate::MemoryMapping as CrateMemoryMapping;
 use crate::MemoryMappingBuilder;
@@ -40,14 +40,7 @@ unsafe fn mmap_with_offset(
     if offset > MAX_MMAP_OFFSET {
         return libc::MAP_FAILED;
     }
-    libc::mmap(
-        addr,
-        len,
-        prot,
-        flags,
-        fd,
-        offset as libc::off_t,
-    )
+    libc::mmap(addr, len, prot, flags, fd, offset as libc::off_t)
 }
 
 impl From<Protection> for c_int {
@@ -1030,8 +1023,7 @@ mod tests {
     #[test]
     fn from_fd_offset_invalid() {
         let fd = tempfile().unwrap();
-        let res =
-            MemoryMapping::from_fd_offset(&fd, 4096, MAX_MMAP_OFFSET + 1).unwrap_err();
+        let res = MemoryMapping::from_fd_offset(&fd, 4096, MAX_MMAP_OFFSET + 1).unwrap_err();
         match res {
             Error::InvalidOffset => {}
             e => panic!("unexpected error: {}", e),

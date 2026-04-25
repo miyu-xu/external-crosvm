@@ -10,3 +10,4 @@ lcov.info
 .vscode/*
 !.vscode/settings.json
 Cargo.lock
+.DS_Store

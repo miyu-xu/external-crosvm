@@ -6,11 +6,7 @@ use std::sync::Arc;
 
 use base::AsRawDescriptor;
 
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos"
-))]
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
 use crate::sys::linux::PollSource;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 use crate::sys::linux::UringSource;
@@ -29,11 +25,7 @@ use crate::MemRegion;
 pub enum IoSource<F: base::AsRawDescriptor> {
     #[cfg(any(target_os = "android", target_os = "linux"))]
     Uring(UringSource<F>),
-    #[cfg(any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos"
-    ))]
+    #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
     Epoll(PollSource<F>),
     #[cfg(windows)]
     Handle(HandleSource<F>),

@@ -25,7 +25,13 @@ pub mod windows;
 pub mod platform {
     #[cfg(any(target_os = "android", target_os = "linux"))]
     pub use super::linux::*;
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    pub use super::linux_macos::ioctl;
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    pub use super::linux_macos::platform_timer_resolution;
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    pub use super::linux_macos::*;
+    #[cfg(all(target_os = "macos", not(feature = "hvf")))]
     pub use super::macos::*;
     #[cfg(unix)]
     pub use super::unix::*;

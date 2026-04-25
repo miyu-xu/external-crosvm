@@ -255,11 +255,14 @@ fn run_worker(
         (&kill_evt, Token::Kill),
     ])
     .map_err(ACPIPMError::CreateWaitContext)?;
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     if let Some(acpi_event_sock) = &acpi_event_sock {
         wait_ctx
             .add(acpi_event_sock, Token::AcpiEvent)
             .map_err(ACPIPMError::CreateWaitContext)?;
     }
+    #[cfg(target_os = "macos")]
+    let _ = &acpi_event_sock;
 
     loop {
         let events = wait_ctx.wait().map_err(ACPIPMError::WaitError)?;

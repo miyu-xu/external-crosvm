@@ -19,15 +19,27 @@ use arch::DtbOverlay;
 use arch::FdtPosition;
 use arch::GetSerialCmdlineError;
 use arch::RunnableLinuxVm;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use arch::VcpuAffinity;
 use arch::VmComponents;
 use arch::VmImage;
+use base::warn;
 use base::MemoryMappingBuilder;
 use base::SendTube;
 use base::Tube;
 use devices::serial_device::SerialHardware;
 use devices::serial_device::SerialParameters;
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 use devices::vmwdt::VMWDT_DEFAULT_CLOCK_HZ;
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 use devices::vmwdt::VMWDT_DEFAULT_TIMEOUT_SEC;
 use devices::Bus;
 use devices::BusDeviceObj;
@@ -63,13 +75,12 @@ use hypervisor::VcpuInitAArch64;
 use hypervisor::VcpuRegAArch64;
 use hypervisor::Vm;
 use hypervisor::VmAArch64;
+use hypervisor::PSCI_0_2;
 #[cfg(any(windows, target_os = "macos"))]
 use jail::FakeMinijailStub as Minijail;
 use kernel_loader::LoadedKernel;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail_stub::Minijail;
-#[cfg(all(target_os = "macos", feature = "hvf"))]
 use minijail_stub::Minijail;
 use remain::sorted;
 use resources::address_allocator::AddressAllocator;
@@ -118,6 +129,9 @@ const AARCH64_PVTIME_SIZE: u64 = 64;
 // address space.
 const AARCH64_GIC_DIST_BASE: u64 = AARCH64_AXI_BASE - AARCH64_GIC_DIST_SIZE;
 const AARCH64_GIC_CPUI_BASE: u64 = AARCH64_GIC_DIST_BASE - AARCH64_GIC_CPUI_SIZE;
+#[cfg(target_os = "macos")]
+const AARCH64_GIC_REDIST_SIZE: u64 = 0x0200_0000;
+#[cfg(not(target_os = "macos"))]
 const AARCH64_GIC_REDIST_SIZE: u64 = 0x20000;
 
 // PSR (Processor State Register) bits
@@ -363,6 +377,10 @@ fn get_block_size() -> u64 {
 fn get_vcpu_mpidr_aff<Vcpu: VcpuAArch64>(vcpus: &[Vcpu], index: usize) -> Option<u64> {
     const MPIDR_AFF_MASK: u64 = 0xff_00ff_ffff;
 
+    if vcpus.is_empty() {
+        return Some(index as u64 & MPIDR_AFF_MASK);
+    }
+
     Some(vcpus.get(index)?.get_mpidr().ok()? & MPIDR_AFF_MASK)
 }
 
@@ -476,6 +494,16 @@ impl arch::LinuxArch for AArch64 {
             }
             VmImage::Kernel(ref mut kernel_image) => {
                 let loaded_kernel = load_kernel(&mem, payload_address, kernel_image)?;
+                if cfg!(target_os = "macos") {
+                    if let Ok(entry_bytes) =
+                        mem.read_obj_from_addr::<[u8; 16]>(GuestAddress(AARCH64_PHYS_MEM_START))
+                    {
+                        warn!(
+                            "AArch64 kernel load entry bytes @0x{:x}: {:02x?}",
+                            AARCH64_PHYS_MEM_START, entry_bytes
+                        );
+                    }
+                }
                 let kernel_end = loaded_kernel.address_range.end;
                 let mut payload_end = GuestAddress(kernel_end);
                 initrd = match components.initrd_image {
@@ -520,16 +548,14 @@ impl arch::LinuxArch for AArch64 {
         let mut use_pmu = vm
             .get_hypervisor()
             .check_capability(HypervisorCap::ArmPmuV3);
+        let thread_local_vcpu_create = vm
+            .get_hypervisor()
+            .check_capability(HypervisorCap::VcpuRunThreadLocal);
         let vcpu_count = components.vcpu_count;
-        let mut has_pvtime = true;
+        let mut has_pvtime = !thread_local_vcpu_create;
         let mut vcpus = Vec::with_capacity(vcpu_count);
         let mut vcpu_init = Vec::with_capacity(vcpu_count);
         for vcpu_id in 0..vcpu_count {
-            let vcpu: Vcpu = *vm
-                .create_vcpu(vcpu_id)
-                .map_err(Error::CreateVcpu)?
-                .downcast::<Vcpu>()
-                .map_err(|_| Error::DowncastVcpu)?;
             let per_vcpu_init = if vm
                 .get_hypervisor()
                 .check_capability(HypervisorCap::HypervisorInitializedBootContext)
@@ -545,16 +571,25 @@ impl arch::LinuxArch for AArch64 {
                     components.boot_cpu,
                 )
             };
-            has_pvtime &= vcpu.has_pvtime_support();
-            vcpus.push(vcpu);
+            if !thread_local_vcpu_create {
+                let vcpu: Vcpu = *vm
+                    .create_vcpu(vcpu_id)
+                    .map_err(Error::CreateVcpu)?
+                    .downcast::<Vcpu>()
+                    .map_err(|_| Error::DowncastVcpu)?;
+                has_pvtime &= vcpu.has_pvtime_support();
+                vcpus.push(vcpu);
+            }
             vcpu_ids.push(vcpu_id);
             vcpu_init.push(per_vcpu_init);
         }
 
-        // Initialize Vcpus after all Vcpu objects have been created.
-        for (vcpu_id, vcpu) in vcpus.iter().enumerate() {
-            vcpu.init(&Self::vcpu_features(vcpu_id, use_pmu, components.boot_cpu))
-                .map_err(Error::VcpuInit)?;
+        if !thread_local_vcpu_create {
+            // Initialize Vcpus after all Vcpu objects have been created.
+            for (vcpu_id, vcpu) in vcpus.iter().enumerate() {
+                vcpu.init(&Self::vcpu_features(vcpu_id, use_pmu, components.boot_cpu))
+                    .map_err(Error::VcpuInit)?;
+            }
         }
 
         irq_chip.finalize().map_err(Error::FinalizeIrqChip)?;
@@ -638,16 +673,21 @@ impl arch::LinuxArch for AArch64 {
 
         let pci_root = Arc::new(Mutex::new(pci));
         let pci_bus = Arc::new(Mutex::new(PciConfigMmio::new(pci_root.clone(), 8)));
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let (platform_devices, _others): (Vec<_>, Vec<_>) = others
             .into_iter()
             .partition(|(dev, _)| dev.as_platform_device().is_some());
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        let _others = others;
 
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let platform_devices = platform_devices
             .into_iter()
             .map(|(dev, jail_orig)| (*(dev.into_platform_device().unwrap()), jail_orig))
             .collect();
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let (platform_devices, mut platform_pid_debug_label_map, dev_resources) =
-            arch::sys::linux::generate_platform_bus(
+            arch::sys::generate_platform_bus(
                 platform_devices,
                 irq_chip.as_irq_chip_mut(),
                 &mmio_bus,
@@ -658,15 +698,27 @@ impl arch::LinuxArch for AArch64 {
                 components.hv_cfg.protection_type,
             )
             .map_err(Error::CreatePlatformBus)?;
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         pid_debug_label_map.append(&mut platform_pid_debug_label_map);
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        let (platform_devices, dev_resources): (
+            Vec<Arc<Mutex<dyn devices::BusDevice>>>,
+            Vec<arch::PlatformBusResources>,
+        ) = (Vec::new(), Vec::new());
 
-        let (vmwdt_host_tube, vmwdt_control_tube) = Tube::pair().map_err(Error::CreateTube)?;
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        let vmwdt_tubes: Option<(Tube, Tube)> = None;
+        #[cfg(not(all(target_os = "macos", feature = "hvf")))]
+        let vmwdt_tubes = Some(Tube::pair().map_err(Error::CreateTube)?);
+
         Self::add_arch_devs(
             irq_chip.as_irq_chip_mut(),
             &mmio_bus,
             vcpu_count,
             _vm_evt_wrtube,
-            vmwdt_control_tube,
+            vmwdt_tubes
+                .as_ref()
+                .map(|(_, control)| control.try_clone().unwrap()),
         )?;
 
         let com_evt_1_3 = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
@@ -748,7 +800,11 @@ impl arch::LinuxArch for AArch64 {
                 .map_err(Error::Cmdline)?;
         }
 
-        let psci_version = vcpus[0].get_psci_version().map_err(Error::GetPsciVersion)?;
+        let psci_version = if let Some(vcpu) = vcpus.first() {
+            vcpu.get_psci_version().map_err(Error::GetPsciVersion)?
+        } else {
+            PSCI_0_2
+        };
 
         let pci_cfg = fdt::PciConfigRegion {
             base: AARCH64_PCI_CFG_BASE,
@@ -776,7 +832,7 @@ impl arch::LinuxArch for AArch64 {
 
                 // a dummy AML buffer. Aarch64 crosvm doesn't use ACPI.
                 let mut amls = Vec::new();
-                let (control_tube, mmio_base) = arch::sys::linux::add_goldfish_battery(
+                let (control_tube, mmio_base) = arch::sys::add_goldfish_battery(
                     &mut amls,
                     bat_jail,
                     &mmio_bus,
@@ -798,12 +854,15 @@ impl arch::LinuxArch for AArch64 {
             None => (None, None),
         };
 
-        let vmwdt_cfg = fdt::VmWdtConfig {
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        let vmwdt_cfg = None;
+        #[cfg(not(all(target_os = "macos", feature = "hvf")))]
+        let vmwdt_cfg = Some(fdt::VmWdtConfig {
             base: AARCH64_VMWDT_ADDR,
             size: AARCH64_VMWDT_SIZE,
             clock_hz: VMWDT_DEFAULT_CLOCK_HZ,
             timeout_sec: VMWDT_DEFAULT_TIMEOUT_SEC,
-        };
+        });
 
         fdt::create_fdt(
             AARCH64_FDT_MAX_SIZE as usize,
@@ -811,12 +870,20 @@ impl arch::LinuxArch for AArch64 {
             pci_irqs,
             pci_cfg,
             &pci_ranges,
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", feature = "hvf")
+            ))]
             dev_resources,
             vcpu_count as u32,
             &|n| get_vcpu_mpidr_aff(&vcpus, n),
             components.cpu_clusters,
             components.cpu_capacity,
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             components.cpu_frequencies,
+            #[cfg(all(target_os = "macos", feature = "hvf"))]
+            BTreeMap::new(),
             fdt_address,
             cmdline
                 .as_str_with_max_len(AARCH64_CMDLINE_MAX_SIZE - 1)
@@ -842,6 +909,16 @@ impl arch::LinuxArch for AArch64 {
             &serial_devices,
         )
         .map_err(Error::CreateFdt)?;
+        if cfg!(target_os = "macos") {
+            if let Ok(entry_bytes) =
+                mem.read_obj_from_addr::<[u8; 16]>(GuestAddress(AARCH64_PHYS_MEM_START))
+            {
+                warn!(
+                    "AArch64 post-FDT entry bytes @0x{:x}: {:02x?}",
+                    AARCH64_PHYS_MEM_START, entry_bytes
+                );
+            }
+        }
 
         vm.init_arch(
             payload.entry(),
@@ -850,12 +927,16 @@ impl arch::LinuxArch for AArch64 {
         )
         .map_err(Error::InitVmError)?;
 
-        let vm_request_tubes = vec![vmwdt_host_tube];
+        let vm_request_tubes = vmwdt_tubes.map(|(host, _)| vec![host]).unwrap_or_default();
 
         Ok(RunnableLinuxVm {
             vm,
             vcpu_count,
-            vcpus: Some(vcpus),
+            vcpus: if thread_local_vcpu_create {
+                None
+            } else {
+                Some(vcpus)
+            },
             vcpu_init,
             vcpu_affinity: components.vcpu_affinity,
             no_smt: components.no_smt,
@@ -872,6 +953,7 @@ impl arch::LinuxArch for AArch64 {
             pm: None,
             resume_notify_devices: Vec::new(),
             root_config: pci_root,
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             platform_devices,
             hotplug_bus: BTreeMap::new(),
             devices_thread: None,
@@ -898,7 +980,7 @@ impl arch::LinuxArch for AArch64 {
     fn register_pci_device<V: VmAArch64, Vcpu: VcpuAArch64>(
         _linux: &mut RunnableLinuxVm<V, Vcpu>,
         _device: Box<dyn PciDevice>,
-        _minijail: Option<Minijail>,
+        #[cfg(any(target_os = "android", target_os = "linux"))] _minijail: Option<Minijail>,
         _resources: &mut SystemAllocator,
         _tube: &mpsc::Sender<PciRootCommand>,
         #[cfg(feature = "swap")] _swap_controller: &mut Option<swap::SwapController>,
@@ -1221,7 +1303,7 @@ impl AArch64 {
         bus: &Bus,
         vcpu_count: usize,
         vm_evt_wrtube: &SendTube,
-        vmwdt_request_tube: Tube,
+        vmwdt_request_tube: Option<Tube>,
     ) -> Result<()> {
         let rtc_evt = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
         let rtc = devices::pl030::Pl030::new(rtc_evt.try_clone().map_err(Error::CloneEvent)?);
@@ -1236,28 +1318,30 @@ impl AArch64 {
         )
         .expect("failed to add rtc device");
 
-        let vmwdt_evt = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
-        let vm_wdt = devices::vmwdt::Vmwdt::new(
-            vcpu_count,
-            vm_evt_wrtube.try_clone().unwrap(),
-            vmwdt_evt.try_clone().map_err(Error::CloneEvent)?,
-            vmwdt_request_tube,
-        )
-        .map_err(Error::CreateVmwdtDevice)?;
-        irq_chip
-            .register_edge_irq_event(
-                AARCH64_VMWDT_IRQ,
-                &vmwdt_evt,
-                IrqEventSource::from_device(&vm_wdt),
+        if let Some(vmwdt_request_tube) = vmwdt_request_tube {
+            let vmwdt_evt = devices::IrqEdgeEvent::new().map_err(Error::CreateEvent)?;
+            let vm_wdt = devices::vmwdt::Vmwdt::new(
+                vcpu_count,
+                vm_evt_wrtube.try_clone().unwrap(),
+                vmwdt_evt.try_clone().map_err(Error::CloneEvent)?,
+                vmwdt_request_tube,
             )
-            .map_err(Error::RegisterIrqfd)?;
+            .map_err(Error::CreateVmwdtDevice)?;
+            irq_chip
+                .register_edge_irq_event(
+                    AARCH64_VMWDT_IRQ,
+                    &vmwdt_evt,
+                    IrqEventSource::from_device(&vm_wdt),
+                )
+                .map_err(Error::RegisterIrqfd)?;
 
-        bus.insert(
-            Arc::new(Mutex::new(vm_wdt)),
-            AARCH64_VMWDT_ADDR,
-            AARCH64_VMWDT_SIZE,
-        )
-        .expect("failed to add vmwdt device");
+            bus.insert(
+                Arc::new(Mutex::new(vm_wdt)),
+                AARCH64_VMWDT_ADDR,
+                AARCH64_VMWDT_SIZE,
+            )
+            .expect("failed to add vmwdt device");
+        }
 
         Ok(())
     }

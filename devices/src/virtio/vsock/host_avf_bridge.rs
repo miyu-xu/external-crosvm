@@ -17,10 +17,16 @@
 
 /// `\\.\pipe\binder_rpc_vsock_{guest_cid}_{host_port}` — matches libbinder `NamedPipeVsockAddress`.
 pub fn windows_binder_rpc_pipe_path(guest_cid: u64, host_port: u32) -> String {
-    format!(r"\\.\pipe\binder_rpc_vsock_{}_{}", guest_cid as u32, host_port)
+    format!(
+        r"\\.\pipe\binder_rpc_vsock_{}_{}",
+        guest_cid as u32, host_port
+    )
 }
 
 /// `/tmp/binder_rpc_vsock_{guest_cid}_{host_port}.sock` — matches `binderRpcVsockHostPath` on macOS.
 pub fn macos_binder_rpc_uds_path(guest_cid: u64, host_port: u32) -> String {
-    format!("/tmp/binder_rpc_vsock_{}_{}.sock", guest_cid as u32, host_port)
+    format!(
+        "/tmp/binder_rpc_vsock_{}_{}.sock",
+        guest_cid as u32, host_port
+    )
 }

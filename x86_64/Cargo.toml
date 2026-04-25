@@ -29,7 +29,7 @@ remain = "0.2"
 resources = { path = "../resources" }
 sync = { path = "../common/sync" }
 thiserror = "1"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "=1.12.1", features = ["v4"] }
 base = { path = "../base" }
 swap = { path = "../swap" }
 vm_control = { path = "../vm_control" }

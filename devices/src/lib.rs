@@ -51,6 +51,7 @@ use base::info;
 use base::Tube;
 use base::TubeError;
 use cros_async::AsyncTube;
+#[cfg(not(target_os = "macos"))]
 use cros_async::Executor;
 use serde::Deserialize;
 use serde::Serialize;
@@ -177,6 +178,9 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+pub mod vmwdt;
+
 /// Request CoIOMMU to unpin a specific range.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UnpinRequest {
@@ -214,17 +218,27 @@ pub fn create_devices_worker_thread(
     std::thread::Builder::new()
         .name("device_control".to_string())
         .spawn(move || {
-            let ex = Executor::new().expect("Failed to create an executor");
-
-            let async_control = AsyncTube::new(&ex, device_ctrl_resp).unwrap();
-            match ex.run_until(async move {
-                handle_command_tube(async_control, guest_memory, io_bus, mmio_bus).await
-            }) {
+            #[cfg(target_os = "macos")]
+            match handle_command_tube_sync(device_ctrl_resp, guest_memory, io_bus, mmio_bus) {
                 Ok(_) => {}
                 Err(e) => {
                     error!("Device control thread exited with error: {}", e);
                 }
             };
+            #[cfg(not(target_os = "macos"))]
+            {
+                let ex = Executor::new().expect("Failed to create an executor");
+
+                let async_control = AsyncTube::new(&ex, device_ctrl_resp).unwrap();
+                match ex.run_until(async move {
+                    handle_command_tube(async_control, guest_memory, io_bus, mmio_bus).await
+                }) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("Device control thread exited with error: {}", e);
+                    }
+                };
+            }
         })
 }
 
@@ -421,6 +435,110 @@ async fn handle_command_tube(
             Err(e) => {
                 if matches!(e, TubeError::Disconnected) {
                     // Tube disconnected - shut down thread.
+                    return Ok(());
+                }
+                return Err(anyhow!("Failed to receive: {}", e));
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn handle_command_tube_sync(
+    command_tube: Tube,
+    guest_memory: GuestMemory,
+    io_bus: Arc<Bus>,
+    mmio_bus: Arc<Bus>,
+) -> anyhow::Result<()> {
+    let buses = &[&*io_bus, &*mmio_bus];
+    let mut devices_state = DevicesState::Wake;
+
+    loop {
+        match command_tube.recv() {
+            Ok(command) => match command {
+                DeviceControlCommand::SleepDevices => {
+                    if let DevicesState::Wake = devices_state {
+                        match sleep_buses(buses) {
+                            Ok(()) => {
+                                devices_state = DevicesState::Sleep;
+                            }
+                            Err(e) => {
+                                error!("failed to sleep: {:#}", e);
+                                info!("Attempting to wake devices after failed sleep");
+                                wake_buses(buses);
+                                command_tube
+                                    .send(&VmResponse::ErrString(e.to_string()))
+                                    .context("failed to send response.")?;
+                                continue;
+                            }
+                        }
+                    }
+                    command_tube
+                        .send(&VmResponse::Ok)
+                        .context("failed to reply to sleep command")?;
+                }
+                DeviceControlCommand::WakeDevices => {
+                    if let DevicesState::Sleep = devices_state {
+                        wake_buses(buses);
+                        devices_state = DevicesState::Wake;
+                    }
+                    command_tube
+                        .send(&VmResponse::Ok)
+                        .context("failed to reply to wake devices request")?;
+                }
+                DeviceControlCommand::SnapshotDevices {
+                    snapshot_writer,
+                    compress_memory,
+                } => {
+                    assert!(
+                        matches!(devices_state, DevicesState::Sleep),
+                        "devices must be sleeping to snapshot"
+                    );
+                    if let Err(e) = cros_async::block_on(snapshot_handler(
+                        snapshot_writer,
+                        &guest_memory,
+                        buses,
+                        compress_memory,
+                    )) {
+                        error!("failed to snapshot: {:#}", e);
+                        command_tube
+                            .send(&VmResponse::ErrString(e.to_string()))
+                            .context("Failed to send response")?;
+                        continue;
+                    }
+                    command_tube
+                        .send(&VmResponse::Ok)
+                        .context("Failed to send response")?;
+                }
+                DeviceControlCommand::RestoreDevices { snapshot_reader } => {
+                    assert!(
+                        matches!(devices_state, DevicesState::Sleep),
+                        "devices must be sleeping to restore"
+                    );
+                    if let Err(e) = cros_async::block_on(restore_handler(
+                        snapshot_reader,
+                        &guest_memory,
+                        &[&*io_bus, &*mmio_bus],
+                    )) {
+                        error!("failed to restore: {:#}", e);
+                        command_tube
+                            .send(&VmResponse::ErrString(e.to_string()))
+                            .context("Failed to send response")?;
+                        continue;
+                    }
+                    command_tube
+                        .send(&VmResponse::Ok)
+                        .context("Failed to send response")?;
+                }
+                DeviceControlCommand::GetDevicesState => {
+                    command_tube
+                        .send(&VmResponse::DevicesState(devices_state.clone()))
+                        .context("failed to send response")?;
+                }
+                DeviceControlCommand::Exit => return Ok(()),
+            },
+            Err(e) => {
+                if matches!(e, TubeError::Disconnected) {
                     return Ok(());
                 }
                 return Err(anyhow!("Failed to receive: {}", e));

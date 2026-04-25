@@ -156,7 +156,7 @@ pub fn add_serial_devices(
         } else {
             None
         };
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let serial_jail = None;
 
         let com = sys::add_serial_device(

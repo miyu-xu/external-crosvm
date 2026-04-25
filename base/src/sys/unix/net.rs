@@ -82,6 +82,12 @@ pub(in crate::sys) fn socket(
     sock_type: c_int,
     protocol: c_int,
 ) -> io::Result<SafeDescriptor> {
+    #[cfg(target_os = "macos")]
+    let sock_type = if domain == libc::AF_UNIX && sock_type == libc::SOCK_SEQPACKET {
+        libc::SOCK_STREAM
+    } else {
+        sock_type
+    };
     // SAFETY:
     // Safe socket initialization since we handle the returned error.
     match unsafe { libc::socket(domain, sock_type, protocol) } {
@@ -97,6 +103,12 @@ pub(in crate::sys) fn socketpair(
     sock_type: c_int,
     protocol: c_int,
 ) -> io::Result<(SafeDescriptor, SafeDescriptor)> {
+    #[cfg(target_os = "macos")]
+    let sock_type = if domain == libc::AF_UNIX && sock_type == libc::SOCK_SEQPACKET {
+        libc::SOCK_STREAM
+    } else {
+        sock_type
+    };
     let mut fds = [0, 0];
     // SAFETY:
     // Safe because we give enough space to store all the fds and we check the return value.

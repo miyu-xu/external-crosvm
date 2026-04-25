@@ -65,16 +65,27 @@ use x86_64::check_host_hybrid_support;
 use x86_64::CpuIdCall;
 
 pub(crate) use super::sys::HypervisorKind;
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+))]
 use crate::crosvm::sys::config::SharedDir;
 
 cfg_if::cfg_if! {
-    if #[cfg(any(target_os = "android", target_os = "linux"))] {
+    if #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+    ))] {
         #[cfg(feature = "gpu")]
         use crate::crosvm::sys::GpuRenderServerParameters;
 
         #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
         static VHOST_SCMI_PATH: &str = "/dev/vhost-scmi";
+    } else if #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))] {
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        static VHOST_SCMI_PATH: &str = "/dev/null";
     } else if #[cfg(windows)] {
         use base::{Event, Tube};
     }
@@ -739,7 +750,11 @@ pub struct Config {
     pub block_control_tube: Vec<Tube>,
     #[cfg(windows)]
     pub block_vhost_user_tube: Vec<Tube>,
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+    ))]
     pub boost_uclamp: bool,
     pub boot_cpu: usize,
     #[cfg(target_arch = "x86_64")]
@@ -755,7 +770,11 @@ pub struct Config {
     pub cpu_clusters: Vec<CpuSet>,
     #[cfg(all(
         any(target_arch = "arm", target_arch = "aarch64"),
-        any(target_os = "android", target_os = "linux")
+        any(
+            target_os = "android",
+            target_os = "linux",
+            all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+        )
     ))]
     pub cpu_frequencies_khz: BTreeMap<usize, Vec<u32>>, // CPU index -> frequencies
     #[cfg(feature = "crash-report")]
@@ -811,7 +830,11 @@ pub struct Config {
     pub jail_config: Option<JailConfig>,
     #[cfg(windows)]
     pub kernel_log_file: Option<String>,
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+    ))]
     pub lock_guest_memory: bool,
     #[cfg(windows)]
     pub log_file: Option<String>,
@@ -843,7 +866,11 @@ pub struct Config {
     #[cfg(feature = "plugin")]
     pub plugin_mounts: Vec<crate::crosvm::plugin::BindMount>,
     pub plugin_root: Option<PathBuf>,
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+    ))]
     pub pmem_ext2: Vec<crate::crosvm::sys::config::PmemExt2Option>,
     pub pmems: Vec<PmemOption>,
     #[cfg(feature = "process-invariants")]
@@ -870,7 +897,11 @@ pub struct Config {
     pub serial_parameters: BTreeMap<(SerialHardware, u8), SerialParameters>,
     #[cfg(windows)]
     pub service_pipe_name: Option<String>,
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+    ))]
     #[serde(skip)]
     pub shared_dirs: Vec<SharedDir>,
     #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
@@ -888,7 +919,11 @@ pub struct Config {
     pub swiotlb: Option<u64>,
     #[cfg(target_os = "android")]
     pub task_profiles: Vec<String>,
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+    ))]
     pub unmap_guest_memory_on_fork: bool,
     pub usb: bool,
     pub vcpu_affinity: Option<VcpuAffinity>,
@@ -896,14 +931,30 @@ pub struct Config {
     pub vcpu_count: Option<usize>,
     #[cfg(target_arch = "x86_64")]
     pub vcpu_hybrid_type: BTreeMap<usize, CpuHybridType>, // CPU index -> hybrid type
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+    ))]
     pub vfio: Vec<super::sys::config::VfioOption>,
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+    ))]
     pub vfio_isolate_hotplug: bool,
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+    ))]
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     pub vhost_scmi: bool,
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+    ))]
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     pub vhost_scmi_device: PathBuf,
     pub vhost_user: Vec<VhostUserFrontendOption>,
@@ -915,7 +966,11 @@ pub struct Config {
     pub video_enc: Vec<VideoDeviceConfig>,
     #[cfg(all(
         any(target_arch = "arm", target_arch = "aarch64"),
-        any(target_os = "android", target_os = "linux")
+        any(
+            target_os = "android",
+            target_os = "linux",
+            all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+        )
     ))]
     pub virt_cpufreq: bool,
     pub virtio_input: Vec<InputDeviceOption>,
@@ -976,7 +1031,11 @@ impl Default for Config {
             cpu_clusters: Vec::new(),
             #[cfg(all(
                 any(target_arch = "arm", target_arch = "aarch64"),
-                any(target_os = "android", target_os = "linux")
+                any(
+                    target_os = "android",
+                    target_os = "linux",
+                    all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+                )
             ))]
             cpu_frequencies_khz: BTreeMap::new(),
             delay_rt: false,
@@ -1036,13 +1095,21 @@ impl Default for Config {
             },
             #[cfg(windows)]
             kernel_log_file: None,
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+            ))]
             lock_guest_memory: false,
             #[cfg(windows)]
             log_file: None,
             #[cfg(windows)]
             logs_directory: None,
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+            ))]
             boost_uclamp: false,
             memory: None,
             memory_file: None,
@@ -1070,7 +1137,11 @@ impl Default for Config {
             #[cfg(feature = "plugin")]
             plugin_mounts: Vec::new(),
             plugin_root: None,
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+            ))]
             pmem_ext2: Vec::new(),
             pmems: Vec::new(),
             #[cfg(feature = "process-invariants")]
@@ -1091,7 +1162,11 @@ impl Default for Config {
             scsis: Vec::new(),
             #[cfg(windows)]
             service_pipe_name: None,
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+            ))]
             shared_dirs: Vec::new(),
             #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
             slirp_capture_file: None,
@@ -1108,7 +1183,11 @@ impl Default for Config {
             swiotlb: None,
             #[cfg(target_os = "android")]
             task_profiles: Vec::new(),
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+            ))]
             unmap_guest_memory_on_fork: false,
             usb: true,
             vcpu_affinity: None,
@@ -1116,14 +1195,30 @@ impl Default for Config {
             vcpu_count: None,
             #[cfg(target_arch = "x86_64")]
             vcpu_hybrid_type: BTreeMap::new(),
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+            ))]
             vfio: Vec::new(),
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+            ))]
             vfio_isolate_hotplug: false,
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+            ))]
             #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
             vhost_scmi: false,
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+            ))]
             #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
             vhost_scmi_device: PathBuf::from(VHOST_SCMI_PATH),
             vhost_user: Vec::new(),
@@ -1136,7 +1231,11 @@ impl Default for Config {
             video_enc: Vec::new(),
             #[cfg(all(
                 any(target_arch = "arm", target_arch = "aarch64"),
-                any(target_os = "android", target_os = "linux")
+                any(
+                    target_os = "android",
+                    target_os = "linux",
+                    all(target_os = "macos", target_arch = "aarch64", feature = "hvf")
+                )
             ))]
             virt_cpufreq: false,
             virtio_input: Vec::new(),

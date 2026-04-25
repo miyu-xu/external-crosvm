@@ -85,8 +85,7 @@ impl From<Error> for AsyncError {
 
 fn do_fdatasync(raw: Arc<OwnedFd>) -> io::Result<()> {
     let fd = raw.as_raw_fd();
-    // SAFETY: we partially own `raw`
-    match unsafe { libc::fdatasync(fd) } {
+    match fdatasync_impl(fd) {
         0 => Ok(()),
         _ => Err(io::Error::last_os_error()),
     }
@@ -101,6 +100,18 @@ fn do_fsync(raw: Arc<OwnedFd>) -> io::Result<()> {
     }
 }
 
+#[cfg(any(target_os = "android", target_os = "linux"))]
+fn fdatasync_impl(fd: RawFd) -> libc::c_int {
+    // SAFETY: we partially own the file descriptor.
+    unsafe { libc::fdatasync(fd) }
+}
+
+#[cfg(target_os = "macos")]
+fn fdatasync_impl(fd: RawFd) -> libc::c_int {
+    // SAFETY: we partially own the file descriptor.
+    unsafe { libc::fsync(fd) }
+}
+
 fn do_read_vectored(
     raw: Arc<OwnedFd>,
     file_offset: Option<u64>,
@@ -111,7 +122,10 @@ fn do_read_vectored(
     let fd = raw.as_raw_fd();
     let res = match file_offset {
         // SAFETY: we partially own `raw`, `io_vecs` is validated
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         Some(off) => unsafe { libc::preadv64(fd, ptr, len, off as libc::off64_t) },
+        #[cfg(target_os = "macos")]
+        Some(off) => unsafe { libc::preadv(fd, ptr, len, off as libc::off_t) },
         // SAFETY: we partially own `raw`, `io_vecs` is validated
         None => unsafe { libc::readv(fd, ptr, len) },
     };
@@ -125,7 +139,10 @@ fn do_read(raw: Arc<OwnedFd>, file_offset: Option<u64>, buf: &mut [u8]) -> io::R
     let ptr = buf.as_mut_ptr() as *mut libc::c_void;
     let res = match file_offset {
         // SAFETY: we partially own `raw`, `ptr` has space up to vec.len()
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         Some(off) => unsafe { libc::pread64(fd, ptr, buf.len(), off as libc::off64_t) },
+        #[cfg(target_os = "macos")]
+        Some(off) => unsafe { libc::pread(fd, ptr, buf.len(), off as libc::off_t) },
         // SAFETY: we partially own `raw`, `ptr` has space up to vec.len()
         None => unsafe { libc::read(fd, ptr, buf.len()) },
     };
@@ -140,7 +157,10 @@ fn do_write(raw: Arc<OwnedFd>, file_offset: Option<u64>, buf: &[u8]) -> io::Resu
     let ptr = buf.as_ptr() as *const libc::c_void;
     let res = match file_offset {
         // SAFETY: we partially own `raw`, `ptr` has data up to vec.len()
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         Some(off) => unsafe { libc::pwrite64(fd, ptr, buf.len(), off as libc::off64_t) },
+        #[cfg(target_os = "macos")]
+        Some(off) => unsafe { libc::pwrite(fd, ptr, buf.len(), off as libc::off_t) },
         // SAFETY: we partially own `raw`, `ptr` has data up to vec.len()
         None => unsafe { libc::write(fd, ptr, buf.len()) },
     };
@@ -160,7 +180,10 @@ fn do_write_vectored(
     let fd = raw.as_raw_fd();
     let res = match file_offset {
         // SAFETY: we partially own `raw`, `io_vecs` is validated
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         Some(off) => unsafe { libc::pwritev64(fd, ptr, len, off as libc::off64_t) },
+        #[cfg(target_os = "macos")]
+        Some(off) => unsafe { libc::pwritev(fd, ptr, len, off as libc::off_t) },
         // SAFETY: we partially own `raw`, `io_vecs` is validated
         None => unsafe { libc::writev(fd, ptr, len) },
     };

@@ -21,6 +21,9 @@ use slab::Slab;
 use sync::Condvar;
 use sync::Mutex;
 
+#[cfg(target_os = "macos")]
+const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(not(target_os = "macos"))]
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct State {

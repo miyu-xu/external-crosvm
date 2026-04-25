@@ -92,12 +92,7 @@ impl<T: EventToken> EventContext<T> {
         }
     }
 
-    pub fn modify(
-        &self,
-        fd: &dyn AsRawDescriptor,
-        event_type: EventType,
-        token: T,
-    ) -> Result<()> {
+    pub fn modify(&self, fd: &dyn AsRawDescriptor, event_type: EventType, token: T) -> Result<()> {
         let fd = fd.as_raw_descriptor();
         let mut state = self.state.lock().expect("EventContext state lock poisoned");
         if let Entry::Occupied(mut o) = state.entry(fd) {
@@ -197,7 +192,10 @@ impl<T: EventToken> EventContext<T> {
         }
         for kev in &changelist {
             let mut empty: [libc::kevent64_s; 0] = [];
-            if let Err(e) = self.queue.kevent(std::slice::from_ref(kev), &mut empty, None) {
+            if let Err(e) = self
+                .queue
+                .kevent(std::slice::from_ref(kev), &mut empty, None)
+            {
                 if e.errno() != ENOENT {
                     return Err(e);
                 }
@@ -221,9 +219,7 @@ impl<T: EventToken> EventContext<T> {
             return Ok(());
         }
         let mut empty: [libc::kevent64_s; 0] = [];
-        self.queue
-            .kevent(&changelist, &mut empty, None)
-            .map(|_| ())
+        self.queue.kevent(&changelist, &mut empty, None).map(|_| ())
     }
 }
 

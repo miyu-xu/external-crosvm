@@ -13,9 +13,13 @@ use base::syslog;
 use base::syslog::LogArgs;
 use base::syslog::LogConfig;
 use base::warn;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use devices::virtio::vhost::user::device::run_console_device;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use devices::virtio::vhost::user::device::run_fs_device;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use devices::virtio::vhost::user::device::run_vsock_device;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use devices::virtio::vhost::user::device::run_wl_device;
 
 use crate::crosvm::sys::cmdline::Commands;
@@ -25,11 +29,19 @@ use crate::CommandStatus;
 use crate::Config;
 
 pub(crate) fn start_device(command: DeviceSubcommand) -> anyhow::Result<()> {
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     match command {
         DeviceSubcommand::Console(cfg) => run_console_device(cfg),
         DeviceSubcommand::Fs(cfg) => run_fs_device(cfg),
         DeviceSubcommand::Vsock(cfg) => run_vsock_device(cfg),
         DeviceSubcommand::Wl(cfg) => run_wl_device(cfg),
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))]
+    {
+        let _ = command;
+        Err(anyhow!(
+            "device subcommands are not supported on macOS HVF hosts"
+        ))
     }
 }
 

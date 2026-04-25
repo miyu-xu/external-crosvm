@@ -22,6 +22,8 @@ use hypervisor::MemCacheType;
 use hypervisor::MemSlot;
 use hypervisor::Vm;
 use libc::EINVAL;
+#[cfg(target_os = "macos")]
+use libc::ENOTSUP;
 use libc::ERANGE;
 use once_cell::sync::Lazy;
 use resources::Alloc;
@@ -136,15 +138,27 @@ impl VmMemoryMappingRequest {
                 Err(e) => VmMemoryMappingResponse::Err(e),
             },
             MadvisePageout { slot, offset, size } => {
+                #[cfg(any(target_os = "android", target_os = "linux"))]
                 match vm.madvise_pageout_memory_region(slot, offset, size) {
                     Ok(()) => VmMemoryMappingResponse::Ok,
                     Err(e) => VmMemoryMappingResponse::Err(e),
                 }
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = (slot, offset, size);
+                    VmMemoryMappingResponse::Err(SysError::new(ENOTSUP))
+                }
             }
             MadviseRemove { slot, offset, size } => {
+                #[cfg(any(target_os = "android", target_os = "linux"))]
                 match vm.madvise_remove_memory_region(slot, offset, size) {
                     Ok(()) => VmMemoryMappingResponse::Ok,
                     Err(e) => VmMemoryMappingResponse::Err(e),
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = (slot, offset, size);
+                    VmMemoryMappingResponse::Err(SysError::new(ENOTSUP))
                 }
             }
         }

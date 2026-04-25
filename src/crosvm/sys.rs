@@ -9,6 +9,9 @@
 ))]
 pub(crate) mod linux;
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))]
+pub(crate) mod macos;
+
 #[cfg(windows)]
 pub(crate) mod windows;
 
@@ -18,15 +21,12 @@ cfg_if::cfg_if! {
 
         #[cfg(feature = "gpu")]
         pub(crate) use linux::gpu::GpuRenderServerParameters;
+    } else if #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))] {
+        use macos as platform;
     } else if #[cfg(windows)] {
         use windows as platform;
         #[cfg(feature = "pci-hotplug")]
         compile_error!("pci-hotplug not supported on windows");
-    } else if #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))] {
-        use linux as platform;
-
-        #[cfg(feature = "gpu")]
-        pub(crate) use linux::gpu::GpuRenderServerParameters;
     } else {
         compile_error!("Unsupported platform");
     }

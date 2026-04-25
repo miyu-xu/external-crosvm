@@ -9,7 +9,7 @@ anyhow = "1"
 base = { path = "../base/" }
 enumn = "0.1"
 libc = "0.2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "=1.12.1", features = ["v4"] }
 zerocopy = "0.7.29" # >=0.7.29 is required for our 'AsBytes'
 zerocopy-derive = "0.7"
 
@@ -18,5 +18,5 @@ name = "mkfs"
 
 [dev-dependencies]
 argh = "0.1"
-tempfile = "3"
+tempfile = "=3.14.0"
 walkdir = "2.3"

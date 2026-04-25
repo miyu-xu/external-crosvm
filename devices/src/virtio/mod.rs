@@ -132,6 +132,8 @@ cfg_if::cfg_if! {
         pub use self::wl::Wl;
     } else if #[cfg(windows)] {
         pub use self::vsock::Vsock;
+    } else if #[cfg(target_os = "macos")] {
+        pub use self::vsock::Vsock;
     } else {
         compile_error!("Unsupported platform");
     }

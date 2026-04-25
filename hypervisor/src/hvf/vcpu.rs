@@ -2,16 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#[cfg(target_arch = "aarch64")]
+use std::arch::asm;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::ffi::c_void;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
 use applevisor_sys::hv_error_t;
 use applevisor_sys::hv_exit_reason_t;
 use applevisor_sys::hv_reg_t;
 use applevisor_sys::hv_return_t;
+use applevisor_sys::hv_simd_fp_reg_t;
 use applevisor_sys::hv_sys_reg_t;
 use applevisor_sys::hv_vcpu_create;
 use applevisor_sys::hv_vcpu_destroy;
@@ -25,13 +32,13 @@ use applevisor_sys::hv_vcpu_set_simd_fp_reg;
 use applevisor_sys::hv_vcpu_set_sys_reg;
 use applevisor_sys::hv_vcpu_t;
 use applevisor_sys::hv_vcpus_exit;
-use applevisor_sys::hv_simd_fp_reg_t;
+use base::warn;
 use base::Error;
 use base::Event;
 use base::Result;
 use libc::EINVAL;
-use libc::ENOSYS;
 use libc::EIO;
+use libc::ENOSYS;
 
 use super::vm::check_hv;
 use crate::AArch64SysRegId;
@@ -46,6 +53,10 @@ use crate::VcpuFeature;
 use crate::VcpuRegAArch64;
 use crate::PSCI_0_2;
 
+unsafe extern "C" {
+    fn mach_absolute_time() -> u64;
+}
+
 /// Pending guest data abort (MMIO) exit state for `handle_mmio`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MmioPending {
@@ -53,12 +64,16 @@ pub(crate) struct MmioPending {
     pub size: usize,
     pub write: bool,
     pub rt: u8,
+    pub reg_64: bool,
+    pub sign_extend: bool,
 }
 
 pub struct HvfVcpu {
     id: usize,
     vcpu: hv_vcpu_t,
     exit: *const hv_vcpu_exit_t,
+    cntfrq: u64,
+    summary: ExitSummary,
     pending_mmio: Mutex<Option<MmioPending>>,
     ioevents: Arc<Mutex<HashMap<IoEventAddress, Event>>>,
 }
@@ -66,10 +81,99 @@ pub struct HvfVcpu {
 unsafe impl Send for HvfVcpu {}
 unsafe impl Sync for HvfVcpu {}
 
+static HVF_EXIT_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+static HVF_MMIO_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+const EC_WFX_TRAP: u64 = 0x01;
+const EC_AA64_HVC: u64 = 0x16;
+const EC_AA64_SMC: u64 = 0x17;
+const EC_SYSTEMREGISTERTRAP: u64 = 0x18;
+
+const TMR_CTL_ENABLE: u64 = 1 << 0;
+const TMR_CTL_IMASK: u64 = 1 << 1;
+
+const HCR_TLOR: u64 = 1 << 35;
+const HCR_RW: u64 = 1 << 31;
+const HCR_TSW: u64 = 1 << 22;
+const HCR_TACR: u64 = 1 << 21;
+const HCR_TIDCP: u64 = 1 << 20;
+const HCR_TSC: u64 = 1 << 19;
+const HCR_TID3: u64 = 1 << 18;
+const HCR_TWE: u64 = 1 << 14;
+const HCR_TWI: u64 = 1 << 13;
+const HCR_BSU_IS: u64 = 1 << 10;
+const HCR_FB: u64 = 1 << 9;
+const HCR_AMO: u64 = 1 << 5;
+const HCR_IMO: u64 = 1 << 4;
+const HCR_FMO: u64 = 1 << 3;
+const HCR_PTW: u64 = 1 << 2;
+const HCR_SWIO: u64 = 1 << 1;
+const HCR_VM: u64 = 1 << 0;
+const HCR_EL2_BITS: u64 = HCR_TSC
+    | HCR_TSW
+    | HCR_TWE
+    | HCR_TWI
+    | HCR_VM
+    | HCR_BSU_IS
+    | HCR_FB
+    | HCR_TACR
+    | HCR_AMO
+    | HCR_SWIO
+    | HCR_TIDCP
+    | HCR_RW
+    | HCR_TLOR
+    | HCR_FMO
+    | HCR_IMO
+    | HCR_PTW
+    | HCR_TID3;
+const CNTHCTL_EL0VCTEN: u64 = 1 << 1;
+const CNTHCTL_EL0PCTEN: u64 = 1 << 0;
+const CNTHCTL_EL2_BITS: u64 = CNTHCTL_EL0VCTEN | CNTHCTL_EL0PCTEN;
+const AA64PFR0_EL1_EL2EN: u64 = 1 << 8;
+const AA64PFR0_EL1_GIC3EN: u64 = 1 << 24;
+const AA64PFR1_EL1_SMEMASK: u64 = 3 << 24;
+const CNTV_CTL_EL0: AArch64SysRegId =
+    AArch64SysRegId::new_unchecked(0b11, 0b011, 0b1110, 0b0011, 0b001);
+
+const PSCI_VERSION: u32 = 0x8400_0000;
+const PSCI_CPU_SUSPEND_64: u32 = 0xc400_0001;
+const PSCI_CPU_OFF: u32 = 0x8400_0002;
+const PSCI_CPU_ON_64: u32 = 0xc400_0003;
+const PSCI_AFFINITY_INFO_64: u32 = 0xc400_0004;
+const PSCI_MIGRATE_INFO_TYPE: u32 = 0x8400_0006;
+const PSCI_SYSTEM_OFF: u32 = 0x8400_0008;
+const PSCI_SYSTEM_RESET: u32 = 0x8400_0009;
+const PSCI_FEATURES: u32 = 0x8400_000a;
+
+const PSCI_RET_SUCCESS: i64 = 0;
+const PSCI_RET_NOT_SUPPORTED: i64 = -1;
+const PSCI_RET_ALREADY_ON: i64 = -4;
+
+struct ExitSummary {
+    last_log: Instant,
+    total: u64,
+    mmio: u64,
+    psci: u64,
+    sysreg: u64,
+    wfx: u64,
+    vtimer: u64,
+    other_exception: u64,
+    canceled: u64,
+    unknown: u64,
+    last_pc: u64,
+    last_syndrome: u64,
+    last_gpa: u64,
+}
+
 impl HvfVcpu {
     pub fn new(id: usize, ioevents: Arc<Mutex<HashMap<IoEventAddress, Event>>>) -> Result<Self> {
         let mut vcpu: hv_vcpu_t = 0;
         let mut exit: *const hv_vcpu_exit_t = std::ptr::null();
+        let cntfrq = {
+            let cntfrq: u64;
+            unsafe { asm!("mrs {}, cntfrq_el0", out(reg) cntfrq) };
+            cntfrq
+        };
         check_hv(unsafe {
             hv_vcpu_create(
                 &mut vcpu,
@@ -77,10 +181,27 @@ impl HvfVcpu {
                 std::ptr::null_mut(),
             )
         })?;
+        check_hv(unsafe { hv_vcpu_set_sys_reg(vcpu, hv_sys_reg_t::MPIDR_EL1, id as u64) })?;
         Ok(HvfVcpu {
             id,
             vcpu,
             exit,
+            cntfrq,
+            summary: ExitSummary {
+                last_log: Instant::now(),
+                total: 0,
+                mmio: 0,
+                psci: 0,
+                sysreg: 0,
+                wfx: 0,
+                vtimer: 0,
+                other_exception: 0,
+                canceled: 0,
+                unknown: 0,
+                last_pc: 0,
+                last_syndrome: 0,
+                last_gpa: 0,
+            },
             pending_mmio: Mutex::new(None),
             ioevents,
         })
@@ -141,13 +262,230 @@ impl HvfVcpu {
         let wnr = (iss >> 6) & 1 != 0;
         let sas = (iss >> 22) & 3;
         let size = 1usize << sas;
-        let rt = ((iss >> 5) & 0x1f) as u8;
+        let rt = ((iss >> 16) & 0x1f) as u8;
+        let reg_64 = ((iss >> 15) & 1) != 0;
+        let sign_extend = ((iss >> 21) & 1) != 0;
         Some(MmioPending {
             gpa: ex.physical_address,
             size,
             write: wnr,
             rt,
+            reg_64,
+            sign_extend,
         })
+    }
+
+    fn read_reg(&self, reg: hv_reg_t) -> Result<u64> {
+        let mut v = 0u64;
+        check_hv(unsafe { hv_vcpu_get_reg(self.vcpu, reg, &mut v) })?;
+        Ok(v)
+    }
+
+    fn write_reg(&self, reg: hv_reg_t, value: u64) -> Result<()> {
+        check_hv(unsafe { hv_vcpu_set_reg(self.vcpu, reg, value) })
+    }
+
+    fn read_sys_reg(&self, reg: AArch64SysRegId) -> Result<u64> {
+        let mut value = 0u64;
+        check_hv(unsafe { hv_vcpu_get_sys_reg(self.vcpu, Self::sys_reg(reg), &mut value) })?;
+        Ok(value)
+    }
+
+    fn advance_pc(&self) -> Result<()> {
+        let pc = self.read_reg(hv_reg_t::PC)?;
+        self.write_reg(hv_reg_t::PC, pc.wrapping_add(4))
+    }
+
+    fn sys_reg(reg: AArch64SysRegId) -> hv_sys_reg_t {
+        unsafe { std::mem::transmute(reg.encoded() as u32) }
+    }
+
+    fn trapped_sys_reg(syndrome: u64) -> AArch64SysRegId {
+        let op0 = 2 + ((syndrome >> 20) & 0x1) as u8;
+        let op1 = ((syndrome >> 14) & 0x7) as u8;
+        let crn = ((syndrome >> 10) & 0xf) as u8;
+        let crm = ((syndrome >> 1) & 0xf) as u8;
+        let op2 = ((syndrome >> 17) & 0x7) as u8;
+        AArch64SysRegId::new_unchecked(op0, op1, crn, crm, op2)
+    }
+
+    fn psci_ret(code: i64) -> u64 {
+        code as u64
+    }
+
+    fn handle_psci_call(&self) -> Result<Option<VcpuExit>> {
+        let function = self.read_reg(hv_reg_t::X0)? as u32;
+        self.advance_pc()?;
+        match function {
+            PSCI_VERSION => {
+                self.write_reg(hv_reg_t::X0, u64::from(PSCI_0_2.minor))?;
+                Ok(None)
+            }
+            PSCI_FEATURES => {
+                let requested = self.read_reg(hv_reg_t::X1)? as u32;
+                let response = match requested {
+                    PSCI_VERSION
+                    | PSCI_CPU_SUSPEND_64
+                    | PSCI_CPU_OFF
+                    | PSCI_CPU_ON_64
+                    | PSCI_AFFINITY_INFO_64
+                    | PSCI_MIGRATE_INFO_TYPE
+                    | PSCI_SYSTEM_OFF
+                    | PSCI_SYSTEM_RESET
+                    | PSCI_FEATURES => PSCI_RET_SUCCESS,
+                    _ => PSCI_RET_NOT_SUPPORTED,
+                };
+                self.write_reg(hv_reg_t::X0, Self::psci_ret(response))?;
+                Ok(None)
+            }
+            PSCI_MIGRATE_INFO_TYPE => {
+                self.write_reg(hv_reg_t::X0, 2)?;
+                Ok(None)
+            }
+            PSCI_CPU_OFF | PSCI_SYSTEM_OFF => {
+                let pc = self.read_reg(hv_reg_t::PC)?;
+                let lr = self.read_reg(hv_reg_t::X30)?;
+                let x1 = self.read_reg(hv_reg_t::X1)?;
+                let x2 = self.read_reg(hv_reg_t::X2)?;
+                warn!(
+                    "HVF PSCI shutdown function=0x{function:08x} pc=0x{pc:016x} lr=0x{lr:016x} x1=0x{x1:016x} x2=0x{x2:016x}"
+                );
+                Ok(Some(VcpuExit::SystemEventShutdown))
+            }
+            PSCI_SYSTEM_RESET => {
+                let pc = self.read_reg(hv_reg_t::PC)?;
+                let lr = self.read_reg(hv_reg_t::X30)?;
+                let x1 = self.read_reg(hv_reg_t::X1)?;
+                let x2 = self.read_reg(hv_reg_t::X2)?;
+                warn!(
+                    "HVF PSCI reset function=0x{function:08x} pc=0x{pc:016x} lr=0x{lr:016x} x1=0x{x1:016x} x2=0x{x2:016x}"
+                );
+                Ok(Some(VcpuExit::SystemEventReset))
+            }
+            PSCI_CPU_ON_64 | PSCI_AFFINITY_INFO_64 | PSCI_CPU_SUSPEND_64 => {
+                self.write_reg(hv_reg_t::X0, Self::psci_ret(PSCI_RET_ALREADY_ON))?;
+                Ok(None)
+            }
+            _ => {
+                warn!("HVF unhandled PSCI function 0x{function:08x}");
+                self.write_reg(hv_reg_t::X0, Self::psci_ret(PSCI_RET_NOT_SUPPORTED))?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn handle_system_register_trap(&self, syndrome: u64) -> Result<()> {
+        let is_read = (syndrome & 1) != 0;
+        let rt = ((syndrome >> 5) & 0x1f) as u8;
+        let reg = Self::trapped_sys_reg(syndrome);
+        let sys = Self::sys_reg(reg);
+
+        self.advance_pc()?;
+
+        if is_read {
+            let mut value = 0u64;
+            if check_hv(unsafe { hv_vcpu_get_sys_reg(self.vcpu, sys, &mut value) }).is_err() {
+                warn!(
+                    "HVF defaulting trapped sysreg read reg={:?} encoded=0x{:x} to zero",
+                    reg,
+                    reg.encoded()
+                );
+            }
+            if rt < 31 {
+                self.write_reg(Self::x_reg(rt)?, value)?;
+            }
+        } else {
+            let value = if rt < 31 {
+                self.read_reg(Self::x_reg(rt)?)?
+            } else {
+                0
+            };
+            if check_hv(unsafe { hv_vcpu_set_sys_reg(self.vcpu, sys, value) }).is_err() {
+                warn!(
+                    "HVF ignoring trapped sysreg write reg={:?} encoded=0x{:x} value=0x{:x}",
+                    reg,
+                    reg.encoded(),
+                    value
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_wait_for_event_trap(&self) -> Result<()> {
+        self.advance_pc()?;
+
+        let ctl = self.read_sys_reg(CNTV_CTL_EL0)?;
+        if (ctl & TMR_CTL_ENABLE) == 0 || (ctl & TMR_CTL_IMASK) != 0 {
+            thread::sleep(Duration::from_millis(1));
+            return Ok(());
+        }
+
+        let cval = self.read_sys_reg(AArch64SysRegId::CNTV_CVAL_EL0)?;
+        let now = unsafe { mach_absolute_time() };
+        if now >= cval {
+            thread::yield_now();
+            return Ok(());
+        }
+
+        let ticks = u128::from(cval - now);
+        let nanos = ticks.saturating_mul(1_000_000_000u128) / u128::from(self.cntfrq.max(1));
+        let timeout = Duration::from_nanos(nanos.min(u64::MAX as u128) as u64);
+        thread::sleep(timeout.min(Duration::from_millis(1)));
+        Ok(())
+    }
+
+    fn record_exit(&mut self, exit: &hv_vcpu_exit_t, pc: u64) {
+        self.summary.total += 1;
+        self.summary.last_pc = pc;
+        match exit.reason {
+            hv_exit_reason_t::EXCEPTION => {
+                let ec = exit.exception.syndrome >> 26;
+                self.summary.last_syndrome = exit.exception.syndrome;
+                self.summary.last_gpa = exit.exception.physical_address;
+                if ec == EC_AA64_HVC || ec == EC_AA64_SMC {
+                    self.summary.psci += 1;
+                } else if ec == EC_SYSTEMREGISTERTRAP {
+                    self.summary.sysreg += 1;
+                } else if ec == EC_WFX_TRAP {
+                    self.summary.wfx += 1;
+                } else if Self::parse_mmio(&exit.exception).is_some() {
+                    self.summary.mmio += 1;
+                } else {
+                    self.summary.other_exception += 1;
+                }
+            }
+            hv_exit_reason_t::VTIMER_ACTIVATED => {
+                self.summary.vtimer += 1;
+            }
+            hv_exit_reason_t::CANCELED => {
+                self.summary.canceled += 1;
+            }
+            hv_exit_reason_t::UNKNOWN => {
+                self.summary.unknown += 1;
+            }
+        }
+
+        if self.summary.last_log.elapsed() >= Duration::from_secs(1) {
+            warn!(
+                "HVF summary vcpu={} total={} mmio={} psci={} sysreg={} wfx={} vtimer={} other_exc={} canceled={} unknown={} last_pc=0x{:x} last_syndrome=0x{:x} last_gpa=0x{:x}",
+                self.id,
+                self.summary.total,
+                self.summary.mmio,
+                self.summary.psci,
+                self.summary.sysreg,
+                self.summary.wfx,
+                self.summary.vtimer,
+                self.summary.other_exception,
+                self.summary.canceled,
+                self.summary.unknown,
+                self.summary.last_pc,
+                self.summary.last_syndrome,
+                self.summary.last_gpa,
+            );
+            self.summary.last_log = Instant::now();
+        }
     }
 }
 
@@ -169,23 +507,82 @@ impl Vcpu for HvfVcpu {
     }
 
     fn run(&mut self) -> Result<VcpuExit> {
-        let r = unsafe { hv_vcpu_run(self.vcpu) };
-        if r != hv_error_t::HV_SUCCESS as hv_return_t {
-            return Err(Error::new(EIO));
-        }
-        // SAFETY: `exit` is owned by the hypervisor and valid until destroy.
-        let exit = unsafe { &*self.exit };
-        match exit.reason {
-            hv_exit_reason_t::EXCEPTION => {
-                if let Some(mmio) = Self::parse_mmio(&exit.exception) {
-                    *self.pending_mmio.lock().unwrap() = Some(mmio);
-                    return Ok(VcpuExit::Mmio);
-                }
-                Ok(VcpuExit::Exception)
+        loop {
+            let r = unsafe { hv_vcpu_run(self.vcpu) };
+            if r != hv_error_t::HV_SUCCESS as hv_return_t {
+                let mut pc = 0u64;
+                let _ = check_hv(unsafe { hv_vcpu_get_reg(self.vcpu, hv_reg_t::PC, &mut pc) });
+                let mut cpsr = 0u64;
+                let _ = check_hv(unsafe { hv_vcpu_get_reg(self.vcpu, hv_reg_t::CPSR, &mut cpsr) });
+                let mut esr = 0u64;
+                let _ = check_hv(unsafe {
+                    hv_vcpu_get_sys_reg(self.vcpu, hv_sys_reg_t::ESR_EL1, &mut esr)
+                });
+                let mut far = 0u64;
+                let _ = check_hv(unsafe {
+                    hv_vcpu_get_sys_reg(self.vcpu, hv_sys_reg_t::FAR_EL1, &mut far)
+                });
+                let mut x0 = 0u64;
+                let _ = check_hv(unsafe { hv_vcpu_get_reg(self.vcpu, hv_reg_t::X0, &mut x0) });
+                warn!(
+                    "HVF hv_vcpu_run failed for vcpu {} with code {} pc=0x{:x} cpsr=0x{:x} x0=0x{:x} esr=0x{:x} far=0x{:x}",
+                    self.id, r, pc, cpsr, x0, esr, far
+                );
+                return Err(Error::new(EIO));
             }
-            hv_exit_reason_t::VTIMER_ACTIVATED => Ok(VcpuExit::Intr),
-            hv_exit_reason_t::CANCELED => Ok(VcpuExit::Canceled),
-            hv_exit_reason_t::UNKNOWN => Ok(VcpuExit::InternalError),
+            // SAFETY: `exit` is owned by the hypervisor and valid until destroy.
+            let exit = unsafe { &*self.exit };
+            let mut pc = 0u64;
+            let _ = check_hv(unsafe { hv_vcpu_get_reg(self.vcpu, hv_reg_t::PC, &mut pc) });
+            self.record_exit(exit, pc);
+            if HVF_EXIT_LOG_COUNT.fetch_add(1, Ordering::Relaxed) < 2048 {
+                match exit.reason {
+                    hv_exit_reason_t::EXCEPTION => warn!(
+                        "HVF exit vcpu={} reason=EXCEPTION pc=0x{:x} syndrome=0x{:x} gpa=0x{:x} gva=0x{:x}",
+                        self.id,
+                        pc,
+                        exit.exception.syndrome,
+                        exit.exception.physical_address,
+                        exit.exception.virtual_address
+                    ),
+                    hv_exit_reason_t::VTIMER_ACTIVATED => {
+                        warn!("HVF exit vcpu={} reason=VTIMER_ACTIVATED pc=0x{:x}", self.id, pc)
+                    }
+                    hv_exit_reason_t::CANCELED => {
+                        warn!("HVF exit vcpu={} reason=CANCELED pc=0x{:x}", self.id, pc)
+                    }
+                    hv_exit_reason_t::UNKNOWN => {
+                        warn!("HVF exit vcpu={} reason=UNKNOWN pc=0x{:x}", self.id, pc)
+                    }
+                }
+            }
+            match exit.reason {
+                hv_exit_reason_t::EXCEPTION => {
+                    let ec = exit.exception.syndrome >> 26;
+                    if ec == EC_WFX_TRAP {
+                        self.handle_wait_for_event_trap()?;
+                        continue;
+                    }
+                    if ec == EC_AA64_HVC || ec == EC_AA64_SMC {
+                        if let Some(vcpu_exit) = self.handle_psci_call()? {
+                            return Ok(vcpu_exit);
+                        }
+                        continue;
+                    }
+                    if ec == EC_SYSTEMREGISTERTRAP {
+                        self.handle_system_register_trap(exit.exception.syndrome)?;
+                        continue;
+                    }
+                    if let Some(mmio) = Self::parse_mmio(&exit.exception) {
+                        *self.pending_mmio.lock().unwrap() = Some(mmio);
+                        return Ok(VcpuExit::Mmio);
+                    }
+                    return Ok(VcpuExit::Exception);
+                }
+                hv_exit_reason_t::VTIMER_ACTIVATED => return Ok(VcpuExit::Intr),
+                hv_exit_reason_t::CANCELED => return Ok(VcpuExit::Canceled),
+                hv_exit_reason_t::UNKNOWN => return Ok(VcpuExit::InternalError),
+            }
         }
     }
 
@@ -214,31 +611,21 @@ impl Vcpu for HvfVcpu {
             .ok_or_else(|| Error::new(EINVAL))?;
 
         let read_rt_u64 = |rt: u8| -> Result<u64> {
-            if rt == 31 {
-                let mut v = 0u64;
-                check_hv(unsafe {
-                    hv_vcpu_get_sys_reg(self.vcpu, hv_sys_reg_t::SP_EL1, &mut v)
-                })?;
-                Ok(v)
-            } else {
-                let mut v = 0u64;
-                check_hv(unsafe { hv_vcpu_get_reg(self.vcpu, Self::x_reg(rt)?, &mut v) })?;
-                Ok(v)
-            }
+            let mut v = 0u64;
+            check_hv(unsafe { hv_vcpu_get_reg(self.vcpu, Self::x_reg(rt)?, &mut v) })?;
+            Ok(v)
         };
 
         let write_rt_u64 = |rt: u8, val: u64| -> Result<()> {
-            if rt == 31 {
-                check_hv(unsafe {
-                    hv_vcpu_set_sys_reg(self.vcpu, hv_sys_reg_t::SP_EL1, val)
-                })
-            } else {
-                check_hv(unsafe { hv_vcpu_set_reg(self.vcpu, Self::x_reg(rt)?, val) })
-            }
+            check_hv(unsafe { hv_vcpu_set_reg(self.vcpu, Self::x_reg(rt)?, val) })
         };
 
         let op = if mmio.write {
-            let v = read_rt_u64(mmio.rt)?;
+            let v = if mmio.rt < 31 {
+                read_rt_u64(mmio.rt)?
+            } else {
+                0
+            };
             let mut data = [0u8; 8];
             data[..mmio.size].copy_from_slice(&v.to_le_bytes()[..mmio.size]);
             IoOperation::Write { data }
@@ -253,6 +640,30 @@ impl Vcpu for HvfVcpu {
         };
 
         let out = handle_fn(params)?;
+        if HVF_MMIO_LOG_COUNT.fetch_add(1, Ordering::Relaxed) < 2048 {
+            match (&params.operation, &out) {
+                (IoOperation::Write { data }, _) => warn!(
+                    "HVF mmio vcpu={} addr=0x{:x} size={} write=true rt={} data={:02x?}",
+                    self.id,
+                    mmio.gpa,
+                    mmio.size,
+                    mmio.rt,
+                    &data[..mmio.size.min(8)]
+                ),
+                (_, Some(buf)) => warn!(
+                    "HVF mmio vcpu={} addr=0x{:x} size={} write=false rt={} out={:02x?}",
+                    self.id,
+                    mmio.gpa,
+                    mmio.size,
+                    mmio.rt,
+                    &buf[..mmio.size.min(8)]
+                ),
+                (_, None) => warn!(
+                    "HVF mmio vcpu={} addr=0x{:x} size={} write=false rt={} out=<none>",
+                    self.id, mmio.gpa, mmio.size, mmio.rt
+                ),
+            }
+        }
         if !mmio.write {
             let mut val = 0u64;
             if let Some(buf) = out {
@@ -261,9 +672,18 @@ impl Vcpu for HvfVcpu {
                     buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
                 ]);
                 if n < 8 {
-                    let cur = read_rt_u64(mmio.rt)?;
-                    let mask = !0u64 >> (64 - n * 8);
-                    val = (cur & !mask) | (val & mask);
+                    let bits = (n * 8) as u32;
+                    let mask = (1u64 << bits) - 1;
+                    val &= mask;
+                    if mmio.sign_extend && bits > 0 {
+                        let sign_bit = 1u64 << (bits - 1);
+                        if (val & sign_bit) != 0 {
+                            val |= !mask;
+                        }
+                    }
+                }
+                if !mmio.reg_64 {
+                    val &= u32::MAX as u64;
                 }
             }
             if mmio.rt != 31 {
@@ -285,10 +705,7 @@ impl Vcpu for HvfVcpu {
         Ok(())
     }
 
-    fn handle_io(
-        &self,
-        _handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>,
-    ) -> Result<()> {
+    fn handle_io(&self, _handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
         Ok(())
     }
 
@@ -310,6 +727,36 @@ impl VcpuAArch64 for HvfVcpu {
                 VcpuFeature::PowerOff => {}
             }
         }
+
+        check_hv(unsafe { hv_vcpu_set_sys_reg(self.vcpu, hv_sys_reg_t::HCR_EL2, HCR_EL2_BITS) })?;
+        check_hv(unsafe {
+            hv_vcpu_set_sys_reg(self.vcpu, hv_sys_reg_t::CNTHCTL_EL2, CNTHCTL_EL2_BITS)
+        })?;
+
+        let mut pfr0 = 0u64;
+        check_hv(unsafe {
+            hv_vcpu_get_sys_reg(self.vcpu, hv_sys_reg_t::ID_AA64PFR0_EL1, &mut pfr0)
+        })?;
+        check_hv(unsafe {
+            hv_vcpu_set_sys_reg(
+                self.vcpu,
+                hv_sys_reg_t::ID_AA64PFR0_EL1,
+                pfr0 | AA64PFR0_EL1_EL2EN | AA64PFR0_EL1_GIC3EN,
+            )
+        })?;
+
+        let mut pfr1 = 0u64;
+        check_hv(unsafe {
+            hv_vcpu_get_sys_reg(self.vcpu, hv_sys_reg_t::ID_AA64PFR1_EL1, &mut pfr1)
+        })?;
+        check_hv(unsafe {
+            hv_vcpu_set_sys_reg(
+                self.vcpu,
+                hv_sys_reg_t::ID_AA64PFR1_EL1,
+                pfr1 & !AA64PFR1_EL1_SMEMASK,
+            )
+        })?;
+
         Ok(())
     }
 
@@ -332,9 +779,9 @@ impl VcpuAArch64 for HvfVcpu {
                 let r = Self::x_reg(n)?;
                 check_hv(unsafe { hv_vcpu_set_reg(self.vcpu, r, data) })
             }
-            VcpuRegAArch64::Sp => check_hv(unsafe {
-                hv_vcpu_set_sys_reg(self.vcpu, hv_sys_reg_t::SP_EL1, data)
-            }),
+            VcpuRegAArch64::Sp => {
+                check_hv(unsafe { hv_vcpu_set_sys_reg(self.vcpu, hv_sys_reg_t::SP_EL1, data) })
+            }
             VcpuRegAArch64::Pc => {
                 check_hv(unsafe { hv_vcpu_set_reg(self.vcpu, hv_reg_t::PC, data) })
             }

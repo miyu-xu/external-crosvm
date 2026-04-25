@@ -36,7 +36,16 @@ pub fn open_raw_disk_image(params: &DiskFileParams) -> Result<File> {
     // open_file_or_reuse time because it will reuse existing fd and will
     // not actually use the given OpenOptions.
     if params.is_direct {
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         base::add_fd_flags(raw_image.as_raw_fd(), libc::O_DIRECT).map_err(Error::DirectFailed)?;
+        #[cfg(target_os = "macos")]
+        {
+            // Use uncached I/O on Darwin hosts in place of Linux O_DIRECT.
+            let ret = unsafe { libc::fcntl(raw_image.as_raw_fd(), libc::F_NOCACHE, 1) };
+            if ret == -1 {
+                return Err(Error::DirectFailed(base::Error::last()));
+            }
+        }
     }
 
     Ok(raw_image)
@@ -60,12 +69,14 @@ pub fn read_from_disk(
 
 impl SingleFileDisk {
     pub fn new(disk: File, ex: &Executor) -> Result<Self> {
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let is_block_device_file =
             base::linux::is_block_file(&disk).map_err(Error::BlockDeviceNew)?;
         ex.async_from(disk)
             .map_err(Error::CreateSingleFileDisk)
             .map(|inner| SingleFileDisk {
                 inner,
+                #[cfg(any(target_os = "android", target_os = "linux"))]
                 is_block_device_file,
             })
     }

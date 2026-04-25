@@ -3,22 +3,19 @@
 // found in the LICENSE file.
 
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 use std::collections::BTreeMap;
+use std::collections::BinaryHeap;
 use std::collections::HashMap;
+use std::ffi::c_char;
 use std::ffi::c_void;
+use std::ptr::null_mut;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 
 use applevisor_sys::hv_error_t;
-use applevisor_sys::hv_gic_config_create;
-use applevisor_sys::hv_gic_config_set_distributor_base;
-use applevisor_sys::hv_gic_config_set_redistributor_base;
-use applevisor_sys::hv_gic_create;
-use applevisor_sys::hv_gic_send_msi;
-use applevisor_sys::hv_gic_set_spi;
 use applevisor_sys::hv_ipa_t;
 use applevisor_sys::hv_memory_flags_t;
 use applevisor_sys::hv_return_t;
@@ -34,6 +31,7 @@ use applevisor_sys::HV_MEMORY_EXEC;
 use applevisor_sys::HV_MEMORY_READ;
 use applevisor_sys::HV_MEMORY_WRITE;
 use base::pagesize;
+use base::warn;
 use base::AsRawDescriptor;
 use base::Error;
 use base::Event;
@@ -43,15 +41,17 @@ use base::Protection;
 use base::Result;
 use base::SafeDescriptor;
 use cros_fdt::Fdt;
+use libc::EEXIST;
 use libc::EFAULT;
 use libc::EINVAL;
+use libc::EIO;
 use libc::ENOENT;
 use libc::ENOSPC;
 use libc::ENOSYS;
 use libc::ENXIO;
 use libc::EOVERFLOW;
-use libc::EEXIST;
-use libc::EIO;
+use libc::RTLD_LAZY;
+use libc::RTLD_LOCAL;
 use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
@@ -80,12 +80,94 @@ const AARCH64_GIC_REDIST_SIZE: u64 = 0x2_0000;
 const AARCH64_GIC_DIST_BASE: u64 = AARCH64_AXI_BASE - AARCH64_GIC_DIST_SIZE;
 const AARCH64_GIC_CPUI_BASE: u64 = AARCH64_GIC_DIST_BASE - AARCH64_GIC_CPUI_SIZE;
 
+type HvGicConfigCreate = unsafe extern "C" fn() -> *mut c_void;
+type HvGicConfigSetDistributorBase = unsafe extern "C" fn(*mut c_void, u64) -> hv_return_t;
+type HvGicConfigSetRedistributorBase = unsafe extern "C" fn(*mut c_void, u64) -> hv_return_t;
+type HvGicCreate = unsafe extern "C" fn(*mut c_void) -> hv_return_t;
+type HvGicGetDistributorSize = unsafe extern "C" fn(*mut u64) -> hv_return_t;
+type HvGicGetRedistributorRegionSize = unsafe extern "C" fn(*mut u64) -> hv_return_t;
+type HvGicSendMsi = unsafe extern "C" fn(hv_ipa_t, u32) -> hv_return_t;
+type HvGicSetSpi = unsafe extern "C" fn(u32, bool) -> hv_return_t;
+
+struct HvfGicSymbols {
+    _framework: *mut c_void,
+    config_create: HvGicConfigCreate,
+    config_set_distributor_base: HvGicConfigSetDistributorBase,
+    config_set_redistributor_base: HvGicConfigSetRedistributorBase,
+    create: HvGicCreate,
+    get_distributor_size: HvGicGetDistributorSize,
+    get_redistributor_region_size: HvGicGetRedistributorRegionSize,
+    send_msi: HvGicSendMsi,
+    set_spi: HvGicSetSpi,
+}
+
+unsafe impl Send for HvfGicSymbols {}
+unsafe impl Sync for HvfGicSymbols {}
+
+fn hvf_gic_symbols() -> Option<&'static HvfGicSymbols> {
+    static SYMBOLS: once_cell::sync::OnceCell<Option<HvfGicSymbols>> =
+        once_cell::sync::OnceCell::new();
+    SYMBOLS.get_or_init(load_hvf_gic_symbols).as_ref()
+}
+
+fn load_hvf_gic_symbols() -> Option<HvfGicSymbols> {
+    unsafe {
+        let framework = libc::dlopen(
+            b"/System/Library/Frameworks/Hypervisor.framework/Hypervisor\0"
+                .as_ptr()
+                .cast::<c_char>(),
+            RTLD_LAZY | RTLD_LOCAL,
+        );
+        if framework.is_null() {
+            return None;
+        }
+
+        Some(HvfGicSymbols {
+            _framework: framework,
+            config_create: load_hvf_gic_symbol(framework, b"hv_gic_config_create\0")?,
+            config_set_distributor_base: load_hvf_gic_symbol(
+                framework,
+                b"hv_gic_config_set_distributor_base\0",
+            )?,
+            config_set_redistributor_base: load_hvf_gic_symbol(
+                framework,
+                b"hv_gic_config_set_redistributor_base\0",
+            )?,
+            create: load_hvf_gic_symbol(framework, b"hv_gic_create\0")?,
+            get_distributor_size: load_hvf_gic_symbol(framework, b"hv_gic_get_distributor_size\0")?,
+            get_redistributor_region_size: load_hvf_gic_symbol(
+                framework,
+                b"hv_gic_get_redistributor_region_size\0",
+            )?,
+            send_msi: load_hvf_gic_symbol(framework, b"hv_gic_send_msi\0")?,
+            set_spi: load_hvf_gic_symbol(framework, b"hv_gic_set_spi\0")?,
+        })
+    }
+}
+
+unsafe fn load_hvf_gic_symbol<T>(framework: *mut c_void, name: &[u8]) -> Option<T>
+where
+    T: Copy,
+{
+    let symbol = libc::dlsym(framework, name.as_ptr().cast::<c_char>());
+    if symbol.is_null() {
+        None
+    } else {
+        Some(std::mem::transmute_copy(&symbol))
+    }
+}
+
 pub(crate) fn check_hv(r: hv_return_t) -> Result<()> {
     if r == hv_error_t::HV_SUCCESS as hv_return_t {
         Ok(())
     } else {
+        eprintln!("HVF call failed with code {}", r);
         Err(Error::new(EIO))
     }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
+    mutex.lock().map_err(|_| Error::new(EIO))
 }
 
 /// Bitmap size for dirty logging (same formula as KVM).
@@ -126,7 +208,9 @@ impl Hypervisor for HvfHypervisor {
     fn check_capability(&self, cap: HypervisorCap) -> bool {
         matches!(
             cap,
-            HypervisorCap::UserMemory | HypervisorCap::ImmediateExit
+            HypervisorCap::UserMemory
+                | HypervisorCap::ImmediateExit
+                | HypervisorCap::VcpuRunThreadLocal
         )
     }
 }
@@ -153,24 +237,74 @@ impl HvfVm {
         }
 
         let vm_life = Arc::new(HvfVmLife { _p: () });
+        if let Ok(mut entry_bytes) =
+            guest_mem.read_obj_from_addr::<[u8; 16]>(GuestAddress(0x8000_0000))
+        {
+            warn!("HVF guest entry bytes @0x80000000: {:02x?}", entry_bytes);
+        }
         let vm_cfg = unsafe { hv_vm_config_create() };
-        if vm_cfg.is_null() {
-            return Err(Error::new(ENOSPC));
-        }
-        let r = unsafe { hv_vm_config_set_ipa_size(vm_cfg, 40) };
-        if r != hv_error_t::HV_SUCCESS as hv_return_t {
-            unsafe {
-                os_release(vm_cfg as *mut c_void);
+        if !vm_cfg.is_null() {
+            let r = unsafe { hv_vm_config_set_ipa_size(vm_cfg, 40) };
+            if r == hv_error_t::HV_SUCCESS as hv_return_t {
+                let r = unsafe { hv_vm_create(vm_cfg) };
+                unsafe {
+                    os_release(vm_cfg as *mut c_void);
+                }
+                if r == hv_error_t::HV_SUCCESS as hv_return_t {
+                    for region in guest_mem.regions() {
+                        warn!(
+                            "HVF mapping guest region host=0x{:x} guest=0x{:x} size=0x{:x}",
+                            region.host_addr as usize,
+                            region.guest_addr.offset(),
+                            region.size
+                        );
+                        let flags = HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC;
+                        check_hv(unsafe {
+                            hv_vm_map(
+                                region.host_addr as *const c_void,
+                                region.guest_addr.offset() as hv_ipa_t,
+                                region.size,
+                                flags,
+                            )
+                        })?;
+                    }
+
+                    return Ok(HvfVm {
+                        _hypervisor: HvfHypervisor,
+                        _vm_life: vm_life,
+                        guest_mem,
+                        mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
+                        mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
+                        ipa_bits: 40,
+                        gic_done: AtomicBool::new(false),
+                        ioevents: Arc::new(Mutex::new(HashMap::new())),
+                    });
+                }
+                eprintln!(
+                    "HVF hv_vm_create(config) failed with code {}, retrying with default config",
+                    r
+                );
+            } else {
+                eprintln!(
+                    "HVF hv_vm_config_set_ipa_size failed with code {}, retrying with default config",
+                    r
+                );
+                unsafe {
+                    os_release(vm_cfg as *mut c_void);
+                }
             }
-            return Err(Error::new(EIO));
         }
-        let r = unsafe { hv_vm_create(vm_cfg) };
-        unsafe {
-            os_release(vm_cfg as *mut c_void);
-        }
+
+        let r = unsafe { hv_vm_create(null_mut()) };
         check_hv(r)?;
 
         for region in guest_mem.regions() {
+            warn!(
+                "HVF mapping guest region host=0x{:x} guest=0x{:x} size=0x{:x}",
+                region.host_addr as usize,
+                region.guest_addr.offset(),
+                region.size
+            );
             let flags = HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC;
             check_hv(unsafe {
                 hv_vm_map(
@@ -197,6 +331,7 @@ impl HvfVm {
     /// Installs the in-framework GICv3. Must run **before** any `hv_vcpu_create`, after guest RAM
     /// is mapped. Matches the guest physical layout used by `KvmKernelIrqChip` on AArch64.
     pub fn init_gic(&self, num_vcpus: usize) -> Result<()> {
+        let gic = hvf_gic_symbols().ok_or_else(|| Error::new(ENOSYS))?;
         if self
             .gic_done
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -205,31 +340,51 @@ impl HvfVm {
             return Ok(());
         }
 
-        let dist_if_addr = AARCH64_GIC_DIST_BASE;
-        let redist_addr = dist_if_addr - (AARCH64_GIC_REDIST_SIZE as u64 * num_vcpus as u64);
+        let mut dist_size = 0u64;
+        check_hv(unsafe { (gic.get_distributor_size)(&mut dist_size) })?;
+        if dist_size == 0 {
+            self.gic_done.store(false, Ordering::SeqCst);
+            return Err(Error::new(EINVAL));
+        }
+        let mut redist_region_size = 0u64;
+        check_hv(unsafe { (gic.get_redistributor_region_size)(&mut redist_region_size) })?;
+        if redist_region_size == 0 {
+            self.gic_done.store(false, Ordering::SeqCst);
+            return Err(Error::new(EINVAL));
+        }
+        let redist_size = redist_region_size
+            .checked_mul(num_vcpus as u64)
+            .ok_or_else(|| Error::new(EOVERFLOW))?;
+        let redist_addr = AARCH64_AXI_BASE
+            .checked_sub(redist_size)
+            .ok_or_else(|| Error::new(EOVERFLOW))?;
+        let dist_if_addr = redist_addr
+            .checked_sub(dist_size)
+            .ok_or_else(|| Error::new(EOVERFLOW))?;
+        warn!(
+            "HVF GIC layout: dist=0x{:x} dist_size=0x{:x} redist=0x{:x} redist_size=0x{:x} vcpus={}",
+            dist_if_addr, dist_size, redist_addr, redist_region_size, num_vcpus
+        );
 
-        let gic_cfg = unsafe { hv_gic_config_create() };
+        let gic_cfg = unsafe { (gic.config_create)() };
         if gic_cfg.is_null() {
             self.gic_done.store(false, Ordering::SeqCst);
             return Err(Error::new(ENOSPC));
         }
         let mut ok = true;
         if ok {
-            let r = unsafe { hv_gic_config_set_distributor_base(gic_cfg, dist_if_addr) };
+            let r = unsafe { (gic.config_set_distributor_base)(gic_cfg, dist_if_addr) };
             ok = r == hv_error_t::HV_SUCCESS as hv_return_t;
         }
         if ok {
-            let r = unsafe { hv_gic_config_set_redistributor_base(gic_cfg, redist_addr) };
+            let r = unsafe { (gic.config_set_redistributor_base)(gic_cfg, redist_addr) };
             ok = r == hv_error_t::HV_SUCCESS as hv_return_t;
         }
         let r = if ok {
-            unsafe { hv_gic_create(gic_cfg) }
+            unsafe { (gic.create)(gic_cfg) }
         } else {
             hv_error_t::HV_BAD_ARGUMENT as hv_return_t
         };
-        unsafe {
-            os_release(gic_cfg as *mut c_void);
-        }
         if !ok || r != hv_error_t::HV_SUCCESS as hv_return_t {
             self.gic_done.store(false, Ordering::SeqCst);
             return check_hv(r);
@@ -240,11 +395,13 @@ impl HvfVm {
     /// Assert or deassert a GICv3 SPI line (`intid` is the full interrupt ID, e.g. `32 + gsi` for
     /// the first guest SPI).
     pub fn set_gic_spi(&self, intid: u32, level: bool) -> Result<()> {
-        check_hv(unsafe { hv_gic_set_spi(intid, level) })
+        let gic = hvf_gic_symbols().ok_or_else(|| Error::new(ENOSYS))?;
+        check_hv(unsafe { (gic.set_spi)(intid, level) })
     }
 
     pub fn send_gic_msi(&self, gpa: u64, intid: u32) -> Result<()> {
-        check_hv(unsafe { hv_gic_send_msi(gpa as hv_ipa_t, intid) })
+        let gic = hvf_gic_symbols().ok_or_else(|| Error::new(ENOSYS))?;
+        check_hv(unsafe { (gic.send_msi)(gpa as hv_ipa_t, intid) })
     }
 
     pub(crate) fn guest_pagesize() -> usize {
@@ -252,7 +409,7 @@ impl HvfVm {
     }
 
     pub(crate) fn fire_ioevents(&self, addr: IoEventAddress, data: &[u8]) -> Result<()> {
-        let map = self.ioevents.lock();
+        let map = lock(&self.ioevents)?;
         if let Some(evt) = map.get(&addr) {
             evt.signal().map_err(|_| Error::new(EIO))?;
         }
@@ -303,8 +460,8 @@ impl Vm for HvfVm {
         if self.guest_mem.range_overlap(guest_addr, end_addr) {
             return Err(Error::new(ENOSPC));
         }
-        let mut regions = self.mem_regions.lock();
-        let mut gaps = self.mem_slot_gaps.lock();
+        let mut regions = lock(&self.mem_regions)?;
+        let mut gaps = lock(&self.mem_slot_gaps)?;
         let slot = match gaps.pop() {
             Some(gap) => gap.0,
             None => (regions.len() + self.guest_mem.num_regions() as usize) as MemSlot,
@@ -315,6 +472,13 @@ impl Vm for HvfVm {
             flags |= HV_MEMORY_WRITE;
         }
         let mapped_bytes = size as usize;
+        warn!(
+            "HVF add_memory_region guest=0x{:x} size=0x{:x} host=0x{:x} read_only={}",
+            guest_addr.offset(),
+            mapped_bytes,
+            mem.as_ptr() as usize,
+            read_only
+        );
         let r = unsafe {
             hv_vm_map(
                 mem.as_ptr() as *const c_void,
@@ -323,9 +487,9 @@ impl Vm for HvfVm {
                 flags,
             )
         };
-        if check_hv(r).is_err() {
+        if let Err(e) = check_hv(r) {
             gaps.push(Reverse(slot));
-            return check_hv(r);
+            return Err(e);
         }
         if read_only {
             let r = unsafe {
@@ -335,12 +499,12 @@ impl Vm for HvfVm {
                     HV_MEMORY_READ | HV_MEMORY_EXEC,
                 )
             };
-            if check_hv(r).is_err() {
+            if let Err(e) = check_hv(r) {
                 unsafe {
                     let _ = hv_vm_unmap(guest_addr.offset(), mapped_bytes);
                 }
                 gaps.push(Reverse(slot));
-                return check_hv(r);
+                return Err(e);
             }
         }
         regions.insert(slot, (guest_addr, size, mem));
@@ -348,7 +512,7 @@ impl Vm for HvfVm {
     }
 
     fn msync_memory_region(&mut self, slot: MemSlot, offset: usize, size: usize) -> Result<()> {
-        let mut regions = self.mem_regions.lock();
+        let mut regions = lock(&self.mem_regions)?;
         let mem = &mut regions.get_mut(&slot).ok_or_else(|| Error::new(ENOENT))?.2;
         mem.msync(offset, size).map_err(|err| match err {
             MmapError::InvalidAddress => Error::new(EFAULT),
@@ -359,9 +523,9 @@ impl Vm for HvfVm {
     }
 
     fn remove_memory_region(&mut self, slot: MemSlot) -> Result<Box<dyn MappedRegion>> {
-        let mut regions = self.mem_regions.lock();
+        let mut regions = lock(&self.mem_regions)?;
         let (guest_addr, mapped, mem) = regions.remove(&slot).ok_or_else(|| Error::new(ENOENT))?;
-        self.mem_slot_gaps.lock().push(Reverse(slot));
+        lock(&self.mem_slot_gaps)?.push(Reverse(slot));
         check_hv(unsafe { hv_vm_unmap(guest_addr.offset(), mapped as usize) })?;
         Ok(mem)
     }
@@ -381,7 +545,8 @@ impl Vm for HvfVm {
         addr: IoEventAddress,
         _datamatch: Datamatch,
     ) -> Result<()> {
-        let mut map = self.ioevents.lock();
+        warn!("HVF register_ioevent addr={addr:?}");
+        let mut map = lock(&self.ioevents)?;
         if map.insert(addr, evt.try_clone()?).is_some() {
             return Err(Error::new(EEXIST));
         }
@@ -394,7 +559,7 @@ impl Vm for HvfVm {
         addr: IoEventAddress,
         _datamatch: Datamatch,
     ) -> Result<()> {
-        self.ioevents.lock().remove(&addr);
+        lock(&self.ioevents)?.remove(&addr);
         Ok(())
     }
 
@@ -419,7 +584,7 @@ impl Vm for HvfVm {
         fd_offset: u64,
         prot: Protection,
     ) -> Result<()> {
-        let mut regions = self.mem_regions.lock();
+        let mut regions = lock(&self.mem_regions)?;
         let region = &mut regions.get_mut(&slot).ok_or_else(|| Error::new(EINVAL))?.2;
         region
             .add_fd_mapping(offset, size, fd, fd_offset, prot)
@@ -430,23 +595,25 @@ impl Vm for HvfVm {
     }
 
     fn remove_mapping(&mut self, slot: u32, offset: usize, size: usize) -> Result<()> {
-        let mut regions = self.mem_regions.lock();
+        let mut regions = lock(&self.mem_regions)?;
         let region = &mut regions.get_mut(&slot).ok_or_else(|| Error::new(EINVAL))?.2;
-        region
-            .remove_mapping(offset, size)
-            .map_err(|e| match e {
-                MmapError::SystemCallFailed(e) => e,
-                _ => Error::new(EIO),
-            })
+        region.remove_mapping(offset, size).map_err(|e| match e {
+            MmapError::SystemCallFailed(e) => e,
+            _ => Error::new(EIO),
+        })
     }
 
     fn handle_balloon_event(&mut self, event: BalloonEvent) -> Result<()> {
         match event {
-            BalloonEvent::Inflate(m) => match self.guest_mem.remove_range(m.guest_address, m.size) {
-                Ok(_) => Ok(()),
-                Err(vm_memory::Error::MemoryAccess(_, MmapError::SystemCallFailed(e))) => Err(e),
-                Err(_) => Err(Error::new(EIO)),
-            },
+            BalloonEvent::Inflate(m) => {
+                match self.guest_mem.remove_range(m.guest_address, m.size) {
+                    Ok(_) => Ok(()),
+                    Err(vm_memory::Error::MemoryAccess(_, MmapError::SystemCallFailed(e))) => {
+                        Err(e)
+                    }
+                    Err(_) => Err(Error::new(EIO)),
+                }
+            }
             BalloonEvent::Deflate(_) => Ok(()),
             BalloonEvent::BalloonTargetReached(_) => Ok(()),
         }

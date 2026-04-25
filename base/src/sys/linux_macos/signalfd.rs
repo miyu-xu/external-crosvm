@@ -84,7 +84,7 @@ static RELAY_LOCK: Mutex<()> = Mutex::new(());
 unsafe extern "C" fn relay_signal(_sig: c_int, _info: *mut siginfo_t, _ctx: *mut c_void) {
     let w = RELAY_WRITE_FD.load(Ordering::SeqCst);
     if w >= 0 {
-        let _ = libc::write(w, [0u8].as_ptr(), 1);
+        let _ = libc::write(w, [0u8].as_ptr() as *const c_void, 1);
     }
 }
 
@@ -235,7 +235,7 @@ impl AsRawDescriptor for SignalFd {
 
 impl Drop for SignalFd {
     fn drop(&mut self) {
-        let _ = RELAY_LOCK.lock();
+        let _lock = RELAY_LOCK.lock();
         unsafe {
             sigaction(self.signal, &self.old_action, std::ptr::null_mut());
         }

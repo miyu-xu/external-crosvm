@@ -9,9 +9,9 @@ pub(crate) use protocol::*;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_keyvalue::FromKeyValues;
+pub use vsock::Vsock;
 pub use vsock::VsockControlCommand;
 pub use vsock::VsockControlResponse;
-pub use vsock::Vsock;
 pub use vsock::VsockError;
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, FromKeyValues)]

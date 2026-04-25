@@ -30,6 +30,7 @@ use base::ReadNotifier;
 use base::*;
 use devices::serial_device::SerialParameters;
 use devices::serial_device::SerialType;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::vfio::VfioContainerManager;
 use devices::virtio;
 use devices::virtio::block::DiskOption;
@@ -46,13 +47,16 @@ use devices::virtio::pvclock::PvClock;
 use devices::virtio::scsi::ScsiOption;
 #[cfg(feature = "audio")]
 use devices::virtio::snd::parameters::Parameters as SndParameters;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::virtio::vfio_wrapper::VfioWrapper;
 #[cfg(feature = "net")]
 use devices::virtio::vhost::user::NetBackend;
 use devices::virtio::vhost::user::VhostUserDeviceBuilder;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::virtio::vhost::user::VhostUserVsockDevice;
 use devices::virtio::vsock::VsockConfig;
 use devices::virtio::Console;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::virtio::MemSlotConfig;
 #[cfg(feature = "net")]
 use devices::virtio::NetError;
@@ -60,6 +64,7 @@ use devices::virtio::NetError;
 use devices::virtio::NetParameters;
 #[cfg(feature = "net")]
 use devices::virtio::NetParametersMode;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::virtio::PmemConfig;
 use devices::virtio::VhostUserFrontend;
 use devices::virtio::VirtioDevice;
@@ -68,24 +73,28 @@ use devices::BusDeviceObj;
 use devices::IommuDevType;
 use devices::PciAddress;
 use devices::PciDevice;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::VfioDevice;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::VfioDeviceType;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::VfioPciDevice;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::VfioPlatformDevice;
 #[cfg(feature = "vtpm")]
 use devices::VtpmProxy;
 use hypervisor::MemCacheType;
 use hypervisor::ProtectionType;
 use hypervisor::Vm;
-use jail::*;
-#[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail_stub::Minijail;
 #[cfg(all(target_os = "macos", feature = "hvf"))]
+use jail::FakeMinijailStub as Minijail;
+use jail::*;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use minijail_stub::Minijail;
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
-type MinijailError = minijail_stub::Error;
 #[cfg(all(target_os = "macos", feature = "hvf"))]
+type MinijailError = anyhow::Error;
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 type MinijailError = minijail_stub::Error;
 #[cfg(feature = "net")]
 use net_util::sys::linux::Tap;
@@ -104,6 +113,9 @@ use crate::crosvm::config::PmemOption;
 use crate::crosvm::config::VhostUserFrontendOption;
 use crate::crosvm::config::VhostUserFsOption;
 use crate::crosvm::sys::config::PmemExt2Option;
+
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+struct VfioContainerManager;
 
 pub enum TaggedControlTube {
     Fs(Tube),
@@ -312,6 +324,7 @@ impl<'a> VirtioDeviceBuilder for DiskConfig<'a> {
 
 pub struct ScsiConfig<'a>(pub &'a [ScsiOption]);
 
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 impl<'a> VirtioDeviceBuilder for &'a ScsiConfig<'a> {
     const NAME: &'static str = "scsi";
 
@@ -924,41 +937,55 @@ pub fn create_wayland_device(
     wayland_socket_paths: &BTreeMap<String, PathBuf>,
     resource_bridge: Option<Tube>,
 ) -> DeviceResult {
-    let wayland_socket_dirs = wayland_socket_paths
-        .iter()
-        .map(|(_name, path)| path.parent())
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| anyhow!("wayland socket path has no parent or file name"))?;
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    {
+        let _ = (
+            protection_type,
+            jail_config,
+            wayland_socket_paths,
+            resource_bridge,
+        );
+        anyhow::bail!("Wayland devices are not supported on macOS");
+    }
 
-    let features = virtio::base_features(protection_type);
-    let dev = virtio::Wl::new(features, wayland_socket_paths.clone(), resource_bridge)
-        .context("failed to create wayland device")?;
+    #[cfg(not(all(target_os = "macos", feature = "hvf")))]
+    {
+        let wayland_socket_dirs = wayland_socket_paths
+            .iter()
+            .map(|(_name, path)| path.parent())
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| anyhow!("wayland socket path has no parent or file name"))?;
 
-    let jail = if let Some(jail_config) = jail_config {
-        let mut config = SandboxConfig::new(jail_config, "wl_device");
-        config.bind_mounts = true;
-        let mut jail = create_gpu_minijail(
-            &jail_config.pivot_root,
-            &config,
-            /* render_node_only= */ false,
-        )?;
-        // Bind mount the wayland socket's directory into jail's root. This is necessary since
-        // each new wayland context must open() the socket. If the wayland socket is ever
-        // destroyed and remade in the same host directory, new connections will be possible
-        // without restarting the wayland device.
-        for dir in &wayland_socket_dirs {
-            jail.mount(dir, dir, "", (libc::MS_BIND | libc::MS_REC) as usize)?;
-        }
+        let features = virtio::base_features(protection_type);
+        let dev = virtio::Wl::new(features, wayland_socket_paths.clone(), resource_bridge)
+            .context("failed to create wayland device")?;
 
-        Some(jail)
-    } else {
-        None
-    };
+        let jail = if let Some(jail_config) = jail_config {
+            let mut config = SandboxConfig::new(jail_config, "wl_device");
+            config.bind_mounts = true;
+            let mut jail = create_gpu_minijail(
+                &jail_config.pivot_root,
+                &config,
+                /* render_node_only= */ false,
+            )?;
+            // Bind mount the wayland socket's directory into jail's root. This is necessary since
+            // each new wayland context must open() the socket. If the wayland socket is ever
+            // destroyed and remade in the same host directory, new connections will be possible
+            // without restarting the wayland device.
+            for dir in &wayland_socket_dirs {
+                jail.mount(dir, dir, "", (libc::MS_BIND | libc::MS_REC) as usize)?;
+            }
 
-    Ok(VirtioDeviceStub {
-        dev: Box::new(dev),
-        jail,
-    })
+            Some(jail)
+        } else {
+            None
+        };
+
+        Ok(VirtioDeviceStub {
+            dev: Box::new(dev),
+            jail,
+        })
+    }
 }
 
 #[cfg(any(feature = "video-decoder", feature = "video-encoder"))]
@@ -1061,7 +1088,7 @@ impl VirtioDeviceBuilder for &VsockConfig {
     ) -> anyhow::Result<Box<dyn VirtioDevice>> {
         let features = virtio::base_features(protection_type);
 
-        let dev = virtio::vhost::Vsock::new(features, self)
+        let dev = virtio::Vsock::new(self.cid, None, features)
             .context("failed to set up virtual socket device")?;
 
         Ok(Box::new(dev))
@@ -1071,11 +1098,20 @@ impl VirtioDeviceBuilder for &VsockConfig {
         self,
         keep_rds: &mut Vec<RawDescriptor>,
     ) -> anyhow::Result<Box<dyn VhostUserDeviceBuilder>> {
-        let vsock_device = VhostUserVsockDevice::new(self.cid, &self.vhost_device)?;
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        {
+            let _ = keep_rds;
+            anyhow::bail!("vhost-user-vsock is not supported on macOS");
+        }
 
-        keep_rds.push(vsock_device.as_raw_descriptor());
+        #[cfg(not(all(target_os = "macos", feature = "hvf")))]
+        {
+            let vsock_device = VhostUserVsockDevice::new(self.cid, &self.vhost_device)?;
 
-        Ok(Box::new(vsock_device))
+            keep_rds.push(vsock_device.as_raw_descriptor());
+
+            Ok(Box::new(vsock_device))
+        }
     }
 }
 
@@ -1085,17 +1121,27 @@ pub fn create_vhost_scmi_device(
     jail_config: &Option<JailConfig>,
     vhost_scmi_dev_path: PathBuf,
 ) -> DeviceResult {
-    let features = virtio::base_features(protected_vm);
+    #[cfg(all(target_os = "macos", feature = "hvf"))]
+    {
+        let _ = (protected_vm, jail_config, vhost_scmi_dev_path);
+        anyhow::bail!("vhost-scmi is not supported on macOS");
+    }
 
-    let dev = virtio::vhost::Scmi::new(&vhost_scmi_dev_path, features)
-        .context("failed to set up vhost scmi device")?;
+    #[cfg(not(all(target_os = "macos", feature = "hvf")))]
+    {
+        let features = virtio::base_features(protected_vm);
 
-    Ok(VirtioDeviceStub {
-        dev: Box::new(dev),
-        jail: simple_jail(jail_config, "vhost_scmi_device")?,
-    })
+        let dev = virtio::vhost::Scmi::new(&vhost_scmi_dev_path, features)
+            .context("failed to set up vhost scmi device")?;
+
+        Ok(VirtioDeviceStub {
+            dev: Box::new(dev),
+            jail: simple_jail(jail_config, "vhost_scmi_device")?,
+        })
+    }
 }
 
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 pub fn create_fs_device(
     protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
@@ -1139,6 +1185,7 @@ pub fn create_fs_device(
     })
 }
 
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub fn create_9p_device(
     protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
@@ -1185,6 +1232,7 @@ pub fn create_9p_device(
     })
 }
 
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 pub fn create_pmem_device(
     protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
@@ -1303,6 +1351,7 @@ pub fn create_pmem_device(
     })
 }
 
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 pub fn create_pmem_ext2_device(
     protection_type: ProtectionType,
     jail_config: &Option<JailConfig>,
@@ -1462,9 +1511,18 @@ impl VirtioDeviceBuilder for &SerialParameters {
         self,
         keep_rds: &mut Vec<RawDescriptor>,
     ) -> anyhow::Result<Box<dyn VhostUserDeviceBuilder>> {
-        Ok(Box::new(virtio::vhost::user::create_vu_console_device(
-            self, keep_rds,
-        )?))
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        {
+            let _ = keep_rds;
+            anyhow::bail!("vhost-user console devices are not supported on macOS");
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hvf")))]
+        {
+            Ok(Box::new(virtio::vhost::user::create_vu_console_device(
+                self, keep_rds,
+            )?))
+        }
     }
 
     fn create_jail(
@@ -1503,11 +1561,13 @@ pub fn create_sound_device(
 }
 
 #[allow(clippy::large_enum_variant)]
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 pub enum VfioDeviceVariant {
     Pci(VfioPciDevice),
     Platform(VfioPlatformDevice),
 }
 
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 pub fn create_vfio_device(
     jail_config: &Option<JailConfig>,
     vm: &impl Vm,

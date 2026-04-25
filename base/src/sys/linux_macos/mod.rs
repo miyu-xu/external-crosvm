@@ -7,6 +7,7 @@
 #[macro_use]
 #[path = "../linux/ioctl.rs"]
 pub mod ioctl;
+pub use crate::sys::macos::ioctl as macos_ioctl;
 
 #[macro_use]
 pub mod syslog {
@@ -20,7 +21,8 @@ mod file_traits;
 mod net;
 mod notifiers;
 #[path = "../linux/platform_timer_resolution.rs"]
-mod platform_timer_resolution;
+pub mod platform_timer_resolution;
+pub use crate::sys::macos::platform_timer_resolution as macos_platform_timer_resolution;
 mod sched;
 mod shm;
 pub mod signal;
@@ -44,30 +46,35 @@ use std::process::ExitStatus;
 use std::ptr;
 use std::time::Duration;
 
+pub(crate) use crate::sys::macos::event::PlatformEvent;
+pub use crate::sys::macos::fallocate;
+pub(crate) use crate::sys::macos::file_punch_hole;
+pub(crate) use crate::sys::macos::file_write_zeroes_at;
+pub use crate::sys::macos::mmap::*;
+pub use crate::sys::macos::poll::EventContext;
+pub use crate::sys::macos::FallocateMode;
 pub use capabilities::drop_capabilities;
 pub use event::EventExt;
-pub(crate) use crate::sys::macos::event::PlatformEvent;
 pub use file::find_next_data;
 pub use file::FileDataIterator;
 pub(crate) use file_traits::lib::*;
 pub use ioctl::*;
 use libc::c_int;
 use libc::fcntl;
+pub use libc::off_t;
+pub use libc::pread;
+pub use libc::preadv;
+pub use libc::pwrite;
+pub use libc::pwritev;
+pub use libc::sendmsg;
 use libc::waitpid;
 use libc::EINVAL;
 use libc::SIGKILL;
 use libc::WNOHANG;
-pub use crate::sys::macos::mmap::*;
 pub(in crate::sys) use net::sendmsg_nosignal;
 pub(in crate::sys) use net::sockaddr_un;
 pub(in crate::sys) use net::sockaddrv4_to_lib_c;
 pub(in crate::sys) use net::sockaddrv6_to_lib_c;
-pub use crate::sys::macos::poll::EventContext;
-pub use crate::sys::macos::fallocate;
-pub use crate::sys::macos::FallocateMode;
-pub(crate) use crate::sys::macos::file_punch_hole;
-pub(crate) use crate::sys::macos::file_write_zeroes_at;
-#[path = "../linux/priority.rs"]
 mod priority;
 pub use platform_timer_resolution::*;
 pub use priority::*;
@@ -100,6 +107,8 @@ use crate::Pid;
 pub type Uid = libc::uid_t;
 pub type Gid = libc::gid_t;
 pub type Mode = libc::mode_t;
+
+const RT_SIGNAL_SENTINEL_BASE: c_int = 1024;
 
 #[inline(always)]
 pub fn getpid() -> Pid {
@@ -211,8 +220,8 @@ pub fn kill_process_group() -> Result<()> {
 
 pub use crate::sys::macos::pipe;
 
-pub fn set_pipe_size(fd: RawFd, size: usize) -> Result<usize> {
-    syscall!(unsafe { fcntl(fd, libc::F_SETPIPE_SZ, size as c_int) }).map(|ret| ret as usize)
+pub fn set_pipe_size(_fd: RawFd, size: usize) -> Result<usize> {
+    Ok(size)
 }
 
 pub fn new_pipe_full() -> Result<(File, File)> {
@@ -314,20 +323,19 @@ pub fn safe_descriptor_from_cmdline_fd(fd: &RawFd) -> Result<SafeDescriptor> {
 }
 
 pub fn open_file_or_duplicate<P: AsRef<Path>>(path: P, options: &OpenOptions) -> Result<File> {
-    options.open(path.as_ref()).map_err(|e| Error::new(e.raw_os_error().unwrap_or(EINVAL)))
+    options
+        .open(path.as_ref())
+        .map_err(|e| Error::new(e.raw_os_error().unwrap_or(EINVAL)))
 }
 
-pub fn max_open_files() -> Result<libc::rlimit64> {
+pub fn max_open_files() -> Result<libc::rlimit> {
     let mut r = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
     };
     let res = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut r) };
     if res == 0 {
-        Ok(libc::rlimit64 {
-            rlim_cur: r.rlim_cur.into(),
-            rlim_max: r.rlim_max.into(),
-        })
+        Ok(r)
     } else {
         errno_result()
     }
@@ -337,7 +345,7 @@ pub fn call_with_extended_max_files<T, E>(
     callback: impl FnOnce() -> std::result::Result<T, E>,
 ) -> Result<std::result::Result<T, E>> {
     let cur_limit = max_open_files()?;
-    let new_limit = libc::rlimit64 {
+    let new_limit = libc::rlimit {
         rlim_cur: cur_limit.rlim_max,
         ..cur_limit
     };
@@ -352,7 +360,7 @@ pub fn call_with_extended_max_files<T, E>(
     Ok(r)
 }
 
-fn set_max_open_files(limit: libc::rlimit64) -> Result<()> {
+fn set_max_open_files(limit: libc::rlimit) -> Result<()> {
     let r = libc::rlimit {
         rlim_cur: limit.rlim_cur.try_into().map_err(|_| Error::new(EINVAL))?,
         rlim_max: limit.rlim_max.try_into().map_err(|_| Error::new(EINVAL))?,

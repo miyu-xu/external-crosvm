@@ -36,6 +36,9 @@ pub enum HypervisorCap {
     /// If this capability is declared, then crosvm will not try to initialize vcpu
     /// registers when creating the VM.
     HypervisorInitializedBootContext,
+    /// Some hypervisors require `create_vcpu` to be called from the same thread that will later run
+    /// the vCPU.
+    VcpuRunThreadLocal,
 }
 
 /// A capability the `Vm` can possibly expose.

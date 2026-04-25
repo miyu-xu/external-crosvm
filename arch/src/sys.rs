@@ -5,7 +5,17 @@
 cfg_if::cfg_if! {
     if #[cfg(any(target_os = "android", target_os = "linux"))] {
         pub mod linux;
+        pub use linux::{
+            add_goldfish_battery,
+            generate_platform_bus,
+            PlatformBusResources,
+        };
     } else if #[cfg(all(target_os = "macos", feature = "hvf"))] {
-        pub mod linux;
+        pub mod macos;
+        pub use macos::{
+            add_goldfish_battery,
+            generate_platform_bus,
+            PlatformBusResources,
+        };
     }
 }

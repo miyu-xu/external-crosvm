@@ -11,8 +11,8 @@ use std::ops::Range;
 use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 
-use win_util::LargeInteger;
 use win_util::duplicate_handle;
+use win_util::LargeInteger;
 use winapi::um::fileapi::GetFileSizeEx;
 pub use winapi::um::winioctl::FSCTL_QUERY_ALLOCATED_RANGES;
 pub use winapi::um::winioctl::FSCTL_SET_SPARSE;
@@ -31,7 +31,10 @@ pub fn open_file_or_duplicate<P: AsRef<Path>>(path: P, options: &OpenOptions) ->
     if let Some(path_str) = path.as_ref().to_str() {
         if let Some(fd_str) = path_str.strip_prefix(r"\\.\fd\") {
             let fd: i32 = fd_str.parse().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, format!("invalid fd path: {path_str}"))
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid fd path: {path_str}"),
+                )
             })?;
             let raw = unsafe { libc::get_osfhandle(fd) };
             if raw == -1 {

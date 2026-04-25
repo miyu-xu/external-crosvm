@@ -12,13 +12,14 @@ use crate::sys::unix::RawDescriptor;
 use crate::unix::set_descriptor_cloexec;
 use crate::unix::Pid;
 
-mod event;
+pub(crate) mod event;
+pub mod ioctl;
 pub(in crate::sys::macos) mod kqueue;
-mod ioctl;
-mod mmap;
+pub(crate) mod mmap;
+#[cfg(not(feature = "hvf"))]
 mod net;
-mod platform_timer_resolution;
-mod poll;
+pub mod platform_timer_resolution;
+pub(crate) mod poll;
 mod shm;
 mod timer;
 
@@ -31,8 +32,11 @@ pub use poll::EventContext;
 
 pub(crate) use event::PlatformEvent;
 pub(in crate::sys) use libc::sendmsg;
+#[cfg(not(feature = "hvf"))]
 pub(in crate::sys) use net::sockaddr_un;
+#[cfg(not(feature = "hvf"))]
 pub(in crate::sys) use net::sockaddrv4_to_lib_c;
+#[cfg(not(feature = "hvf"))]
 pub(in crate::sys) use net::sockaddrv6_to_lib_c;
 
 pub fn get_cpu_affinity() -> crate::errno::Result<Vec<usize>> {
@@ -49,7 +53,7 @@ pub fn open_file_or_duplicate<P: AsRef<Path>>(
     path: P,
     options: &std::fs::OpenOptions,
 ) -> crate::Result<File> {
-    options.open(path.as_ref())
+    Ok(options.open(path.as_ref())?)
 }
 
 pub fn set_cpu_affinity<I: IntoIterator<Item = usize>>(_cpus: I) -> crate::errno::Result<()> {

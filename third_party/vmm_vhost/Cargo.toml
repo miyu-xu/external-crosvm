@@ -30,4 +30,4 @@ serde_json = "1"
 tube_transporter = { path = "../../tube_transporter" }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "=3.14.0"

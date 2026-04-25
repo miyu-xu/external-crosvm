@@ -525,7 +525,7 @@ vm_control = { path = "vm_control" }
 acpi_tables = { path = "acpi_tables" }
 vm_memory = { path = "vm_memory" }
 vmm_vhost = { path = "third_party/vmm_vhost" }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "=1.12.1", features = ["v4"] }
 zerocopy = { version = "0.7", features = ["derive"] }
 
 [target.'cfg(target_arch = "riscv64")'.dependencies]
@@ -562,7 +562,7 @@ win_util = { path = "win_util" }
 
 [dev-dependencies]
 rand = "0.8"
-tempfile = "3"
+tempfile = "=3.14.0"
 
 [patch.crates-io]
 audio_streams = { path = "common/audio_streams" }

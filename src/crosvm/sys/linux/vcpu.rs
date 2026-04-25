@@ -37,6 +37,7 @@ use devices::VcpuRunState;
 use hypervisor::IoOperation;
 use hypervisor::IoParams;
 use hypervisor::VcpuExit;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use hypervisor::VcpuSignalHandle;
 use libc::c_int;
 use metrics_events::MetricEventType;
@@ -52,9 +53,12 @@ use vm_memory::GuestMemory;
 #[cfg(target_arch = "x86_64")]
 use x86_64::X8664arch as Arch;
 
+#[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use super::ExitState;
 #[cfg(target_arch = "x86_64")]
 use crate::crosvm::ratelimit::Ratelimit;
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+use crate::sys::macos::ExitState;
 
 // TODO(davidai): Import libc constant when updated
 const SCHED_FLAG_RESET_ON_FORK: u64 = 0x1;
@@ -63,6 +67,14 @@ const SCHED_FLAG_KEEP_PARAMS: u64 = 0x10;
 const SCHED_FLAG_UTIL_CLAMP_MIN: u64 = 0x20;
 const SCHED_SCALE_CAPACITY: u32 = 1024;
 const SCHED_FLAG_KEEP_ALL: u64 = SCHED_FLAG_KEEP_POLICY | SCHED_FLAG_KEEP_PARAMS;
+
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+struct VcpuSignalHandle;
+
+#[cfg(all(target_os = "macos", feature = "hvf"))]
+impl VcpuSignalHandle {
+    fn signal_immediate_exit(&self) {}
+}
 
 fn bus_io_handler(bus: &Bus) -> impl FnMut(IoParams) -> Option<[u8; 8]> + '_ {
     |IoParams {
@@ -211,7 +223,15 @@ fn set_vcpu_thread_local(vcpu: Option<&dyn VcpuArch>, signal_num: c_int) {
 
         if let Some(vcpu) = vcpu {
             assert!(vcpu_thread.is_none());
-            *vcpu_thread = Some(vcpu.signal_handle());
+            #[cfg(any(target_os = "android", target_os = "linux"))]
+            {
+                *vcpu_thread = Some(vcpu.signal_handle());
+            }
+            #[cfg(all(target_os = "macos", feature = "hvf"))]
+            {
+                let _ = vcpu;
+                *vcpu_thread = Some(VcpuSignalHandle);
+            }
         } else {
             *vcpu_thread = None;
         }

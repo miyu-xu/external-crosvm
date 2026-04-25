@@ -899,13 +899,7 @@ fn run_worker(
             inflate_queue,
             EventAsync::new(inflate_queue_evt, &ex).expect("failed to create async event"),
             release_memory_tube.as_ref(),
-            |guest_address, len| {
-                sys::free_memory(
-                    &guest_address,
-                    len,
-                    &vm_memory_client,
-                )
-            },
+            |guest_address, len| sys::free_memory(&guest_address, len, &vm_memory_client),
             stop_rx,
         );
         let inflate = inflate.fuse();
@@ -921,13 +915,7 @@ fn run_worker(
             deflate_queue,
             EventAsync::new(deflate_queue_evt, &ex).expect("failed to create async event"),
             None,
-            |guest_address, len| {
-                sys::reclaim_memory(
-                    &guest_address,
-                    len,
-                    &vm_memory_client,
-                )
-            },
+            |guest_address, len| sys::reclaim_memory(&guest_address, len, &vm_memory_client),
             stop_rx,
         );
         let deflate = deflate.fuse();
@@ -971,13 +959,7 @@ fn run_worker(
                 reporting_queue,
                 EventAsync::new(reporting_queue_evt, &ex).expect("failed to create async event"),
                 release_memory_tube.as_ref(),
-                |guest_address, len| {
-                    sys::free_memory(
-                        &guest_address,
-                        len,
-                        &vm_memory_client,
-                    )
-                },
+                |guest_address, len| sys::free_memory(&guest_address, len, &vm_memory_client),
                 stop_rx,
             )
             .left_future()
@@ -1051,11 +1033,7 @@ fn run_worker(
         pin_mut!(resample);
 
         // Send a message if balloon target reached event is triggered.
-        let target_reached = handle_target_reached(
-            &ex,
-            target_reached_evt,
-            &vm_memory_client,
-        );
+        let target_reached = handle_target_reached(&ex, target_reached_evt, &vm_memory_client);
         pin_mut!(target_reached);
 
         // Exit if the kill event is triggered.
@@ -1151,10 +1129,7 @@ async fn handle_target_reached(
         let _ = event_async.next_val().await;
         // Send the message to vm_control on the event. We don't have to read the current
         // size yet.
-        sys::balloon_target_reached(
-            0,
-            vm_memory_client,
-        );
+        sys::balloon_target_reached(0, vm_memory_client);
     }
     // The above loop will never terminate and there is no reason to terminate it either. However,
     // the function is used in an executor that expects a Result<> return. Make sure that clippy

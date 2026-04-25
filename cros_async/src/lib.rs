@@ -79,8 +79,10 @@ use std::task::Poll;
 
 pub use async_types::*;
 pub use base::Event;
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub use blocking::sys::linux::block_on::block_on;
+#[cfg(target_os = "macos")]
+pub use blocking::sys::macos::block_on::block_on;
 pub use blocking::unblock;
 pub use blocking::unblock_disarm;
 pub use blocking::BlockingPool;

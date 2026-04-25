@@ -2,7 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
@@ -10,26 +14,46 @@ use std::io::Read;
 use cros_fdt::apply_overlay;
 use cros_fdt::Error;
 use cros_fdt::Fdt;
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 use cros_fdt::Path;
 use cros_fdt::Result;
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 use devices::IommuDevType;
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
-use crate::sys::linux::PlatformBusResources;
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
+use crate::sys::PlatformBusResources;
 
 /// Device tree overlay file
 pub struct DtbOverlay {
     /// Device tree overlay file to apply
     pub file: File,
     /// Whether to filter out nodes that do not belong to assigned VFIO devices.
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", feature = "hvf")
+    ))]
     pub do_filter: bool,
 }
 
 /// Apply multiple device tree overlays to the base FDT.
-#[cfg(not(any(target_os = "android", target_os = "linux")))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+)))]
 pub fn apply_device_tree_overlays(fdt: &mut Fdt, overlays: Vec<DtbOverlay>) -> Result<()> {
     for mut dtbo in overlays {
         let mut buffer = Vec::new();
@@ -42,7 +66,11 @@ pub fn apply_device_tree_overlays(fdt: &mut Fdt, overlays: Vec<DtbOverlay>) -> R
     Ok(())
 }
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 fn get_iommu_phandle(
     iommu_type: IommuDevType,
     id: Option<u32>,
@@ -63,7 +91,11 @@ fn get_iommu_phandle(
 
 // Find the device node at given path and update its `reg` and `interrupts` properties using
 // its platform resources.
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 fn update_device_nodes(
     node_path: Path,
     fdt: &mut Fdt,
@@ -115,7 +147,11 @@ fn update_device_nodes(
 /// * `fdt` - The base FDT
 /// * `overlays` - A vector of overlay files to apply
 /// * `devices` - A vector of device resource descriptors to amend the overlay nodes with
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 pub fn apply_device_tree_overlays(
     fdt: &mut Fdt,
     overlays: Vec<DtbOverlay>,

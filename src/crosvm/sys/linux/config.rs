@@ -69,11 +69,23 @@ pub struct VfioOption {
     pub dt_symbol: Option<String>,
 }
 
-#[derive(Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Serialize, Deserialize)]
 pub enum SharedDirKind {
     FS,
-    #[default]
     P9,
+}
+
+impl Default for SharedDirKind {
+    fn default() -> Self {
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        {
+            SharedDirKind::FS
+        }
+        #[cfg(not(all(target_os = "macos", feature = "hvf")))]
+        {
+            SharedDirKind::P9
+        }
+    }
 }
 
 impl FromStr for SharedDirKind {
@@ -83,7 +95,10 @@ impl FromStr for SharedDirKind {
         use SharedDirKind::*;
         match s {
             "fs" | "FS" => Ok(FS),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             "9p" | "9P" | "p9" | "P9" => Ok(P9),
+            #[cfg(all(target_os = "macos", feature = "hvf"))]
+            "9p" | "9P" | "p9" | "P9" => bail!("9p shared directories are not supported on macOS"),
             _ => {
                 bail!("invalid file system type");
             }
@@ -99,6 +114,7 @@ pub struct SharedDir {
     pub uid_map: String,
     pub gid_map: String,
     pub fs_cfg: devices::virtio::fs::Config,
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub p9_cfg: p9::Config,
 }
 
@@ -114,6 +130,7 @@ impl Default for SharedDir {
             // SAFETY: trivially safe
             gid_map: format!("0 {} 1", unsafe { getegid() }),
             fs_cfg: Default::default(),
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             p9_cfg: Default::default(),
         }
     }
@@ -262,10 +279,18 @@ impl FromStr for SharedDir {
                 }
             }
             SharedDirKind::P9 => {
-                shared_dir.p9_cfg = type_opts
-                    .join(":")
-                    .parse()
-                    .map_err(|e| anyhow!("failed to parse 9p config '{:?}': {e}", type_opts))?;
+                #[cfg(any(target_os = "android", target_os = "linux"))]
+                {
+                    shared_dir.p9_cfg = type_opts
+                        .join(":")
+                        .parse()
+                        .map_err(|e| anyhow!("failed to parse 9p config '{:?}': {e}", type_opts))?;
+                }
+                #[cfg(all(target_os = "macos", feature = "hvf"))]
+                {
+                    let _ = type_opts;
+                    bail!("9p shared directories are not supported on macOS");
+                }
             }
         }
         Ok(shared_dir)
