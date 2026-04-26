@@ -35,6 +35,7 @@ libslirp-sys = { version = "4.2.1", optional = true }
 
 [build-dependencies]
 anyhow = "1"
+cc = "1"
 prebuilts = { path = "../prebuilts" }
 
 [dev-dependencies]

@@ -2,11 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! macOS TAP stubs for `--features hvf` builds.
+//! macOS vmnet.framework TAP interface for `--features hvf` builds.
+//!
+//! Uses vmnet.framework (macOS >= 10.15) via a C shim (`vmnet_shim.c`) that
+//! bridges the block-based vmnet API to plain C for Rust FFI.
+//!
+//! Two implementations are available:
+//! - [`VmnetTap`]: real vmnet.framework interface (default).
+//! - [`tap::Tap`] / [`fakes::FakeTap`]: retained for fallback / testing.
 
+pub mod net;
 pub mod tap;
 use base::FileReadWriteVolatile;
-pub use tap::Tap;
+pub use net::VmnetTap;
 
 use crate::TapTCommon;
 

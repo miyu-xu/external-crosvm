@@ -8,6 +8,22 @@ static SLIRP_DLL: &str = "libslirp-0.dll";
 static GLIB_FILENAME: &str = "libglib-2.0.dll.a";
 
 fn main() {
+    // macOS: compile vmnet.framework C shim when building with the hvf feature.
+    if cfg!(target_os = "macos") && cfg!(feature = "hvf") {
+        let src = std::path::Path::new("src/sys/macos_hvf/vmnet_shim.c");
+        if src.exists() {
+            cc::Build::new()
+                .file(src)
+                .flag("-F/System/Library/Frameworks")
+                .compile("vmnet_shim");
+            // linker flags for frameworks.
+            println!("cargo:rustc-link-lib=framework=vmnet");
+            println!("cargo:rustc-link-lib=framework=dispatch");
+            println!("cargo:rerun-if-changed=src/sys/macos_hvf/vmnet_shim.c");
+            println!("cargo:rerun-if-changed=src/sys/macos_hvf/vmnet_shim.h");
+        }
+    }
+
     // We (the Windows crosvm maintainers) submitted upstream patches to libslirp-sys so it doesn't
     // try to link directly on Windows. This is because linking on Windows tends to be specific
     // to the build system that invokes Cargo (e.g. the crosvm jCI scripts that also produce the
