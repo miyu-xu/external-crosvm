@@ -12,13 +12,31 @@ fn main() {
     if cfg!(target_os = "macos") && cfg!(feature = "hvf") {
         let src = std::path::Path::new("src/sys/macos_hvf/vmnet_shim.c");
         if src.exists() {
-            cc::Build::new()
-                .file(src)
-                .flag("-F/System/Library/Frameworks")
-                .compile("vmnet_shim");
+            let mut cc = cc::Build::new();
+            cc.file(src);
+            // Use SDK framework search path when available, falling back
+            // to xcrun --show-sdk-path, then /System/Library/Frameworks.
+            let sdkroot = std::env::var("SDKROOT").or_else(|_| {
+                std::process::Command::new("xcrun")
+                    .args(["--show-sdk-path"])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .ok_or(std::env::VarError::NotPresent)
+            });
+            if let Ok(ref sdk) = sdkroot {
+                let fw_path = format!("{}/System/Library/Frameworks", sdk);
+                cc.flag(&format!("-F{}", fw_path));
+                println!("cargo:rustc-link-arg=-F{}", fw_path);
+            } else {
+                cc.flag("-F/System/Library/Frameworks");
+            }
+            cc.compile("vmnet_shim");
             // linker flags for frameworks.
+            // Note: dispatch symbols come from libSystem.dylib on macOS,
+            // no separate framework needed.
             println!("cargo:rustc-link-lib=framework=vmnet");
-            println!("cargo:rustc-link-lib=framework=dispatch");
             println!("cargo:rerun-if-changed=src/sys/macos_hvf/vmnet_shim.c");
             println!("cargo:rerun-if-changed=src/sys/macos_hvf/vmnet_shim.h");
         }

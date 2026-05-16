@@ -571,3 +571,4 @@ data_model = { path = "common/data_model" }
 libcras = { path = "libcras_stub" } # ignored by ebuild
 sync = { path = "common/sync" }
 minijail = { path = "third_party/minijail/rust/minijail" } # ignored by ebuild
+applevisor-sys = { path = "third_party/applevisor-sys" }

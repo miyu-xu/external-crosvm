@@ -413,7 +413,7 @@ fn to_rutabaga_desciptor(s: SafeDescriptor) -> RutabagaDescriptor {
     // SAFETY:
     // Safe because we own the SafeDescriptor at this point.
     unsafe {
-        RutabagaDescriptor::from_raw_descriptor(s.into_raw_descriptor())
+        RutabagaDescriptor::from_raw_descriptor(s.into_raw_descriptor() as _)
     }
 }
 

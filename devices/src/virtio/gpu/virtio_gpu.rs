@@ -77,13 +77,13 @@ use crate::virtio::SharedMemoryMapper;
 pub fn to_rutabaga_descriptor(s: SafeDescriptor) -> RutabagaDescriptor {
     // SAFETY:
     // Safe because we own the SafeDescriptor at this point.
-    unsafe { RutabagaDescriptor::from_raw_descriptor(s.into_raw_descriptor()) }
+    unsafe { RutabagaDescriptor::from_raw_descriptor(s.into_raw_descriptor() as _) }
 }
 
 fn to_safe_descriptor(r: RutabagaDescriptor) -> SafeDescriptor {
     // SAFETY:
     // Safe because we own the SafeDescriptor at this point.
-    unsafe { SafeDescriptor::from_raw_descriptor(r.into_raw_descriptor()) }
+    unsafe { SafeDescriptor::from_raw_descriptor(r.into_raw_descriptor() as _) }
 }
 
 struct VirtioGpuResource {

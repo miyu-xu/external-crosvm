@@ -17,6 +17,7 @@ use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 
 use base::pipe;
+use base::volatile_impl;
 use base::warn;
 use base::AsRawDescriptor;
 use base::FileReadWriteVolatile;
@@ -24,8 +25,8 @@ use base::RawDescriptor;
 use base::ReadNotifier;
 use base::Result as BaseResult;
 
-use super::super::TapT;
-use super::super::TapTLinux;
+use super::TapT;
+use super::TapTLinux;
 use crate::Error;
 use crate::MacAddress;
 use crate::Result;
@@ -91,7 +92,7 @@ impl VmnetTap {
     /// entry point per `TapTCommon`; the `name` parameter is ignored on macOS
     /// (vmnet assigns the interface automatically).
     fn create(mode: u32, mac_addr: Option<&MacAddress>, mtu: u64) -> Result<Self> {
-        let (notify_fd, _) = pipe(true).map_err(|e| Error::CreateTap(e))?;
+        let (notify_fd, _) = pipe().map_err(|e| Error::CreateTap(e))?;
 
         let mac_cstr = mac_addr.map(|m| {
             let s = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
@@ -285,10 +286,10 @@ impl TapTLinux for VmnetTap {
     }
 }
 
+volatile_impl!(VmnetTap);
+
 impl TapT for VmnetTap {}
 
-// fakes module for tests (re-exported for compatibility).
-pub mod fakes {
-    use super::super::tap::fakes::FakeTap;
-    pub use FakeTap;
-}
+// SAFETY: VmnetTap's inner pointer is only accessed from a single thread
+// (vmnet.framework XPC connection is not shared across threads).
+unsafe impl Send for VmnetTap {}
