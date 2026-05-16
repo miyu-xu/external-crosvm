@@ -52,10 +52,35 @@ pub(crate) fn fixup_gpu_options(
 
     #[cfg(feature = "gfxstream")]
     if gpu_params.mode == GpuMode::ModeGfxstream {
+        if gpu_params.angle {
+            if !gpu_params.renderer_use_egl {
+                return Err("`angle=true` requires `egl=true`".to_string());
+            }
+            if !gpu_params.renderer_use_gles {
+                return Err("`angle=true` requires `gles=true`".to_string());
+            }
+            if gpu_params.renderer_use_glx {
+                return Err("`angle=true` is incompatible with `glx=true`".to_string());
+            }
+            if gpu_params.use_vulkan == Some(false) {
+                return Err("`angle=true` requires `vulkan=true`".to_string());
+            }
+            if gpu_params.external_blob {
+                return Err("`angle=true` requires `external-blob=false`".to_string());
+            }
+
+            gpu_params.use_vulkan = Some(true);
+        }
+
         if gpu_params.use_vulkan.is_none() {
             gpu_params.use_vulkan = Some(default_use_vulkan());
         }
     } else {
+        #[cfg(feature = "gfxstream")]
+        if gpu_params.angle {
+            return Err("`angle=true` requires `backend=gfxstream`".to_string());
+        }
+
         #[cfg(windows)]
         return Err(format!(
             "backend type {:?} is deprecated, please use gfxstream",
@@ -283,6 +308,7 @@ mod tests {
         assert_default!(gpu_params.renderer_use_gles);
         assert_default!(gpu_params.renderer_use_glx);
         assert_default!(gpu_params.renderer_use_surfaceless);
+        assert_default!(gpu_params.angle);
         assert_default!(gpu_params.use_vulkan);
         assert_default!(gpu_params.udmabuf);
 
@@ -291,6 +317,7 @@ mod tests {
         assert_eq!(gpu_params.renderer_use_gles, false);
         assert_default!(gpu_params.renderer_use_glx);
         assert_default!(gpu_params.renderer_use_surfaceless);
+        assert_default!(gpu_params.angle);
         assert_default!(gpu_params.use_vulkan);
         assert_default!(gpu_params.udmabuf);
 
@@ -299,6 +326,7 @@ mod tests {
         assert_default!(gpu_params.renderer_use_gles);
         assert_eq!(gpu_params.renderer_use_surfaceless, false);
         assert_eq!(gpu_params.renderer_use_glx, true);
+        assert_default!(gpu_params.angle);
         assert_default!(gpu_params.use_vulkan);
         assert_default!(gpu_params.udmabuf);
 
@@ -307,10 +335,28 @@ mod tests {
         assert_default!(gpu_params.renderer_use_gles);
         assert_default!(gpu_params.renderer_use_glx);
         assert_default!(gpu_params.renderer_use_surfaceless);
+        assert_default!(gpu_params.angle);
         assert_eq!(gpu_params.use_vulkan, Some(true));
         assert_eq!(gpu_params.udmabuf, true);
 
         assert!(parse_gpu_options("egl=false,gles=true,foomatic").is_err());
+    }
+
+    #[cfg(feature = "gfxstream")]
+    #[test]
+    fn parse_gpu_options_angle_requires_gfxstream_vulkan_egl_and_gles() {
+        let gpu_params = parse_gpu_options("backend=gfxstream,angle=true").unwrap();
+        assert!(gpu_params.angle);
+        assert_eq!(gpu_params.use_vulkan, Some(true));
+        assert!(gpu_params.renderer_use_egl);
+        assert!(gpu_params.renderer_use_gles);
+
+        assert!(parse_gpu_options("backend=2d,angle=true").is_err());
+        assert!(parse_gpu_options("backend=gfxstream,angle=true,vulkan=false").is_err());
+        assert!(parse_gpu_options("backend=gfxstream,angle=true,egl=false").is_err());
+        assert!(parse_gpu_options("backend=gfxstream,angle=true,gles=false").is_err());
+        assert!(parse_gpu_options("backend=gfxstream,angle=true,glx=true").is_err());
+        assert!(parse_gpu_options("backend=gfxstream,angle=true,external-blob=true").is_err());
     }
 
     #[cfg(feature = "gfxstream")]

@@ -69,6 +69,8 @@ pub struct GpuParameters {
     pub renderer_use_glx: bool,
     #[serde(rename = "surfaceless")]
     pub renderer_use_surfaceless: bool,
+    #[serde(rename = "angle")]
+    pub angle: bool,
     #[serde(rename = "vulkan")]
     pub use_vulkan: Option<bool>,
     pub wsi: Option<GpuWsi>,
@@ -103,6 +105,7 @@ impl Default for GpuParameters {
             renderer_use_gles: true,
             renderer_use_glx: false,
             renderer_use_surfaceless: true,
+            angle: false,
             use_vulkan: None,
             mode: Default::default(),
             wsi: None,

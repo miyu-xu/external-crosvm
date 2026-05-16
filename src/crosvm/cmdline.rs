@@ -1401,8 +1401,9 @@ pub struct RunCommand {
     ///     surfaceless[=true|=false] - If the backend should use a
     ///         surfaceless context for rendering.
     ///     angle[=true|=false] - If the gfxstream backend should
-    ///        use ANGLE (OpenGL on Vulkan) as its native OpenGL
-    ///        driver.
+    ///        use ANGLE's EGL/GLES libraries as the host GL
+    ///        provider. ANGLE itself is expected to run on its
+    ///        Vulkan backend.
     ///     vulkan[=true|=false] - If the backend should support
     ///        vulkan
     ///     wsi=vk - If the gfxstream backend should use the Vulkan

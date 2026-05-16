@@ -412,13 +412,8 @@ pub enum VmMemorySource {
 fn to_rutabaga_desciptor(s: SafeDescriptor) -> RutabagaDescriptor {
     // SAFETY:
     // Safe because we own the SafeDescriptor at this point.
-    #[cfg(any(target_os = "android", target_os = "linux"))]
     unsafe {
         RutabagaDescriptor::from_raw_descriptor(s.into_raw_descriptor())
-    }
-    #[cfg(target_os = "macos")]
-    unsafe {
-        RutabagaDescriptor::from_raw_descriptor(i64::from(s.into_raw_descriptor()))
     }
 }
 

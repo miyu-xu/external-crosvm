@@ -92,6 +92,48 @@ use super::VirtioDevice;
 use super::Writer;
 use crate::PciAddress;
 
+#[cfg(feature = "gfxstream")]
+fn upsert_renderer_feature(
+    renderer_features: &mut Vec<String>,
+    feature_name: &str,
+    enabled: bool,
+) {
+    let feature_prefix = format!("{feature_name}:");
+    renderer_features.retain(|feature| !feature.starts_with(&feature_prefix));
+    renderer_features.push(format!(
+        "{feature_name}:{}",
+        if enabled { "enabled" } else { "disabled" }
+    ));
+}
+
+#[cfg(feature = "gfxstream")]
+fn get_renderer_features(gpu_parameters: &GpuParameters) -> Option<String> {
+    let mut renderer_features = gpu_parameters
+        .renderer_features
+        .as_deref()
+        .map(|features| {
+            features
+                .split(',')
+                .filter(|feature| !feature.trim().is_empty())
+                .map(|feature| feature.trim().to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if gpu_parameters.angle {
+        upsert_renderer_feature(&mut renderer_features, "AngleIndirect", true);
+        upsert_renderer_feature(&mut renderer_features, "GuestVulkanOnly", false);
+        upsert_renderer_feature(&mut renderer_features, "ExternalBlob", false);
+        upsert_renderer_feature(&mut renderer_features, "VulkanAllocateHostMemory", true);
+    }
+
+    if renderer_features.is_empty() {
+        None
+    } else {
+        Some(renderer_features.join(","))
+    }
+}
+
 // First queue is for virtio gpu commands. Second queue is for cursor commands, which we expect
 // there to be fewer of.
 const QUEUE_SIZES: &[u16] = &[512, 16];
@@ -1283,7 +1325,7 @@ impl Gpu {
             .set_use_external_blob(gpu_parameters.external_blob)
             .set_use_system_blob(gpu_parameters.system_blob)
             .set_use_render_server(use_render_server)
-            .set_renderer_features(gpu_parameters.renderer_features.clone());
+            .set_renderer_features(get_renderer_features(&gpu_parameters));
 
         #[cfg(windows)]
         let (gpu_display_wait_descriptor_ctrl_wr, gpu_display_wait_descriptor_ctrl_rd) =

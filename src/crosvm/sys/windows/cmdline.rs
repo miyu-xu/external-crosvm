@@ -65,6 +65,7 @@ impl FromArgs for RunMPCommand {
 impl SubCommand for RunMPCommand {
     const COMMAND: &'static CommandInfo = &CommandInfo {
         name: RUN_MP_CMD_NAME,
+        short: &'\0',
         description: "Start a new mp crosvm instance",
     };
 }
@@ -147,7 +148,7 @@ mod tests {
             ]);
         }
         if cfg!(all(feature = "gpu", feature = "gfxstream")) {
-            args.extend(["--gpu", "angle=true,backend=gfxstream,egl=true,gles=false,glx=false,refresh_rate=60,surfaceless=false,vulkan=true,wsi=vk,display_mode=borderless_full_screen,hidden"]);
+            args.extend(["--gpu", "angle=true,backend=gfxstream,egl=true,gles=true,glx=false,refresh_rate=60,surfaceless=false,vulkan=true,wsi=vk,display_mode=borderless_full_screen,hidden"]);
             args.extend([
                 "--gpu-display",
                 "mode=borderless_full_screen,hidden,refresh-rate=60",
