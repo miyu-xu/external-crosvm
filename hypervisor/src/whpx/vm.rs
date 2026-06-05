@@ -246,6 +246,21 @@ impl WhpxVm {
                 });
             }
 
+            // ApicRemoteReadSupport (QEMU also sets this). Enables VMM to
+            // read remote APIC state — may trigger WHPX per-vCPU APIC init.
+            {
+                let mut prop: WHV_PARTITION_PROPERTY = Default::default();
+                prop.ApicRemoteRead = 1;
+                let _ = check_whpx!(unsafe {
+                    WHvSetPartitionProperty(
+                        partition.partition,
+                        WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeApicRemoteReadSupport,
+                        &prop as *const _ as *const c_void,
+                        std::mem::size_of::<WHV_PARTITION_PROPERTY>() as u32,
+                    )
+                });
+            }
+
             // SyntheticProcessorFeaturesBanks (QEMU also sets this).
             // AccessVpIndex (bit 8) enables per-vCPU VP index → unique x2APIC ID.
             // SyntheticClusterIpi (bit 26) enables proper SMP IPI routing.
