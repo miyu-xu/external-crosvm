@@ -1915,6 +1915,22 @@ impl Default for WHV_PROCESSOR_FEATURES_BANKS {
 }
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS {
+    pub BanksCount: UINT32,
+    pub Reserved0: UINT32,
+    pub Bank0: UINT64,
+}
+impl Default for WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub union _WHV_PROCESSOR_XSAVE_FEATURES {
     pub __bindgen_anon_1: _WHV_PROCESSOR_XSAVE_FEATURES__bindgen_ty_1,
     pub AsUINT64: UINT64,
@@ -2802,6 +2818,8 @@ pub const WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeProcessorFeaturesB
     WHV_PARTITION_PROPERTY_CODE = 4106;
 pub const WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeReferenceTime:
     WHV_PARTITION_PROPERTY_CODE = 4107;
+pub const WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeSyntheticProcessorFeaturesBanks:
+    WHV_PARTITION_PROPERTY_CODE = 4108;
 pub const WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeProcessorCount:
     WHV_PARTITION_PROPERTY_CODE = 8191;
 pub type WHV_PARTITION_PROPERTY_CODE = ::std::os::raw::c_int;
@@ -2933,6 +2951,7 @@ pub union WHV_PARTITION_PROPERTY {
     pub InterruptClockFrequency: UINT64,
     pub ApicRemoteRead: BOOL,
     pub ProcessorFeaturesBanks: WHV_PROCESSOR_FEATURES_BANKS,
+    pub SyntheticProcessorFeaturesBanks: WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS,
     pub ReferenceTime: UINT64,
 }
 #[test]

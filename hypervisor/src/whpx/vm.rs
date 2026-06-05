@@ -221,6 +221,51 @@ impl WhpxVm {
         check_whpx!(unsafe { WHvSetupPartition(partition.partition) })
             .map_err(WhpxError::SetupPartition)?;
 
+        // ProcessorFeaturesBanks (QEMU sets this after SetupPartition).
+        // Tells WHPX about supported CPU features for per-vCPU identity.
+        if apic_emulation {
+            let mut features: WHV_PROCESSOR_FEATURES_BANKS = Default::default();
+            features.BanksCount = 2;
+            let mut cap_size: UINT32 = 0;
+            if unsafe {
+                WHvGetCapability(
+                    WHV_CAPABILITY_CODE_WHvCapabilityCodeProcessorFeaturesBanks,
+                    &mut features as *mut _ as *mut c_void,
+                    std::mem::size_of::<WHV_PROCESSOR_FEATURES_BANKS>() as u32,
+                    &mut cap_size,
+                )
+            } == 0
+            {
+                let _ = check_whpx!(unsafe {
+                    WHvSetPartitionProperty(
+                        partition.partition,
+                        WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeProcessorFeaturesBanks,
+                        &features as *const _ as *const c_void,
+                        std::mem::size_of::<WHV_PROCESSOR_FEATURES_BANKS>() as u32,
+                    )
+                });
+            }
+
+            // SyntheticProcessorFeaturesBanks (QEMU also sets this).
+            // AccessVpIndex (bit 8) enables per-vCPU VP index → unique x2APIC ID.
+            // SyntheticClusterIpi (bit 26) enables proper SMP IPI routing.
+            let mut synth = WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS::default();
+            synth.BanksCount = 1;
+            synth.Bank0 = (1u64 << 0) | (1u64 << 1) | (1u64 << 2) | (1u64 << 3)
+                | (1u64 << 4) | (1u64 << 5) | (1u64 << 6) | (1u64 << 7)
+                | (1u64 << 8) | (1u64 << 9) | (1u64 << 10) | (1u64 << 11)
+                | (1u64 << 15) | (1u64 << 18) | (1u64 << 22)
+                | (1u64 << 24) | (1u64 << 25) | (1u64 << 26);
+            let _ = check_whpx!(unsafe {
+                WHvSetPartitionProperty(
+                    partition.partition,
+                    WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeSyntheticProcessorFeaturesBanks,
+                    &synth as *const _ as *const c_void,
+                    std::mem::size_of::<WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS>() as u32,
+                )
+            });
+        }
+
         for region in guest_mem.regions() {
             unsafe {
                 // Safe because the guest regions are guaranteed not to overlap.
