@@ -795,7 +795,7 @@ impl IrqChip for WhpxSplitIrqChip {
             // MSR write failures if we enable it.
             IrqChipCap::TscDeadlineTimer => false,
             // TODO(b/180966070): Figure out how to query x2apic support.
-            IrqChipCap::X2Apic => false,
+            IrqChipCap::X2Apic => true,
             IrqChipCap::MpStateGetSet => false,
         }
     }
