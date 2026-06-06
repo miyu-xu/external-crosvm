@@ -52,10 +52,7 @@ static WHPX_IO_DEBUG_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Reference-counted multi-processor state shared between WhpxVm (INIT/SIPI
 /// delivery) and the vCPU run loop (which blocks APs until they receive SIPI).
-/// - Mutex<MPState>: BSP=Runnable, AP=Uninitialized → InitReceived → Runnable
-/// - Condvar: signaled when mp_state transitions so the AP can wake up
-/// - AtomicU32: SIPI vector written by BSP, consumed by AP before WHvRunVP
-pub(super) type VpState = Arc<(Mutex<MPState>, Condvar, AtomicU32)>;
+pub(super) type VpState = Arc<(Mutex<MPState>, Condvar)>;
 
 fn whpx_io_debug_enabled() -> bool {
     std::env::var_os("CROSWVM_WHPX_IO_DEBUG").is_some_and(|v| !v.is_empty() && v != "0")
@@ -385,9 +382,6 @@ pub struct WhpxVcpu {
     /// Shared MP states of ALL vCPUs, indexed by vCPU index, so the BSP can
     /// transition AP states during INIT/SIPI delivery.
     ap_states: Vec<VpState>,
-    /// Callback to refresh a GPA range so vCPUs see host-side writes.
-    /// Set by WhpxVm before the vCPU loop starts.
-    gpa_refresh: Option<Arc<dyn Fn(u64, usize) + Send + Sync>>,
 }
 
 impl WhpxVcpu {
@@ -423,194 +417,7 @@ impl WhpxVcpu {
             apic_frequency: None,
             vp_state,
             ap_states,
-            gpa_refresh: None,
         })
-    }
-
-    /// Set the GPA refresh callback. Called by WhpxVm after all vCPUs are created.
-    pub(super) fn set_gpa_refresh(&mut self, f: Arc<dyn Fn(u64, usize) + Send + Sync>) {
-        self.gpa_refresh = Some(f);
-    }
-
-    /// For AP vCPUs: zero out the reset-vector state so the warm-up run
-    /// at RIP=0 produces a clean exit instead of executing firmware code.
-    pub fn clear_reset_vector_state(&self) {
-        let rip_name = WHV_REGISTER_NAME_WHvX64RegisterRip;
-        let zero_val = WHV_REGISTER_VALUE { Reg64: 0 };
-        let _ = check_whpx!(unsafe {
-            WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition, self.index,
-                &rip_name, 1, &zero_val as *const WHV_REGISTER_VALUE,
-            )
-        });
-    }
-
-    /// QEMU whpx_cpu_synchronize_state equivalent: fetch registers from
-    /// WHPX so the vCPU is marked as "synced" and subsequent pushes via
-    /// WHvSetVirtualProcessorRegisters are accepted (even on a cold vCPU).
-    fn fetch_whpx_state(&self, target_idx: u32) -> Result<()> {
-        // Fetch RIP, RFLAGS, CS — the minimal set to "open" the vCPU state.
-        let reg_names = [
-            WHV_REGISTER_NAME_WHvX64RegisterRip,
-            WHV_REGISTER_NAME_WHvX64RegisterRflags,
-            WHV_REGISTER_NAME_WHvX64RegisterCs,
-        ];
-        let mut values = [
-            WHV_REGISTER_VALUE::default(),
-            WHV_REGISTER_VALUE::default(),
-            WHV_REGISTER_VALUE::default(),
-        ];
-        check_whpx!(unsafe {
-            WHvGetVirtualProcessorRegisters(
-                self.vm_partition.partition,
-                target_idx,
-                reg_names.as_ptr(),
-                reg_names.len() as u32,
-                values.as_mut_ptr(),
-            )
-        })
-    }
-
-    /// QEMU whpx_set_registers(RUNTIME_STATE) equivalent: push ALL
-    /// registers in a SINGLE WHvSetVirtualProcessorRegisters call.
-    /// WHPX requires a complete register image when initializing a cold
-    /// vCPU — piecemeal writes may be silently ignored.
-    fn apply_sipi_vector(&self, target_idx: u32, vector: u32) -> Result<()> {
-        let sipi_addr = (vector as u64) << 12;
-        let cs_sel = (vector << 8) as u16;
-
-        // QEMU: whpx_cpu_synchronize_state (fetch) → modify → push all.
-        self.fetch_whpx_state(target_idx)?;
-
-        let zero_seg = || WHV_X64_SEGMENT_REGISTER {
-            Base: 0, Limit: 0xFFFF, Selector: 0,
-            ..Default::default()
-        };
-        let cs_seg = || {
-            let mut s = zero_seg();
-            s.Selector = cs_sel;
-            s
-        };
-
-        // One array of (name, value) covering all registers QEMU's
-        // whpx_set_registers(LEVEL_RUNTIME_STATE) pushes.
-        let names = [
-            // 16 GPRs: zeroed (INIT state)
-            WHV_REGISTER_NAME_WHvX64RegisterRax,
-            WHV_REGISTER_NAME_WHvX64RegisterRbx,
-            WHV_REGISTER_NAME_WHvX64RegisterRcx,
-            WHV_REGISTER_NAME_WHvX64RegisterRdx,
-            WHV_REGISTER_NAME_WHvX64RegisterRsi,
-            WHV_REGISTER_NAME_WHvX64RegisterRdi,
-            WHV_REGISTER_NAME_WHvX64RegisterRsp,
-            WHV_REGISTER_NAME_WHvX64RegisterRbp,
-            WHV_REGISTER_NAME_WHvX64RegisterR8,
-            WHV_REGISTER_NAME_WHvX64RegisterR9,
-            WHV_REGISTER_NAME_WHvX64RegisterR10,
-            WHV_REGISTER_NAME_WHvX64RegisterR11,
-            WHV_REGISTER_NAME_WHvX64RegisterR12,
-            WHV_REGISTER_NAME_WHvX64RegisterR13,
-            WHV_REGISTER_NAME_WHvX64RegisterR14,
-            WHV_REGISTER_NAME_WHvX64RegisterR15,
-            // RIP + RFLAGS
-            WHV_REGISTER_NAME_WHvX64RegisterRip,
-            WHV_REGISTER_NAME_WHvX64RegisterRflags,
-            // 6 segment registers (CS with SIPI selector)
-            WHV_REGISTER_NAME_WHvX64RegisterCs,
-            WHV_REGISTER_NAME_WHvX64RegisterDs,
-            WHV_REGISTER_NAME_WHvX64RegisterEs,
-            WHV_REGISTER_NAME_WHvX64RegisterFs,
-            WHV_REGISTER_NAME_WHvX64RegisterGs,
-            WHV_REGISTER_NAME_WHvX64RegisterSs,
-            // CR0, CR3, CR4 (CR0: real mode, no paging)
-            WHV_REGISTER_NAME_WHvX64RegisterCr0,
-            WHV_REGISTER_NAME_WHvX64RegisterCr3,
-            WHV_REGISTER_NAME_WHvX64RegisterCr4,
-            // EFER: all off
-            WHV_REGISTER_NAME_WHvX64RegisterEfer,
-        ];
-        let vals = [
-            // 16 GPRs: zeroed
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            // RIP + RFLAGS
-            WHV_REGISTER_VALUE { Reg64: sipi_addr },
-            WHV_REGISTER_VALUE { Reg64: 0x2 },
-            // 6 segment registers
-            WHV_REGISTER_VALUE { Segment: cs_seg() },
-            WHV_REGISTER_VALUE { Segment: zero_seg() },
-            WHV_REGISTER_VALUE { Segment: zero_seg() },
-            WHV_REGISTER_VALUE { Segment: zero_seg() },
-            WHV_REGISTER_VALUE { Segment: zero_seg() },
-            WHV_REGISTER_VALUE { Segment: zero_seg() },
-            // CR0, CR3, CR4
-            WHV_REGISTER_VALUE { Reg64: 0x60000010 }, // CD, NW, ET
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            WHV_REGISTER_VALUE { Reg64: 0 },
-            // EFER
-            WHV_REGISTER_VALUE { Reg64: 0 },
-        ];
-
-        check_whpx!(unsafe {
-            WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition, target_idx,
-                names.as_ptr(), names.len() as u32,
-                vals.as_ptr(),
-            )
-        })?;
-
-        warn!(
-            "SIPI applied (full): vcpu={} addr=0x{:x}",
-            target_idx, sipi_addr
-        );
-        Ok(())
-    }
-
-    /// For AP vCPUs (index > 0): warm up the vCPU with one dummy
-    /// WHvRunVirtualProcessor call so WHPX will honor subsequent
-    /// WHvSetVirtualProcessorRegisters calls. The dummy run starts from
-    /// RIP=0 (set by clear_reset_vector_state) which faults immediately.
-    /// Without this warm-up, WHPX silently ignores register writes on a
-    /// vCPU that has never called WHvRunVirtualProcessor.
-    pub fn warm_up_vcpu(&mut self) {
-        let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);
-        warn!("AP vcpu {} warm-up WHvRunVirtualProcessor...", self.index);
-        match check_whpx!(unsafe {
-            WHvRunVirtualProcessor(
-                self.vm_partition.partition,
-                self.index,
-                exit_context_ptr as *mut WHV_RUN_VP_EXIT_CONTEXT as *mut c_void,
-                size_of::<WHV_RUN_VP_EXIT_CONTEXT>() as u32,
-            )
-        }) {
-            Ok(()) => {
-                warn!(
-                    "AP vcpu {} warm-up OK, exit reason={}",
-                    self.index,
-                    self.last_exit_context.ExitReason
-                );
-            }
-            Err(e) => {
-                warn!(
-                    "AP vcpu {} warm-up error (expected): {}",
-                    self.index, e
-                );
-            }
-        }
     }
 
     /// Returns a clone of the shared MP state handle (for WhpxVm cross-vCPU access).
@@ -627,35 +434,17 @@ impl WhpxVcpu {
         self.vp_state.1.notify_all();
     }
 
-    /// Block until mp_state is Runnable. When woken by SIPI, apply CS:IP
-    /// in the AP's own thread context (like QEMU's whpx_vcpu_run which
-    /// calls whpx_put_registers before WHvRunVirtualProcessor).
+    /// Block until mp_state is not Uninitialized or InitReceived.
     pub fn wait_until_runnable(&self) {
         let mut guard = self.vp_state.0.lock().unwrap();
         loop {
             match *guard {
-                MPState::Runnable | MPState::Halted | MPState::Stopped => break,
-                MPState::SipiReceived => {
-                    let vector = self.vp_state.2.load(Ordering::Acquire);
-                    if vector != 0 {
-                        // Refresh GPA in the first 1MB so the AP sees the
-                        // BSP's wakeup buffer + firmware code. Without this
-                        // WHPX per-vCPU TLB may serve stale zeroes.
-                        if let Some(ref refresh) = self.gpa_refresh {
-                            refresh(0, 0x100000);
-                            refresh(0x800000, 0x200000);
-                        }
-                        // QEMU do_cpu_sipi equivalent: set CS:IP in this thread
-                        // before WHvRunVirtualProcessor. WHvRequestInterrupt
-                        // already told WHPX about the SIPI — we also set the
-                        // registers explicitly so WHPX has the right state.
-                        let _ = self.apply_sipi_vector(self.index, vector);
-                    }
-                    *guard = MPState::Runnable;
-                    self.vp_state.1.notify_all();
+                MPState::Runnable | MPState::Halted | MPState::SipiReceived | MPState::Stopped => {
                     break;
                 }
-                _ => guard = self.vp_state.1.wait(guard).unwrap(),
+                _ => {
+                    guard = self.vp_state.1.wait(guard).unwrap();
+                }
             }
         }
     }
@@ -760,14 +549,12 @@ impl WhpxVcpu {
         })
     }
 
-    /// Handle WHPX INIT/SIPI trap. Only the BSP (vCPU 0) may deliver
-    /// INIT/SIPI to APs via WHvRequestInterrupt. APs that reach CpuMpPei
-    /// and think they are BSP (APIC ID=0 from LAPIC MMIO) get their ICR
-    /// writes silently consumed (RIP advanced, no delivery).
+    /// Complete a trapped LAPIC INIT/SIPI ICR write.
     ///
-    /// The APs are blocked in wait_until_runnable() and never run firmware
-    /// code, so WHvRequestInterrupt(INIT+SIPI) from the BSP works correctly:
-    /// WHPX resets the cold vCPU and sets CS:IP to the wakeup buffer.
+    /// Only the BSP (vCPU index 0) is allowed to deliver INIT/SIPI to APs.
+    /// An AP that mis-identifies as BSP (WHPX assigns all vCPUs APIC ID 0)
+    /// will also trigger this trap — we silently advance its RIP to avoid
+    /// a boot loop, but do NOT deliver its INIT/SIPI.
     fn handle_apic_init_sipi_trap(&mut self) -> Result<()> {
         if self.last_exit_context.ExitReason
             != WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64ApicInitSipiTrap
@@ -778,14 +565,26 @@ impl WhpxVcpu {
         const APIC_DM_INIT: u64 = 5;
         const APIC_DM_SIPI: u64 = 6;
 
+        // Safe: exit reason guarantees ApicInitSipi is populated.
         let icr = unsafe { self.last_exit_context.__bindgen_anon_1.ApicInitSipi.ApicIcr };
         let delivery_mode = (icr >> 8) & 0x7;
         let dest_shorthand = (icr >> 18) & 0x3;
         let vector = (icr & 0xFF) as u32;
 
-        // Only BSP delivers INIT/SIPI. AP-initiated traps: advance RIP, no delivery.
+        warn!(
+            "INIT/SIPI trap: vcpu={} icr=0x{:016x} mode={} shorthand={} vec=0x{:x} {}",
+            self.index,
+            icr,
+            delivery_mode,
+            dest_shorthand,
+            vector,
+            if self.index == 0 { "(BSP)" } else { "(AP — ignoring)" }
+        );
+
+        // Only the BSP may deliver INIT/SIPI. APs that reach CpuMpPei and
+        // think they are BSP (WHPX gives everyone APIC ID 0) must not be
+        // allowed to reset the real BSP.
         if self.index != 0 {
-            warn!("INIT/SIPI from AP vcpu={} — ignored", self.index);
             return self.advance_rip();
         }
 
@@ -800,19 +599,33 @@ impl WhpxVcpu {
             WHV_INTERRUPT_TYPE_WHvX64InterruptTypeSipi
         };
 
-        // Resolve targets: physical destination or broadcast (all except self).
+        // Resolve the set of destination vCPUs.
         let processor_count = self.vm_partition.processor_count;
-        let dests: Vec<u32> = if dest_shorthand == 0 {
+        let destinations: Vec<u32> = if dest_shorthand == 0 {
+            // Physical destination mode — use the destination field.
             let dest = ((icr >> 56) & 0xFF) as u32;
             if dest < processor_count { vec![dest] } else { vec![] }
         } else {
+            // Broadcast shorthand: all vCPUs except the sender.
             (0..processor_count).filter(|&i| i != self.index).collect()
         };
 
-        for &target_idx in &dests {
-            // Deliver INIT/SIPI via WHvRequestInterrupt. WHPX processes
-            // the interrupt internally: INIT resets the cold vCPU,
-            // SIPI sets CS:IP to vector<<12. No manual register writes.
+        for &target_idx in &destinations {
+            let target_idx_usize = target_idx as usize;
+            if target_idx_usize >= self.ap_states.len() {
+                continue;
+            }
+            let target = &self.ap_states[target_idx_usize];
+
+            // TODO: GPA refresh for wakeup buffer (0x0..0x100000) before
+            // SIPI delivery. Without this the AP may see stale TLB entries.
+            // This requires plumbing a refresh callback through WhpxVm.
+
+            // Deliver INIT/SIPI via WHvRequestInterrupt (WHV-level processing),
+            // then manually set CS:IP and mp_state. WHvRequestInterrupt alone is
+            // insufficient because WHPX assigns APIC ID 0 to all vCPUs, breaking
+            // the interrupt routing. Used together: WHPX resets the vCPU + we set
+            // the correct startup address.
             let mut interrupt = WHV_INTERRUPT_CONTROL {
                 Destination: target_idx,
                 Vector: vector,
@@ -820,10 +633,10 @@ impl WhpxVcpu {
             };
             interrupt.set_Type(interrupt_type as u64);
             interrupt.set_DestinationMode(
-                WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical as u64,
+                WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical
+                    as u64,
             );
-            // 1. Tell WHPX about the INIT/SIPI (internal processing).
-            let int_result = check_whpx!(unsafe {
+            let _ = check_whpx!(unsafe {
                 WHvRequestInterrupt(
                     self.vm_partition.partition,
                     &interrupt as *const WHV_INTERRUPT_CONTROL,
@@ -831,23 +644,69 @@ impl WhpxVcpu {
                 )
             });
 
-            // 2. Track mp_state so the AP knows when to unblock.
-            let (ref lock, _, ref sipi_vec) = *self.ap_states[target_idx as usize];
             if is_init {
-                let mut st = lock.lock().unwrap();
+                let mut st = target.0.lock().unwrap();
+                warn!("INIT: vcpu {} -> InitReceived (was {:?})", target_idx, *st);
                 *st = MPState::InitReceived;
-                warn!("INIT: vcpu={} delivered={}", target_idx, int_result.is_ok());
             } else {
-                let mut st = lock.lock().unwrap();
-                // Write vector to shared state — AP applies it in its own
-                // thread context inside wait_until_runnable() via apply_sipi_vector.
-                sipi_vec.store(vector, Ordering::Release);
-                *st = MPState::SipiReceived;
-                warn!("SIPI: vcpu={} vec=0x{:x} delivered={}", target_idx, vector, int_result.is_ok());
+                let mut st = target.0.lock().unwrap();
+                warn!("SIPI: vcpu {} vec=0x{:x} (was {:?})", target_idx, vector, *st);
+                if *st == MPState::InitReceived || *st == MPState::Uninitialized {
+                    if let Err(e) = self.apply_sipi_vector(target_idx, vector) {
+                        warn!("SIPI reg write fail: vcpu {}: {}", target_idx, e);
+                    }
+                    *st = MPState::Runnable;
+                }
             }
+            target.1.notify_all();
         }
 
         self.advance_rip()
+    }
+
+    /// Set the target vCPU's registers for real-mode execution at the
+    /// SIPI vector. Intel SDM Vol 3 §8.4.2: AP starts at V<<12.
+    /// WHPX's internal SIPI routing is unreliable when all vCPUs share
+    /// APIC ID 0, so we explicitly program CS:IP here.
+    fn apply_sipi_vector(&self, target_idx: u32, vector: u32) -> Result<()> {
+        let cs_sel = (vector << 8) as u16;
+        let rip = 0u64; // CS<<4 + RIP = vector << 12
+
+        warn!(
+            "SIPI registers: vcpu={} cs=0x{:04x} rip=0x{:x}",
+            target_idx, cs_sel, rip
+        );
+
+        // Apply CS first (it has a different value type)
+        let cs_name = WHV_REGISTER_NAME_WHvX64RegisterCs;
+        let mut cs_reg = WHV_X64_SEGMENT_REGISTER::default();
+        cs_reg.Base = 0;
+        cs_reg.Limit = 0xFFFF;
+        cs_reg.Selector = cs_sel;
+        let cs_val = WHV_REGISTER_VALUE { Segment: cs_reg };
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorRegisters(
+                self.vm_partition.partition, target_idx,
+                &cs_name, 1, &cs_val as *const WHV_REGISTER_VALUE,
+            )
+        })?;
+
+        // Apply RIP and RFLAGS (both Reg64 type, can be batched)
+        let reg_names = [
+            WHV_REGISTER_NAME_WHvX64RegisterRip,
+            WHV_REGISTER_NAME_WHvX64RegisterRflags,
+        ];
+        let values = [
+            WHV_REGISTER_VALUE { Reg64: rip },
+            WHV_REGISTER_VALUE { Reg64: 0x2 },
+        ];
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorRegisters(
+                self.vm_partition.partition, target_idx,
+                reg_names.as_ptr(), reg_names.len() as u32,
+                values.as_ptr(),
+            )
+        })
     }
 
     /// Handle reading the MSR with id `id`. For unsupported MSRs, return 0 (RAZ) instead
@@ -908,67 +767,12 @@ impl WhpxVcpu {
             return Err(Error::new(EINVAL));
         }
 
-        // x2APIC ICR (MSR 0x830): decode INIT/SIPI and deliver via
-        // WHvRequestInterrupt by vCPU index (not APIC ID, which WHPX
-        // reports as 0 for all vCPUs).
-        const X2APIC_ICR: u32 = 0x830;
-        const APIC_DM_INIT: u64 = 5;
-        const APIC_DM_SIPI: u64 = 6;
-        const APIC_DEST_ALL_EXCL_SELF: u64 = 3;
-
-        if id == X2APIC_ICR {
-            let vector = (value & 0xFF) as u32;
-            let delivery_mode = (value >> 8) & 0x7;
-            let dest_shorthand = (value >> 18) & 0x3;
-            let dest_field = ((value >> 32) & 0xFFFFFFFF) as u32;
-
-            warn!("x2APIC ICR: vcpu={} mode={} shorthand={} dest={} vec={}",
-                self.index, delivery_mode, dest_shorthand, dest_field, vector);
-
-            if delivery_mode == APIC_DM_INIT || delivery_mode == APIC_DM_SIPI {
-                let interrupt_type = if delivery_mode == APIC_DM_INIT {
-                    WHV_INTERRUPT_TYPE_WHvX64InterruptTypeInit
-                } else {
-                    WHV_INTERRUPT_TYPE_WHvX64InterruptTypeSipi
-                };
-
-                let processor_count = self.vm_partition.processor_count;
-                let dests: Vec<u32> = if dest_shorthand == 0 {
-                    if dest_field < processor_count { vec![dest_field] } else { vec![] }
-                } else if dest_shorthand == APIC_DEST_ALL_EXCL_SELF {
-                    (0..processor_count).filter(|&i| i != self.index).collect()
-                } else {
-                    (0..processor_count).collect() // all including self
-                };
-
-                for &target_idx in &dests {
-                    let mut interrupt = WHV_INTERRUPT_CONTROL {
-                        Destination: target_idx,
-                        Vector: vector,
-                        ..Default::default()
-                    };
-                    interrupt.set_Type(interrupt_type as u64);
-                    interrupt.set_DestinationMode(
-                        WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical as u64,
-                    );
-                    let _ = check_whpx!(unsafe {
-                        WHvRequestInterrupt(
-                            self.vm_partition.partition,
-                            &interrupt as *const WHV_INTERRUPT_CONTROL,
-                            size_of::<WHV_INTERRUPT_CONTROL>() as u32,
-                        )
-                    });
-                    warn!("x2APIC {} to vcpu={}", if delivery_mode == APIC_DM_INIT {"INIT"} else {"SIPI"}, target_idx);
-                }
+        match id {
+            HV_X64_MSR_TSC_INVARIANT_CONTROL => {
+                // Do nothing — we assume TSC is always invariant.
             }
-        } else {
-            match id {
-                HV_X64_MSR_TSC_INVARIANT_CONTROL => {
-                    // Do nothing — we assume TSC is always invariant.
-                }
-                _ => {
-                    warn!("whpx: WRMSR 0x{:x} = 0x{:x} unsupported, ignoring", id, value);
-                }
+            _ => {
+                warn!("whpx: WRMSR 0x{:x} = 0x{:x} unsupported, ignoring", id, value);
             }
         }
 
@@ -1127,7 +931,6 @@ impl Vcpu for WhpxVcpu {
             apic_frequency: self.apic_frequency,
             vp_state: self.vp_state.clone(),
             ap_states: self.ap_states.clone(),
-            gpa_refresh: self.gpa_refresh.clone(),
         })
     }
 
@@ -1300,6 +1103,10 @@ impl Vcpu for WhpxVcpu {
 
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
+        // QEMU model: let both vCPUs run from the reset vector. WHPX with
+        // x2APIC + ProcessorFeatures handles INIT/SIPI internally via MSR
+        // 0x830 and delivers to the target vCPU while it's running.
+
         // safe because we own this whpx virtual processor index, and assume the vm partition is
         // still valid
         let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);
@@ -1312,24 +1119,8 @@ impl Vcpu for WhpxVcpu {
             )
         })?;
 
-        // Log the AP's exit reason for diagnostic purposes
-        if self.index != 0 {
-            warn!("AP vcpu={} exit reason={}", self.index, self.last_exit_context.ExitReason);
-        }
-
         match self.last_exit_context.ExitReason {
-            WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonMemoryAccess => {
-                // Debug: verify LAPIC MMIO is routed to userspace
-                // with LocalApicEmulationMode=None.
-                let gpa = unsafe { self.last_exit_context.__bindgen_anon_1.MemoryAccess.Gpa };
-                if gpa >= 0xFEE00000 && gpa < 0xFEF00000 {
-                    warn!(
-                        "LAPIC_MMIO: vcpu={} gpa=0x{:x}",
-                        self.index, gpa
-                    );
-                }
-                Ok(VcpuExit::Mmio)
-            }
+            WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonMemoryAccess => Ok(VcpuExit::Mmio),
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64IoPortAccess => Ok(VcpuExit::Io),
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonUnrecoverableException => {
                 Ok(VcpuExit::UnrecoverableException)

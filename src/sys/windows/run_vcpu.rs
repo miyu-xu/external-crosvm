@@ -219,7 +219,7 @@ impl VcpuRunThread {
 
     /// Perform WHPX-specific vcpu configurations
     #[cfg(feature = "whpx")]
-    fn whpx_configure_vcpu(vcpu: &mut dyn VcpuArch, irq_chip: &mut dyn IrqChipArch, cpu_id: usize) {
+    fn whpx_configure_vcpu(vcpu: &mut dyn VcpuArch, irq_chip: &mut dyn IrqChipArch) {
         // only apply to actual WhpxVcpu instances
         if let Some(whpx_vcpu) = vcpu.downcast_mut::<WhpxVcpu>() {
             // WhpxVcpu instances need to know the TSC and Lapic frequencies to handle Hyper-V MSR
@@ -234,13 +234,6 @@ impl VcpuRunThread {
                 })
                 .ok();
             whpx_vcpu.set_frequencies(tsc_freq, irq_chip.lapic_frequency());
-
-            // AP vCPUs boot normally (from the reset vector, like the BSP).
-            // OVMF CpuMpPei uses CPUID leaf 1.EBX[31:24] for APIC ID,
-            // which cpuid.rs already sets to the vCPU index, so APs can
-            // distinguish themselves from the BSP without LAPIC MMIO.
-            // The INIT/SIPI handler only suppresses INIT/SIPI from
-            // non-BSP vCPUs (index != 0) to prevent boot loops.
         }
     }
 
@@ -313,7 +306,7 @@ impl VcpuRunThread {
         .exit_context(Exit::ConfigureVcpu, "failed to configure vcpu")?;
 
         #[cfg(feature = "whpx")]
-        Self::whpx_configure_vcpu(&mut vcpu, irq_chip, cpu_id);
+        Self::whpx_configure_vcpu(&mut vcpu, irq_chip);
 
         let mut thread_priority_handle = None;
         if run_rt {

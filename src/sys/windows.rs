@@ -2441,12 +2441,12 @@ fn run_config_inner(
 
             let no_smt = cfg.no_smt;
 
-            // Use Split IRQ chip (WHPX APIC xAPIC emulation). WHPX handles
-            // INIT/SIPI delivery internally via WHvRequestInterrupt.
-            // AP vCPUs are blocked in WhpxVcpu::wait_until_runnable() to
-            // prevent simultaneous SEC/PEI execution corrupting firmware data.
-            // CPUID leaf 0xB EDX (vcpu_id) gives OVMF distinct APIC IDs.
-            let irq_chip = cfg.irq_chip.unwrap_or(IrqChipKind::Split);
+            // Default to WhpxSplitIrqChip if it's supported because it's more performant
+            let irq_chip = cfg.irq_chip.unwrap_or(if apic_emulation_supported {
+                IrqChipKind::Split
+            } else {
+                IrqChipKind::Userspace
+            });
 
             // Both WHPX irq chips use a userspace IOAPIC
             let (ioapic_host_tube, ioapic_device_tube) =
@@ -2455,13 +2455,12 @@ fn run_config_inner(
             info!("Creating Whpx");
             let whpx = Whpx::new()?;
             let guest_mem = create_guest_memory(&components, &whpx)?;
-            let use_whpx_apic = irq_chip == IrqChipKind::Split;
             let vm = create_whpx_vm(
                 whpx,
                 guest_mem,
                 components.vcpu_count,
                 no_smt,
-                use_whpx_apic,
+                apic_emulation_supported && irq_chip == IrqChipKind::Split,
                 cfg.force_calibrated_tsc_leaf,
                 vm_evt_wrtube
                     .try_clone()

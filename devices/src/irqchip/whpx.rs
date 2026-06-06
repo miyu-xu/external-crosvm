@@ -794,8 +794,8 @@ impl IrqChip for WhpxSplitIrqChip {
             // It appears as though WHPX does not have tsc deadline support because we get guest
             // MSR write failures if we enable it.
             IrqChipCap::TscDeadlineTimer => false,
-            // x2APIC is enabled via WHvX64LocalApicEmulationModeX2Apic.
-            IrqChipCap::X2Apic => true,
+            // TODO(b/180966070): Figure out how to query x2apic support.
+            IrqChipCap::X2Apic => false,
             IrqChipCap::MpStateGetSet => false,
         }
     }

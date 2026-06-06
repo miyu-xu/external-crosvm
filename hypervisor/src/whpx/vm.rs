@@ -7,7 +7,6 @@ use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
 use std::convert::TryInto;
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
 use base::error;
@@ -201,13 +200,17 @@ impl WhpxVm {
             return Err(WhpxError::LocalApicEmulationNotSupported);
         }
 
-        // Setup x2APIC emulation BEFORE WHvSetupPartition (required by this WHPX).
+        // Setup apic emulation mode
         let mut property: WHV_PARTITION_PROPERTY = Default::default();
         property.LocalApicEmulationMode = if apic_emulation {
-            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeX2Apic
+            // TODO(b/180966070): figure out if x2apic emulation mode is available on the host and
+            // enable it if it is.
+            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeXApic
         } else {
             WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone
         };
+
+        // safe because we own this partition, and the partition property is allocated on the stack.
         check_whpx!(unsafe {
             WHvSetPartitionProperty(
                 partition.partition,
@@ -217,6 +220,41 @@ impl WhpxVm {
             )
         })
         .map_err(WhpxError::SetLocalApicEmulationMode)?;
+
+        // QEMU sets ProcessorFeaturesBanks to tell WHPX about supported
+        // processor features (SLAT, NestedVirt, ApicRemoteRead, etc.).
+        // This enables proper per-vCPU x2APIC ID assignment via MSR 0x802
+        // and correct INIT/SIPI routing.
+        {
+            let mut features: WHV_PROCESSOR_FEATURES_BANKS = Default::default();
+            features.BanksCount = 2;
+            let mut cap_size: UINT32 = 0;
+            let hr = unsafe {
+                WHvGetCapability(
+                    WHV_CAPABILITY_CODE_WHvCapabilityCodeProcessorFeaturesBanks,
+                    &mut features as *mut _ as *mut c_void,
+                    std::mem::size_of::<WHV_PROCESSOR_FEATURES_BANKS>() as u32,
+                    &mut cap_size,
+                )
+            };
+            if hr == S_OK {
+                info!(
+                    "WHPX: ProcessorFeaturesBanks Bank0={:016x} Bank1={:016x}",
+                    unsafe { features.__bindgen_anon_1.AsUINT64[0] },
+                    unsafe { features.__bindgen_anon_1.AsUINT64[1] }
+                );
+                let _ = check_whpx!(unsafe {
+                    WHvSetPartitionProperty(
+                        partition.partition,
+                        WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeProcessorFeaturesBanks,
+                        &features as *const _ as *const c_void,
+                        std::mem::size_of::<WHV_PROCESSOR_FEATURES_BANKS>() as u32,
+                    )
+                });
+            } else {
+                info!("WHPX: ProcessorFeaturesBanks not available (hr=0x{:08x})", hr);
+            }
+        }
 
         // safe because we own this partition
         check_whpx!(unsafe { WHvSetupPartition(partition.partition) })
@@ -246,7 +284,6 @@ impl WhpxVm {
                 Arc::new((
                     std::sync::Mutex::new(MPState::Uninitialized),
                     std::sync::Condvar::new(),
-                    AtomicU32::new(0), // SIPI vector
                 ))
             })
             .collect();
@@ -853,44 +890,12 @@ impl VmX86_64 for WhpxVm {
 
     fn create_vcpu(&self, id: usize) -> Result<Box<dyn VcpuX86_64>> {
         let vp_state = self.vp_states[id].clone();
-        let mut vcpu = WhpxVcpu::new(
+        Ok(Box::new(WhpxVcpu::new(
             self.vm_partition.clone(),
             id.try_into().unwrap(),
             vp_state,
             self.vp_states.clone(),
-        )?;
-
-        // Wire up GPA refresh so the INIT/SIPI handler can flush TLB
-        // entries for the wakeup buffer (0x0..0x100000) before starting
-        // an AP. Without this the AP may read stale zeroes and crash.
-        let partition = self.vm_partition.clone();
-        let guest_mem = self.guest_mem.clone();
-        vcpu.set_gpa_refresh(Arc::new(move |gpa, len| {
-            let ps = pagesize();
-            let sync_start = gpa & !(ps as u64 - 1);
-            let sync_end = ((gpa + len as u64 + ps as u64 - 1) & !(ps as u64 - 1)).min(gpa + 0x100000);
-            if sync_end <= sync_start {
-                return;
-            }
-            let sync_len = sync_end - sync_start;
-            for region in guest_mem.regions() {
-                let slot_start = region.guest_addr.offset();
-                let slot_end = slot_start + region.size as u64;
-                if sync_start >= slot_start && sync_end <= slot_end {
-                    let offset_in_slot = (sync_start - slot_start) as usize;
-                    let host_ptr = (region.host_addr + offset_in_slot) as *mut u8;
-                    unsafe {
-                        let _ = super::vm::set_user_memory_region(
-                            &partition,
-                            false, false, sync_start, sync_len, host_ptr,
-                        );
-                    }
-                    break;
-                }
-            }
-        }));
-
-        Ok(Box::new(vcpu))
+        )?))
     }
 
     /// Sets the address of the three-page region in the VM's address space.
