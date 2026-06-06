@@ -648,7 +648,7 @@ impl WhpxVcpu {
         self.vm_partition.partition
     }
 
-    /// Read RIP of another vCPU (for BSP diagnostic from AP thread).
+    /// Read RIP/DX/RFLAGS of another vCPU (for BSP diagnostic from AP thread).
     pub fn read_other_rip(&self, vp_index: u32) -> Result<u64> {
         const REG: WHV_REGISTER_NAME = WHV_REGISTER_NAME_WHvX64RegisterRip;
         let mut val = WHV_REGISTER_VALUE::default();
@@ -658,6 +658,21 @@ impl WhpxVcpu {
             )
         })?;
         Ok(unsafe { val.Reg64 })
+    }
+
+    pub fn read_other_regs(&self, vp_index: u32) -> Result<(u64, u64, u64)> {
+        const REGS: [WHV_REGISTER_NAME; 3] = [
+            WHV_REGISTER_NAME_WHvX64RegisterRip,
+            WHV_REGISTER_NAME_WHvX64RegisterRdx,
+            WHV_REGISTER_NAME_WHvX64RegisterRflags,
+        ];
+        let mut vals = [WHV_REGISTER_VALUE::default(); 3];
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorRegisters(
+                self.vm_partition.partition, vp_index, REGS.as_ptr(), 3, vals.as_mut_ptr(),
+            )
+        })?;
+        Ok(unsafe { (vals[0].Reg64, vals[1].Reg64, vals[2].Reg64) })
     }
     pub fn read_activity_state(&self) -> Result<u64> {
         const REG: WHV_REGISTER_NAME = WHV_REGISTER_NAME_WHvRegisterInternalActivityState;

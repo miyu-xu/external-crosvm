@@ -79,6 +79,7 @@ pub use cpuid::adjust_cpuid;
 pub use cpuid::CpuIdContext;
 use devices::acpi::PM_WAKEUP_GPIO;
 use devices::Bus;
+use devices::BusAccessInfo;
 use devices::BusDevice;
 use devices::BusDeviceObj;
 use devices::BusResumeDevice;
@@ -883,8 +884,13 @@ impl arch::LinuxArch for X8664arch {
         }
 
         let pcie_vcfg_range = Self::get_pcie_vcfg_mmio_range(&mem, &pcie_cfg_mmio_range);
-        let mmio_bus = Arc::new(Bus::new(BusType::Mmio));
+        // Minimal ACPI PM Timer at port 0x608 (needed for OVMF MicroSecondDelay).
+        // Without this, OVMF PEI's AcpiTimerLib reads return 0 → infinite PIO loop.
+        let pm_timer: Arc<Mutex<dyn BusDevice>> = Arc::new(Mutex::new(AcpiPmTimer::new()));
         let io_bus = Arc::new(Bus::new(BusType::Io));
+        io_bus.insert(pm_timer, 0x608, 4).unwrap();
+
+        let mmio_bus = Arc::new(Bus::new(BusType::Mmio));
 
         let (pci_devices, devs): (Vec<_>, Vec<_>) = devs
             .into_iter()
@@ -2481,6 +2487,31 @@ pub fn check_host_hybrid_support(cpuid: &CpuIdCall) -> std::result::Result<(), H
     }
     Ok(())
 }
+
+/// Minimal ACPI PM Timer for OVMF MicroSecondDelay (port 0x608).
+/// Without this, OVMF PEI's AcpiTimerLib returns 0 and loops forever.
+pub struct AcpiPmTimer {
+    start: std::time::Instant,
+}
+
+impl AcpiPmTimer {
+    pub fn new() -> Self { AcpiPmTimer { start: std::time::Instant::now() } }
+}
+
+impl devices::BusDevice for AcpiPmTimer {
+    fn debug_label(&self) -> String { "AcpiPmTimer".to_owned() }
+    fn device_id(&self) -> devices::DeviceId { devices::CrosvmDeviceId::ACPIPMResource.into() }
+    fn read(&mut self, _info: devices::BusAccessInfo, data: &mut [u8]) {
+        if data.len() >= 4 {
+            let ns = self.start.elapsed().as_nanos() as u64;
+            let val = (ns * 358 / 100) as u32; // ~3.58MHz ACPI PM timer
+            data[..4].copy_from_slice(&val.to_le_bytes());
+        }
+    }
+    fn write(&mut self, _info: devices::BusAccessInfo, _data: &[u8]) {}
+}
+
+impl devices::Suspendable for AcpiPmTimer {}
 
 #[cfg(test)]
 mod tests {

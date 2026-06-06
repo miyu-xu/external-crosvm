@@ -820,11 +820,34 @@ where
 
                 // Cancel BSP to force exit from PAUSE loop — BSP may have cached
                 // old FinishedCount value. Cancel → re-enter loads fresh memory.
-                // Read BSP RIP (Priority 1) and force memory refresh + cancel (Priority 3)
-                if let Ok(bsp_rip) = whpx_vcpu.read_other_rip(0) {
-                    info!("whpx: BSP RIP=0x{:016x}", bsp_rip);
+                // Priority 1: Read BSP RIP + DX (PIO port) + instruction bytes
+                if let Ok((bsp_rip, bsp_rdx, bsp_rflags)) = whpx_vcpu.read_other_regs(0) {
+                    let mut insn = [0u8; 16];
+                    vm_mem.read_exact_at_addr(&mut insn, vm_memory::GuestAddress(bsp_rip)).ok();
+                    info!("whpx: BSP RIP=0x{:016x} RDX(port)=0x{:04x} RFLAGS=0x{:016x} code={:02x?}",
+                          bsp_rip, bsp_rdx as u16, bsp_rflags, &insn[..8]);
                 }
-                // Cancel BSP to force re-entry (note: WHPX may cache old memory)
+                // Force WHPX to reload CpuMpData page from host memory:
+                // unmap + remap with same backing → invalidates VP cache.
+                let page = CMP0.load(Ordering::Relaxed) & !0xFFF;
+                if page != 0 {
+                    // Get host backing address for this GPA
+                    let hpa = vm_mem.get_host_address(vm_memory::GuestAddress(page)).ok();
+                    if let Some(hpa) = hpa {
+                        unsafe {
+                            hypervisor::whpx::whpx_sys::WHvUnmapGpaRange(
+                                whpx_vcpu.partition_handle(), page, 0x1000,
+                            );
+                            hypervisor::whpx::whpx_sys::WHvMapGpaRange(
+                                whpx_vcpu.partition_handle(),
+                                hpa as *mut std::ffi::c_void, page, 0x1000,
+                                7, // Read|Write|Execute
+                            );
+                        }
+                        info!("whpx: refreshed GPA 0x{:x} (unmap+remap)", page);
+                    }
+                }
+                // Cancel BSP to force re-entry with fresh memory
                 let hr = unsafe {
                     hypervisor::whpx::whpx_sys::WHvCancelRunVirtualProcessor(
                         whpx_vcpu.partition_handle(), 0, 0,
