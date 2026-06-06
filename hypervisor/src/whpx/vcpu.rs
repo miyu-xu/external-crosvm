@@ -569,31 +569,28 @@ impl WhpxVcpu {
         self.vp_state.1.notify_all();
     }
 
-    /// Block until mp_state is not Uninitialized or InitReceived.
-    /// APs woken by SIPI get their CS:IP applied here IN the vCPU thread
-    /// context so WHPX honors the WHvSetVirtualProcessorRegisters call.
+    /// Block until mp_state is Runnable. When woken by SIPI, apply CS:IP
+    /// in the AP's own thread context (like QEMU's whpx_vcpu_run which
+    /// calls whpx_put_registers before WHvRunVirtualProcessor).
     pub fn wait_until_runnable(&self) {
         let mut guard = self.vp_state.0.lock().unwrap();
         loop {
             match *guard {
-                MPState::Runnable | MPState::Halted | MPState::Stopped => {
-                    break;
-                }
+                MPState::Runnable | MPState::Halted | MPState::Stopped => break,
                 MPState::SipiReceived => {
                     let vector = self.vp_state.2.load(Ordering::Acquire);
                     if vector != 0 {
-                        // Apply CS:IP in our own thread before WHvRunVP.
-                        // Note: WHPX may still ignore this if the vCPU has
-                        // never run — see the warm-up logic in run().
+                        // QEMU do_cpu_sipi equivalent: set CS:IP in this thread
+                        // before WHvRunVirtualProcessor. WHvRequestInterrupt
+                        // already told WHPX about the SIPI — we also set the
+                        // registers explicitly so WHPX has the right state.
                         let _ = self.apply_sipi_vector(self.index, vector);
                     }
                     *guard = MPState::Runnable;
                     self.vp_state.1.notify_all();
                     break;
                 }
-                _ => {
-                    guard = self.vp_state.1.wait(guard).unwrap();
-                }
+                _ => guard = self.vp_state.1.wait(guard).unwrap(),
             }
         }
     }
@@ -698,25 +695,96 @@ impl WhpxVcpu {
         })
     }
 
-    /// Trap handler for LAPIC INIT/SIPI ICR writes.
-    /// Only fires when WHPX APIC emulation is enabled (Split IRQ chip mode).
-    /// With userspace APIC (None mode), this exit never triggers — the
-    /// userspace Apic handles INIT/SIPI via MMIO at 0xFEE00000.
-    /// This handler only suppresses non-BSP INIT/SIPI to prevent boot loops
-    /// if someone runs with the legacy Split IRQ chip.
+    /// Handle WHPX INIT/SIPI trap. Only the BSP (vCPU 0) may deliver
+    /// INIT/SIPI to APs via WHvRequestInterrupt. APs that reach CpuMpPei
+    /// and think they are BSP (APIC ID=0 from LAPIC MMIO) get their ICR
+    /// writes silently consumed (RIP advanced, no delivery).
+    ///
+    /// The APs are blocked in wait_until_runnable() and never run firmware
+    /// code, so WHvRequestInterrupt(INIT+SIPI) from the BSP works correctly:
+    /// WHPX resets the cold vCPU and sets CS:IP to the wakeup buffer.
     fn handle_apic_init_sipi_trap(&mut self) -> Result<()> {
         if self.last_exit_context.ExitReason
             != WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64ApicInitSipiTrap
         {
             return Err(Error::new(EINVAL));
         }
-        warn!("INIT/SIPI trap: vcpu={} (ignored — userspace APIC handles this)", self.index);
+
+        const APIC_DM_INIT: u64 = 5;
+        const APIC_DM_SIPI: u64 = 6;
+
+        let icr = unsafe { self.last_exit_context.__bindgen_anon_1.ApicInitSipi.ApicIcr };
+        let delivery_mode = (icr >> 8) & 0x7;
+        let dest_shorthand = (icr >> 18) & 0x3;
+        let vector = (icr & 0xFF) as u32;
+
+        // Only BSP delivers INIT/SIPI. AP-initiated traps: advance RIP, no delivery.
+        if self.index != 0 {
+            warn!("INIT/SIPI from AP vcpu={} — ignored", self.index);
+            return self.advance_rip();
+        }
+
+        if delivery_mode != APIC_DM_INIT && delivery_mode != APIC_DM_SIPI {
+            return self.advance_rip();
+        }
+
+        let is_init = delivery_mode == APIC_DM_INIT;
+        let interrupt_type = if is_init {
+            WHV_INTERRUPT_TYPE_WHvX64InterruptTypeInit
+        } else {
+            WHV_INTERRUPT_TYPE_WHvX64InterruptTypeSipi
+        };
+
+        // Resolve targets: physical destination or broadcast (all except self).
+        let processor_count = self.vm_partition.processor_count;
+        let dests: Vec<u32> = if dest_shorthand == 0 {
+            let dest = ((icr >> 56) & 0xFF) as u32;
+            if dest < processor_count { vec![dest] } else { vec![] }
+        } else {
+            (0..processor_count).filter(|&i| i != self.index).collect()
+        };
+
+        for &target_idx in &dests {
+            // Deliver INIT/SIPI via WHvRequestInterrupt. WHPX processes
+            // the interrupt internally: INIT resets the cold vCPU,
+            // SIPI sets CS:IP to vector<<12. No manual register writes.
+            let mut interrupt = WHV_INTERRUPT_CONTROL {
+                Destination: target_idx,
+                Vector: vector,
+                ..Default::default()
+            };
+            interrupt.set_Type(interrupt_type as u64);
+            interrupt.set_DestinationMode(
+                WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical as u64,
+            );
+            // 1. Tell WHPX about the INIT/SIPI (internal processing).
+            let int_result = check_whpx!(unsafe {
+                WHvRequestInterrupt(
+                    self.vm_partition.partition,
+                    &interrupt as *const WHV_INTERRUPT_CONTROL,
+                    size_of::<WHV_INTERRUPT_CONTROL>() as u32,
+                )
+            });
+
+            // 2. Track mp_state so the AP knows when to unblock.
+            let (ref lock, _, ref sipi_vec) = *self.ap_states[target_idx as usize];
+            if is_init {
+                let mut st = lock.lock().unwrap();
+                *st = MPState::InitReceived;
+                warn!("INIT: vcpu={} delivered={}", target_idx, int_result.is_ok());
+            } else {
+                let mut st = lock.lock().unwrap();
+                // Write vector to shared state — AP applies it in its own
+                // thread context inside wait_until_runnable() via apply_sipi_vector.
+                sipi_vec.store(vector, Ordering::Release);
+                *st = MPState::SipiReceived;
+                warn!("SIPI: vcpu={} vec=0x{:x} delivered={}", target_idx, vector, int_result.is_ok());
+            }
+        }
+
         self.advance_rip()
     }
 
-    /// Set CS:IP for the AP to start at the SIPI vector address.
-    /// Must be called from the AP's own vCPU thread — cross-thread
-    /// WHvSetVirtualProcessorRegisters is silently ignored by WHPX.
     /// Handle reading the MSR with id `id`. For unsupported MSRs, return 0 (RAZ) instead
     /// of injecting #GP — a #GP before the kernel's exception handler is set up can cause
     /// a silent triple fault before earlycon output, making the guest appear hung.
@@ -1112,7 +1180,11 @@ impl Vcpu for WhpxVcpu {
 
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
-        // IRQ chip handles vCPU blocking for APs waiting for INIT/SIPI.
+        // AP vCPUs: block here until the BSP delivers SIPI via WHvRequestInterrupt.
+        // This prevents APs from running SEC/PEI simultaneously with the BSP,
+        // corrupting shared firmware data structures. WHPX handles the INIT+SIPI
+        // internally — we just manage mp_state and let WHPX set CS:IP.
+        self.wait_until_runnable();
 
         // safe because we own this whpx virtual processor index, and assume the vm partition is
         // still valid

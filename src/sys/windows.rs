@@ -2441,21 +2441,20 @@ fn run_config_inner(
 
             let no_smt = cfg.no_smt;
 
-            // Default to userspace LAPIC (QEMU kernel-irqchip=off model).
-            // WHPX xAPIC emulation assigns APIC ID 0 to all vCPUs, breaking
-            // OVMF CpuMpPei which cannot distinguish BSP from APs.
-            // The userspace Apic gives each vCPU a unique APIC ID (vcpu_id).
-            let irq_chip = cfg.irq_chip.unwrap_or(IrqChipKind::Userspace);
+            // Use Split IRQ chip (WHPX APIC xAPIC emulation). WHPX handles
+            // INIT/SIPI delivery internally via WHvRequestInterrupt.
+            // AP vCPUs are blocked in WhpxVcpu::wait_until_runnable() to
+            // prevent simultaneous SEC/PEI execution corrupting firmware data.
+            // CPUID leaf 0xB EDX (vcpu_id) gives OVMF distinct APIC IDs.
+            let irq_chip = cfg.irq_chip.unwrap_or(IrqChipKind::Split);
 
             // Both WHPX irq chips use a userspace IOAPIC
             let (ioapic_host_tube, ioapic_device_tube) =
                 Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
 
-            info!("Creating Whpx (userspace LAPIC)");
+            info!("Creating Whpx");
             let whpx = Whpx::new()?;
             let guest_mem = create_guest_memory(&components, &whpx)?;
-            // apic_emulation=false → WHvX64LocalApicEmulationModeNone
-            // WHPX won't intercept LAPIC MMIO; userspace Apic handles it.
             let use_whpx_apic = irq_chip == IrqChipKind::Split;
             let vm = create_whpx_vm(
                 whpx,
