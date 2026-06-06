@@ -178,12 +178,10 @@ impl WhpxVm {
             property
                 .ExtendedVmExits
                 .__bindgen_anon_1
-                .set_X64CpuidExit(1);
-            // X64MsrExit essentially causes WHPX to exit to crosvm when it would normally fail an
-            // MSR access and inject a GP fault. Crosvm, in turn, now handles select MSR accesses
-            // related to Hyper-V (see the handle_msr_* functions in vcpu.rs) and injects a GP
-            // fault for any unhandled MSR accesses.
-            property.ExtendedVmExits.__bindgen_anon_1.set_X64MsrExit(1);
+                .set_X64MsrExit(1);
+            // QEMU model: do NOT set X64CpuidExit. Let WHPX handle CPUID
+            // internally. With ProcessorFeaturesBanks set after SetupPartition,
+            // WHPX returns unique per-vCPU APIC IDs for leaf 0xB EDX.
         }
         // safe because we own this partition, and the partition property is allocated on the stack.
         check_whpx!(unsafe {
@@ -259,6 +257,45 @@ impl WhpxVm {
                     WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeNestedVirtualization,
                     &prop as *const _ as *const c_void,
                     std::mem::size_of::<WHV_PARTITION_PROPERTY>() as u32,
+                )
+            });
+
+            // QEMU sets SyntheticProcessorFeaturesBanks (property code 0x100C)
+            // to enable AccessVpIndex and SyntheticClusterIpi. These tell
+            // WHPX to assign unique VP indices and properly route SMP IPIs.
+            // Without these, WHPX assigns APIC ID 0 to all vCPUs even in
+            // x2APIC mode, breaking OVMF CpuMpPei BSP/AP detection.
+            let mut synth: [u8; 16] = [0u8; 16];
+            // BanksCount = 1
+            synth[0] = 1;
+            // Bank0: HypervisorPresent|Hv1|AccessVpRunTimeReg|
+            //        AccessPartitionReferenceCounter|AccessPartitionReferenceTsc|
+            //        AccessHypercallRegs|AccessFrequencyRegs|
+            //        EnableExtendedGvaRanges|AccessVpIndex|TbFlushHypercalls|
+            //        AccessSynicRegs|AccessSyntheticTimerRegs|AccessIntrCtrlRegs|
+            //        SyntheticClusterIpi|DirectSyntheticTimers
+            let bank0: u64 = (1 << 0)   // HypervisorPresent
+                | (1 << 1)   // Hv1
+                | (1 << 2)   // AccessVpRunTimeReg
+                | (1 << 3)   // AccessPartitionReferenceCounter
+                | (1 << 4)   // AccessPartitionReferenceTsc
+                | (1 << 5)   // AccessHypercallRegs
+                | (1 << 6)   // AccessFrequencyRegs
+                | (1 << 7)   // EnableExtendedGvaRangesForFlushVirtualAddressList
+                | (1 << 8)   // AccessVpIndex (per-vCPU ID!)
+                | (1 << 9)   // TbFlushHypercalls
+                | (1 << 10)  // AccessSynicRegs
+                | (1 << 11)  // AccessSyntheticTimerRegs
+                | (1 << 12)  // AccessIntrCtrlRegs
+                | (1 << 13)  // SyntheticClusterIpi (SMP routing!)
+                | (1 << 14); // DirectSyntheticTimers
+            synth[8..16].copy_from_slice(&bank0.to_le_bytes());
+            let synth_result = check_whpx!(unsafe {
+                WHvSetPartitionProperty(
+                    partition.partition,
+                    0x0000100C, // WHvPartitionPropertyCodeSyntheticProcessorFeaturesBanks
+                    synth.as_ptr() as *const c_void,
+                    16u32, // sizeof(WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS)
                 )
             });
         }
