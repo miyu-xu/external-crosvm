@@ -445,6 +445,32 @@ impl WhpxVcpu {
         });
     }
 
+    /// QEMU whpx_cpu_synchronize_state equivalent: fetch registers from
+    /// WHPX so the vCPU is marked as "synced" and subsequent pushes via
+    /// WHvSetVirtualProcessorRegisters are accepted (even on a cold vCPU).
+    fn fetch_whpx_state(&self, target_idx: u32) -> Result<()> {
+        // Fetch RIP, RFLAGS, CS — the minimal set to "open" the vCPU state.
+        let reg_names = [
+            WHV_REGISTER_NAME_WHvX64RegisterRip,
+            WHV_REGISTER_NAME_WHvX64RegisterRflags,
+            WHV_REGISTER_NAME_WHvX64RegisterCs,
+        ];
+        let mut values = [
+            WHV_REGISTER_VALUE::default(),
+            WHV_REGISTER_VALUE::default(),
+            WHV_REGISTER_VALUE::default(),
+        ];
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                target_idx,
+                reg_names.as_ptr(),
+                reg_names.len() as u32,
+                values.as_mut_ptr(),
+            )
+        })
+    }
+
     /// Set all essential vCPU registers for real-mode execution at the SIPI
     /// vector. QEMU's do_cpu_init + do_cpu_sipi resets ALL registers, not just
     /// CS:IP. WHPX may require a full register set to properly initialize the
@@ -453,8 +479,15 @@ impl WhpxVcpu {
         let sipi_addr = (vector as u64) << 12;
         let cs_sel = (vector << 8) as u16;
 
-        // QEMU do_cpu_init + do_cpu_sipi equivalent: reset vCPU to SIPI state.
-        // Must be called from the target vCPU's own thread context.
+        // QEMU pattern: whpx_cpu_synchronize_state (fetch from WHPX),
+        // then do_cpu_sipi (modify in-memory), then whpx_set_registers
+        // (push to WHPX), then WHvRunVirtualProcessor.
+        //
+        // The key: fetch first so WHPX marks the vCPU as "synced",
+        // then push the modified state, then run.
+        // Without the fetch, WHPX may ignore subsequent pushes on a
+        // vCPU that has never been fetched (cold vCPU).
+        self.fetch_whpx_state(target_idx)?;
 
         // 1. Segment registers — real-mode defaults
         let cs_name = WHV_REGISTER_NAME_WHvX64RegisterCs;
