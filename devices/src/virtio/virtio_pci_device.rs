@@ -935,6 +935,7 @@ impl PciDevice for VirtioPciDevice {
         } else {
             self.device.read_bar(bar_index, offset, data);
         }
+
     }
 
     fn write_bar(&mut self, bar_index: usize, offset: u64, data: &[u8]) {

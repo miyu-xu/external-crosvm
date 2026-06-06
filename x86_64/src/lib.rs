@@ -103,6 +103,8 @@ use devices::Serial;
 use devices::SerialHardware;
 use devices::SerialParameters;
 use devices::VirtualPmc;
+use devices::chromeos_acpi::ChromeOsAcpiDevice;
+use devices::tpm_tis::TpmTisDevice;
 use devices::FW_CFG_BASE_PORT;
 use devices::FW_CFG_MAX_FILE_SLOTS;
 use devices::FW_CFG_WIDTH;
@@ -1066,6 +1068,42 @@ impl arch::LinuxArch for X8664arch {
         let sdt = acpi::create_customize_ssdt(pci.clone(), amls, gpe_scope_amls);
         if let Some(sdt) = sdt {
             acpi_dev_resource.sdts.push(sdt);
+        }
+
+        // TPM2 ACPI table — required by kernel for TPM 2.0 detection.
+        // The DSDT MSFT0101 device alone is insufficient; the kernel's
+        // tpm_tis driver requires this table via check_acpi_tpm2().
+        // Must use `append` to build the table so the checksum is updated.
+        {
+            const TPM2_START_METHOD_TIS: u32 = 6;
+            // Use header-only size; append each field so checksum is recalculated.
+            let mut tpm2 = acpi_tables::sdt::SDT::new(
+                *b"TPM2",
+                // header(36) + platform_class(2) + reserved(2) + control_addr(8)
+                // + start_method(4) + params(12) + log_min(4) + log_start(8)
+                36 + 2 + 2 + 8 + 4 + 12 + 4 + 8,
+                4, // revision
+                *b"CROSVM",
+                *b"CROSVMDT",
+                1, // oem_revision
+            );
+            // SDT::new zero-fills the body and computes checksum. No `write`
+            // calls needed since all fields are zero (including control_address
+            // and start_method params). Just overwrite the non-zero fields.
+            let params: [u8; 12] = [0u8; 12];
+            // Rebuild using append to ensure checksum correctness:
+            // We already have correct size + zeros from SDT::new, but since
+            // `write` does NOT update checksum, we need a different approach.
+            // Write non-zero field values (SDT::write does NOT update checksum).
+            let off = acpi_tables::sdt::HEADER_LEN as usize;
+            tpm2.write(off + 4, devices::tpm_tis::TPM_TIS_MMIO_BASE);
+            tpm2.write(off + 12, TPM2_START_METHOD_TIS);
+            // Manually fix the checksum byte at offset 9.
+            // SDT::write and SDT::append do NOT call update_checksum.
+            tpm2.write(9usize, 0u8);
+            let csum = acpi_tables::generate_checksum(tpm2.as_slice());
+            tpm2.write(9usize, csum);
+            acpi_dev_resource.sdts.push(tpm2);
         }
 
         irq_chip
@@ -2083,6 +2121,26 @@ impl X8664arch {
                 .unwrap();
             pmc_virtio_mmio.lock().to_aml_bytes(&mut amls);
         }
+
+        // TPM TIS device at standard x86 MMIO address 0xFED40000.
+        // ChromeOS requires a detectable TPM to avoid security shutdown.
+        let tpm_mmio = Arc::new(Mutex::new(TpmTisDevice::new(
+            devices::tpm_tis::TPM_TIS_MMIO_BASE,
+            true, // debug
+            Box::new(devices::tpm_tis::MinimalTpm::new()),
+        )));
+        mmio_bus
+            .insert(
+                tpm_mmio.clone(),
+                devices::tpm_tis::TPM_TIS_MMIO_BASE,
+                devices::tpm_tis::TPM_TIS_MMIO_SIZE,
+            )
+            .unwrap();
+        tpm_mmio.lock().to_aml_bytes(&mut amls);
+
+        // ChromeOS ACPI device (GGL0001) — required by ChromeOS init
+        let chromeos_acpi = Arc::new(Mutex::new(ChromeOsAcpiDevice::new()));
+        chromeos_acpi.lock().to_aml_bytes(&mut amls);
 
         let mut pmresource = devices::ACPIPMResource::new(
             pm_sci_evt.try_clone().map_err(Error::CloneEvent)?,

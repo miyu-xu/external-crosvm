@@ -348,6 +348,20 @@ impl WhpxVm {
         }
     }
 
+    /// Unmap a GPA subrange so WHPX traps guest accesses as MMIO exits.
+    /// This is needed for device BARs that fall within RAM-backed GPA windows — without
+    /// unmapping, WHPX serves reads/writes from the RAM backing, bypassing the mmio_bus.
+    pub fn unmap_gpa_range(&self, guest_addr: GuestAddress, len: u64) -> Result<()> {
+        // SAFETY: WHPX validates GPA and size for WHvUnmapGpaRange.
+        unsafe {
+            check_whpx!(WHvUnmapGpaRange(
+                self.vm_partition.partition,
+                guest_addr.offset(),
+                len
+            ))
+        }
+    }
+
     /// Unmap and remap a GPA subrange so WHPX vCPUs observe recent host-side guest RAM writes.
     ///
     /// FlushViewOfFile alone is not always sufficient for virtio ring updates on WHPX; remapping
@@ -659,6 +673,10 @@ impl Vm for WhpxVm {
         } else {
             Err(Error::new(ENOENT))
         }
+    }
+
+    fn unmap_gpa_range(&mut self, guest_addr: GuestAddress, len: u64) -> Result<()> {
+        self.unmap_gpa_range(guest_addr, len)
     }
 
     fn create_device(&self, _kind: DeviceKind) -> Result<SafeDescriptor> {

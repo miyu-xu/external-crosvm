@@ -146,6 +146,8 @@ pub enum CrosvmDeviceId {
     VirtCpufreq = 22,
     FwCfg = 23,
     QemuCpuHotplug = 24,
+    TpmTis = 25,
+    ChromeOsAcpi = 26,
 }
 
 impl TryFrom<u16> for CrosvmDeviceId {
@@ -177,6 +179,8 @@ impl TryFrom<u16> for CrosvmDeviceId {
             22 => Ok(CrosvmDeviceId::VirtCpufreq),
             23 => Ok(CrosvmDeviceId::FwCfg),
             24 => Ok(CrosvmDeviceId::QemuCpuHotplug),
+            25 => Ok(CrosvmDeviceId::TpmTis),
+            26 => Ok(CrosvmDeviceId::ChromeOsAcpi),
             _ => Err(base::Error::new(EINVAL)),
         }
     }

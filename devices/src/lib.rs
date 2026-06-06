@@ -25,6 +25,8 @@ mod pci;
 mod pflash;
 pub mod pl030;
 pub mod pmc_virt;
+pub mod chromeos_acpi;
+pub mod tpm_tis;
 mod serial;
 pub mod serial_device;
 mod suspendable;

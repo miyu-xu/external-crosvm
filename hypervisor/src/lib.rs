@@ -191,6 +191,14 @@ pub trait Vm: Send {
     /// Removes and drops the `UserMemoryRegion` that was previously added at the given slot.
     fn remove_memory_region(&mut self, slot: MemSlot) -> Result<Box<dyn MappedRegion>>;
 
+    /// Unmap a GPA range so the hypervisor traps guest accesses as MMIO exits.
+    /// Used for PCI device BARs that fall within RAM-backed regions: without unmapping,
+    /// the hypervisor serves reads/writes from RAM, bypassing the mmio_bus and
+    /// preventing firmware (OVMF) from polling device registers.
+    fn unmap_gpa_range(&mut self, _guest_addr: GuestAddress, _len: u64) -> Result<()> {
+        Ok(())
+    }
+
     /// Creates an emulated device.
     fn create_device(&self, kind: DeviceKind) -> Result<SafeDescriptor>;
 
