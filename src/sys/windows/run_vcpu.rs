@@ -748,45 +748,11 @@ fn vcpu_loop<V>(
 where
     V: VcpuArch + 'static,
 {
-    #[cfg(all(windows, feature = "whpx", target_arch = "x86_64"))]
-    {
-        if context.cpu_id > 0 {
-            // === MINIMAL EXPERIMENT: HaltSuspend → Running transition ===
-            // 1. Set CS:IP to reset vector (0xFFFF0000:FFF0)
-            // 2. Clear HaltSuspend
-            // 3. Run WHvRunVirtualProcessor
-            // 4. Check if RIP changes on first exit
-            // If RIP changes → HaltSuspend was the only blocker
-            // If RIP stays 0xFFF0 → another state prevents execution
-
-            let vcpu_arch: &dyn VcpuArch = &vcpu;
-            let whpx_vcpu = vcpu_arch.downcast_ref::<WhpxVcpu>().unwrap();
-
-            // Diagnostic BEFORE
-            let (rip_before, csb_before, _) = whpx_vcpu.read_initial_ip().unwrap_or((0,0,0));
-            let act_before = whpx_vcpu.read_activity_state().unwrap_or(0);
-            info!("whpx: vcpu={} BEFORE: RIP=0x{:x} CS.base=0x{:x} Activity=0x{:x}",
-                  context.cpu_id, rip_before, csb_before, act_before);
-
-            // Apply reset-vector (same as power-on)
-            let _ = whpx_vcpu.apply_sipi_vector(0xFFF0 >> 12); // Reset vector
-
-            // Clear HaltSuspend
-            match whpx_vcpu.kick_out_of_halt() {
-                Ok(()) => {}
-                Err(e) => info!("whpx: vcpu={} kick_out_of_halt failed: {}", context.cpu_id, e),
-            }
-
-            // Diagnostic AFTER
-            let (rip_after, csb_after, _) = whpx_vcpu.read_initial_ip().unwrap_or((0,0,0));
-            let act_after = whpx_vcpu.read_activity_state().unwrap_or(0);
-            info!("whpx: vcpu={} AFTER:  RIP=0x{:x} CS.base=0x{:x} Activity=0x{:x}",
-                  context.cpu_id, rip_after, csb_after, act_after);
-        }
-    }
-
-    // OVMF multi-round MP init: AP thread does initial CpuMpData scan + FinishedCount
-    // write, then the run-loop scanner handles subsequent TempRamMigration instances.
+    // OVMF multi-round MP init workaround: WHPX cannot deliver INIT/SIPI to
+    // AP vCPUs on this Windows build. The AP thread scans for CpuMpData,
+    // writes FinishedCount=1 to unblock BSP from TimedWaitForApFinish, and
+    // manually applies SIPI + clears StartupSuspend. A per-exit scanner
+    // handles subsequent TempRamMigration CpuMpData instances.
     #[cfg(all(windows, feature = "whpx", target_arch = "x86_64"))]
     {
         use std::sync::atomic::{AtomicU64, Ordering};

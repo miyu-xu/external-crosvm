@@ -457,37 +457,6 @@ impl WhpxVcpu {
         })
     }
 
-    /// Push reset state to a specific target vCPU (used from BSP INIT trap handler).
-    fn qemu_push_reset_state_for_target(&self, target: u32) -> Result<()> {
-        let gpr = WhpxRegs::get_register_names();
-        let sreg = WhpxSregs::get_register_names();
-        let fpu = WhpxFpu::get_register_names();
-        let total = gpr.len() + sreg.len() + fpu.len() + 2;
-        let mut names = Vec::with_capacity(total);
-        names.extend_from_slice(gpr);
-        names.extend_from_slice(sreg);
-        names.extend_from_slice(fpu);
-        names.push(WHV_REGISTER_NAME_WHvX64RegisterXCr0);
-        names.push(WHV_REGISTER_NAME_WHvX64RegisterApicBase);
-        let mut values = vec![WHV_REGISTER_VALUE::default(); total];
-        check_whpx!(unsafe {
-            WHvGetVirtualProcessorRegisters(
-                self.vm_partition.partition, target,
-                names.as_ptr(), total as u32, values.as_mut_ptr(),
-            )
-        })?;
-        unsafe {
-            values[total - 1].Reg64 = 0xFEE0_0000u64 | (1u64 << 11) | (1u64 << 10);
-            if values[total - 2].Reg64 == 0 { values[total - 2].Reg64 = 0x7; }
-        }
-        check_whpx!(unsafe {
-            WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition, target,
-                names.as_ptr(), total as u32, values.as_ptr(),
-            )
-        })
-    }
-
     /// Set per-vCPU APIC ID via WHvSetVirtualProcessorInterruptControllerState2.
     /// QEMU's whpx_apic_put: whpx_lapic_state has fields[N].data at offset N*16.
     /// Crosvm WhpxLapicState maps this as regs[N*4] (= offset N*16 bytes).
@@ -519,71 +488,6 @@ impl WhpxVcpu {
             Err(ref e) => info!("whpx: vcpu={} APIC ID set: {}", self.index, e),
         }
         ret
-    }
-
-    /// Apply SIPI vector for x2APIC non-16-bit entry: flat protected mode.
-    /// The non-16-bit startup vector at BFF35000 is 32-bit code, expects flat CS (base=0).
-    /// Sets CS to flat 32-bit ring0, DS/ES/SS to flat data, RIP to the target address.
-    pub fn apply_sipi_flat(&self, target_addr: u64) -> Result<()> {
-        // Build flat 32-bit code segment: base=0, limit=4GB, D=1 (32-bit)
-        let mut cs = WHV_X64_SEGMENT_REGISTER {
-            Base: 0,
-            Limit: 0xFFFFF,  // 4GB in 4K pages
-            Selector: 0x10,   // typical ring0 code
-            ..Default::default()
-        };
-        unsafe {
-            let mut a = cs.__bindgen_anon_1.__bindgen_anon_1;
-            a.set_SegmentType(0xB);       // code, exec/read, accessed
-            a.set_NonSystemSegment(1);     // S=1
-            a.set_DescriptorPrivilegeLevel(0);
-            a.set_Present(1);
-            a.set_Default(1);              // D=1: 32-bit default operand size
-            a.set_Granularity(1);          // G=1: 4KB granularity
-            cs.__bindgen_anon_1.__bindgen_anon_1 = a;
-        }
-        // Build flat data segment
-        let mut ds = WHV_X64_SEGMENT_REGISTER {
-            Base: 0, Limit: 0xFFFFF, Selector: 0x18, ..Default::default()
-        };
-        unsafe {
-            let mut a = ds.__bindgen_anon_1.__bindgen_anon_1;
-            a.set_SegmentType(0x3);        // data, read/write, accessed
-            a.set_NonSystemSegment(1);
-            a.set_DescriptorPrivilegeLevel(0);
-            a.set_Present(1);
-            a.set_Default(1);
-            a.set_Granularity(1);
-            ds.__bindgen_anon_1.__bindgen_anon_1 = a;
-        }
-
-        const REGS: [WHV_REGISTER_NAME; 7] = [
-            WHV_REGISTER_NAME_WHvX64RegisterRip,
-            WHV_REGISTER_NAME_WHvX64RegisterCs,
-            WHV_REGISTER_NAME_WHvX64RegisterDs,
-            WHV_REGISTER_NAME_WHvX64RegisterEs,
-            WHV_REGISTER_NAME_WHvX64RegisterSs,
-            WHV_REGISTER_NAME_WHvX64RegisterCr0,
-            WHV_REGISTER_NAME_WHvX64RegisterCr4,
-        ];
-        // CR0: PE=1 (protected mode), PG=0 (paging off), NE=1, ET=1
-        let cr0: u64 = (1 << 0) | (1 << 5) | (1 << 4);
-        let cr4: u64 = 0;
-        let vals = [
-            WHV_REGISTER_VALUE { Reg64: target_addr },          // RIP
-            WHV_REGISTER_VALUE { Segment: cs },                  // CS
-            WHV_REGISTER_VALUE { Segment: ds },                  // DS
-            WHV_REGISTER_VALUE { Segment: ds },                  // ES
-            WHV_REGISTER_VALUE { Segment: ds },                  // SS
-            WHV_REGISTER_VALUE { Reg64: cr0 },                   // CR0
-            WHV_REGISTER_VALUE { Reg64: cr4 },                   // CR4
-        ];
-        info!("whpx: vcpu={} apply_sipi_flat RIP=0x{:x}", self.index, target_addr);
-        check_whpx!(unsafe {
-            WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition, self.index, REGS.as_ptr(), 7, vals.as_ptr(),
-            )
-        })
     }
 
     /// Apply SIPI vector: set CS:IP so the vCPU starts at `vector << 12` in real mode.
@@ -883,15 +787,9 @@ impl WhpxVcpu {
 
         for &target in &targets {
             if delivery_mode == APIC_DM_INIT {
-                // QEMU's do_cpu_init: push reset state to dormant AP vCPU.
-                // This resets the AP's registers so when it enters WHvRunVirtualProcessor
-                // (after SIPI), it has a clean INIT state.
-                info!("whpx: vcpu={} INIT -> pushing reset state to vcpu={}", self.index, target);
-                let _ = self.qemu_push_reset_state_for_target(target);
+                info!("whpx: vcpu={} INIT -> vcpu={}", self.index, target);
             } else if delivery_mode == APIC_DM_SIPI && vector != 0 {
                 info!("whpx: vcpu={} SIPI -> vcpu={} vector=0x{:x}", self.index, target, vector);
-                WHV_SIPI_VECTOR.store(vector, Ordering::Release);
-                WHV_SIPI_READY.store(true, Ordering::Release);
             }
         }
 

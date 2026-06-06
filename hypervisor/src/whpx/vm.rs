@@ -294,35 +294,6 @@ impl WhpxVm {
         })
     }
 
-    /// Set per-vCPU APIC ID. QEMU's whpx_put_apic_state sets register 0x2 = id << 24.
-    /// Called during vCPU config to ensure each vCPU has a unique APIC ID.
-    /// Even with LocalApicEmulationMode=None, WHPX may need this for INIT/SIPI routing.
-    pub fn set_vcpu_apic_id(&self, vcpu_id: usize, apic_id: u32) -> Result<()> {
-        let mut state = WhpxLapicState { regs: [0u32; 1024] };
-        // APIC ID register (offset 0x2) = id << 24 (matching QEMU whpx_put_apic_state)
-        state.regs[2] = apic_id << 24;
-        // APIC version register (offset 0x3) = 0x00050014
-        state.regs[3] = 0x00050014;
-        // SVR (offset 0xF): APIC enabled, spurious vector = 0xFF
-        state.regs[0xF] = 0x1FF;
-
-        match check_whpx!(unsafe {
-            WHvSetVirtualProcessorInterruptControllerState2(
-                self.vm_partition.partition,
-                vcpu_id as u32,
-                state.regs.as_ptr() as *const c_void,
-                std::mem::size_of::<WhpxLapicState>() as u32,
-            )
-        }) {
-            Ok(()) => info!("whpx: vcpu={} APIC ID set to {}", vcpu_id, apic_id),
-            Err(e) => {
-                info!("whpx: vcpu={} APIC ID set failed (expected with None mode): {}", vcpu_id, e);
-                return Err(e);
-            }
-        }
-        Ok(())
-    }
-
     /// Get the current state of the specified VCPU's local APIC.
     pub fn get_vcpu_lapic_state(&self, vcpu_id: usize) -> Result<LapicState> {
         if !self.apic_emulation {
