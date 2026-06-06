@@ -1127,7 +1127,18 @@ impl Vcpu for WhpxVcpu {
         })?;
 
         match self.last_exit_context.ExitReason {
-            WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonMemoryAccess => Ok(VcpuExit::Mmio),
+            WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonMemoryAccess => {
+                // Debug: verify LAPIC MMIO is routed to userspace
+                // with LocalApicEmulationMode=None.
+                let gpa = unsafe { self.last_exit_context.__bindgen_anon_1.MemoryAccess.Gpa };
+                if gpa >= 0xFEE00000 && gpa < 0xFEF00000 {
+                    warn!(
+                        "LAPIC_MMIO: vcpu={} gpa=0x{:x}",
+                        self.index, gpa
+                    );
+                }
+                Ok(VcpuExit::Mmio)
+            }
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64IoPortAccess => Ok(VcpuExit::Io),
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonUnrecoverableException => {
                 Ok(VcpuExit::UnrecoverableException)
