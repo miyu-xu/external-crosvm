@@ -245,7 +245,10 @@ impl WhpxVm {
         .map_err(WhpxError::SetCpuidExitList)?;
 
         // 9. ExtendedVmExits (X64CpuidExit + X64MsrExit)
-        // QEMU sets only X64MsrExit; crosvm also needs X64CpuidExit for per-vCPU CPUID adjustment.
+        // QEMU sets only X64MsrExit; crosvm also needs X64CpuidExit.
+        // X64ApicInitSipiExitTrap is NOT used: it causes WHPX BSP deadlock
+        // on Win10 25H2. Instead, interrupt window notifications keep AP vCPUs
+        // exiting so WHPX can deliver INIT/SIPI between WHvRunVirtualProcessor calls.
         let mut property: WHV_PARTITION_PROPERTY = Default::default();
         unsafe {
             property.ExtendedVmExits.__bindgen_anon_1.set_X64CpuidExit(1);
@@ -291,14 +294,15 @@ impl WhpxVm {
         })
     }
 
-    /// Get the current state of the specified VCPU's local APIC
+    /// Get the current state of the specified VCPU's local APIC.
+    /// Uses WHvGetVirtualProcessorInterruptControllerState2 (QEMU-equivalent, non-deprecated).
     pub fn get_vcpu_lapic_state(&self, vcpu_id: usize) -> Result<LapicState> {
         let buffer = WhpxLapicState { regs: [0u32; 1024] };
         let mut written_size = 0u32;
         let size = std::mem::size_of::<WhpxLapicState>();
 
         check_whpx!(unsafe {
-            WHvGetVirtualProcessorInterruptControllerState(
+            WHvGetVirtualProcessorInterruptControllerState2(
                 self.vm_partition.partition,
                 vcpu_id as u32,
                 buffer.regs.as_ptr() as *mut c_void,
@@ -310,11 +314,12 @@ impl WhpxVm {
         Ok(LapicState::from(&buffer))
     }
 
-    /// Set the current state of the specified VCPU's local APIC
+    /// Set the current state of the specified VCPU's local APIC.
+    /// Uses WHvSetVirtualProcessorInterruptControllerState2 (QEMU-equivalent, non-deprecated).
     pub fn set_vcpu_lapic_state(&mut self, vcpu_id: usize, state: &LapicState) -> Result<()> {
         let buffer = WhpxLapicState::from(state);
         check_whpx!(unsafe {
-            WHvSetVirtualProcessorInterruptControllerState(
+            WHvSetVirtualProcessorInterruptControllerState2(
                 self.vm_partition.partition,
                 vcpu_id as u32,
                 buffer.regs.as_ptr() as *mut c_void,

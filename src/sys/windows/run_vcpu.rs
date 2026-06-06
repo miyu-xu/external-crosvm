@@ -232,6 +232,11 @@ impl VcpuRunThread {
                 })
                 .ok();
             whpx_vcpu.set_frequencies(tsc_freq, irq_chip.lapic_frequency());
+            // QEMU whpx_cpu_synchronize_post_reset: push complete register state
+            // + APIC_BASE MSR (with per-vCPU BSP/AP distinction) BEFORE first run.
+            if let Err(e) = whpx_vcpu.qemu_push_reset_state() {
+                error!("whpx: qemu_push_reset_state failed: {}", e);
+            }
         }
     }
 
