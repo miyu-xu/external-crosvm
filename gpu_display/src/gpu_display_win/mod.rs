@@ -184,6 +184,18 @@ impl DisplayWin {
                     #[cfg(not(feature = "vulkan_display"))]
                     let vulkan_display = Arc::new(Mutex::new(VulkanDisplayWrapper::Uninitialized));
 
+                    // The GUI window is created at 1x1 with WS_POPUP (no WS_VISIBLE).
+                    // Resize to a reasonable default size (1024x768) and show it.
+                    // The window will be further resized when the guest sets the display mode.
+                    {
+                        use crate::gpu_display_win::math_util::Rect;
+                        use euclid::size2;
+                        use euclid::Point2D;
+                        use winapi::um::winuser::SWP_NOZORDER;
+                        use winapi::um::winuser::SWP_SHOWWINDOW;
+                        let rect = Rect::new(Point2D::new(0, 0), size2(1024, 768));
+                        let _ = window.set_pos(&rect, SWP_SHOWWINDOW | SWP_NOZORDER);
+                    }
                     Surface::new(
                         surface_id,
                         window,
