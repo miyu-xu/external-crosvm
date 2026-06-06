@@ -308,6 +308,41 @@ impl<V: VcpuX86_64 + 'static> UserspaceIrqChip<V> {
         }
     }
 
+    /// Reset all vCPU registers to power-on defaults (QEMU's cpu_reset).
+    /// Must be called before SIPI so the AP starts with clean state.
+    fn reset_vcpu_registers(&self, vcpu: &V) -> Result<()> {
+        // Reset all general-purpose registers to 0.
+        let mut regs = vcpu.get_regs()?;
+        regs.rax = 0; regs.rbx = 0; regs.rcx = 0; regs.rdx = 0;
+        regs.rsi = 0; regs.rdi = 0; regs.rsp = 0; regs.rbp = 0;
+        regs.r8 = 0; regs.r9 = 0; regs.r10 = 0; regs.r11 = 0;
+        regs.r12 = 0; regs.r13 = 0; regs.r14 = 0; regs.r15 = 0;
+        regs.rip = 0;
+        regs.rflags = 2;
+        vcpu.set_regs(&regs)?;
+
+        // Reset segment registers, CR0, CR4, EFER to power-on state.
+        let mut sregs = vcpu.get_sregs()?;
+        // All data segments: 16-bit real-mode defaults
+        sregs.ds.base = 0; sregs.ds.selector = 0; sregs.ds.limit_bytes = 0xFFFF;
+        sregs.es.base = 0; sregs.es.selector = 0; sregs.es.limit_bytes = 0xFFFF;
+        sregs.fs.base = 0; sregs.fs.selector = 0; sregs.fs.limit_bytes = 0xFFFF;
+        sregs.gs.base = 0; sregs.gs.selector = 0; sregs.gs.limit_bytes = 0xFFFF;
+        sregs.ss.base = 0; sregs.ss.selector = 0; sregs.ss.limit_bytes = 0xFFFF;
+        // CS: SIPI handler will set this, but clear for now
+        sregs.cs.base = 0; sregs.cs.selector = 0; sregs.cs.limit_bytes = 0xFFFF;
+        // CR0: real mode, no paging, no protection
+        sregs.cr0 = 0x60000010; // CD, NW, ET bits
+        // CR4: all off
+        sregs.cr4 = 0;
+        // EFER: all off (no LME, no LMA)
+        sregs.efer = 0;
+        vcpu.set_sregs(&sregs)?;
+
+        info!("Reset vCPU {} registers to power-on defaults", vcpu.id());
+        Ok(())
+    }
+
     /// Delivers a startup IPI to `vcpu`.
     fn deliver_startup(&self, vcpu: &V, vector: u8) -> Result<()> {
         // This comes from Intel SDM volume 3, chapter 8.4.  The vector specifies a page aligned
@@ -615,6 +650,12 @@ impl<V: VcpuX86_64 + 'static> IrqChip for UserspaceIrqChip<V> {
                 apic.load_reset_state();
                 apic.set_mp_state(&MPState::InitReceived);
             }
+            // QEMU's do_cpu_init() calls cpu_reset() which resets ALL vCPU
+            // registers to power-on defaults. Without this, the AP's GPRs,
+            // segment and control registers are in whatever state they were
+            // when the firmware was running, and the subsequent SIPI will
+            // start the AP with corrupted state.
+            self.reset_vcpu_registers(vcpu)?;
             info!("Delivered INIT IPI to cpu {}", vcpu_id);
         }
         if let Some(vector) = irqs.startup {

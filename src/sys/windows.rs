@@ -2441,26 +2441,28 @@ fn run_config_inner(
 
             let no_smt = cfg.no_smt;
 
-            // Default to WhpxSplitIrqChip if it's supported because it's more performant
-            let irq_chip = cfg.irq_chip.unwrap_or(if apic_emulation_supported {
-                IrqChipKind::Split
-            } else {
-                IrqChipKind::Userspace
-            });
+            // Default to userspace LAPIC (QEMU kernel-irqchip=off model).
+            // WHPX xAPIC emulation assigns APIC ID 0 to all vCPUs, breaking
+            // OVMF CpuMpPei which cannot distinguish BSP from APs.
+            // The userspace Apic gives each vCPU a unique APIC ID (vcpu_id).
+            let irq_chip = cfg.irq_chip.unwrap_or(IrqChipKind::Userspace);
 
             // Both WHPX irq chips use a userspace IOAPIC
             let (ioapic_host_tube, ioapic_device_tube) =
                 Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
 
-            info!("Creating Whpx");
+            info!("Creating Whpx (userspace LAPIC)");
             let whpx = Whpx::new()?;
             let guest_mem = create_guest_memory(&components, &whpx)?;
+            // apic_emulation=false → WHvX64LocalApicEmulationModeNone
+            // WHPX won't intercept LAPIC MMIO; userspace Apic handles it.
+            let use_whpx_apic = irq_chip == IrqChipKind::Split;
             let vm = create_whpx_vm(
                 whpx,
                 guest_mem,
                 components.vcpu_count,
                 no_smt,
-                apic_emulation_supported && irq_chip == IrqChipKind::Split,
+                use_whpx_apic,
                 cfg.force_calibrated_tsc_leaf,
                 vm_evt_wrtube
                     .try_clone()
