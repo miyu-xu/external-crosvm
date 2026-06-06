@@ -336,12 +336,14 @@ impl TpmTisDevice {
             data[..n].copy_from_slice(&self.resp_buf[self.resp_pos..self.resp_pos + n]);
             self.resp_pos += n;
         }
-        // If we've drained the response, reset state
+        // If we've drained the response, reset state.
+        // Keep VALID set — the kernel tpm_tis_recv checks for it
+        // after reading the response via wait_for_tpm_stat(VALID).
         if self.resp_pos >= self.resp_buf.len() {
             self.resp_buf.clear();
             self.resp_pos = 0;
-            self.sts &= !(STS_DATA_AVAIL | STS_VALID);
-            self.sts |= STS_COMMAND_READY;
+            self.sts &= !STS_DATA_AVAIL;
+            self.sts |= STS_COMMAND_READY | STS_VALID;
         }
     }
 
