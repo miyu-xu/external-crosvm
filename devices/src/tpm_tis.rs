@@ -225,7 +225,11 @@ impl TpmBackend for MinimalTpm {
                     _ => make_tpm_capability_simple(cap, &[]),
                 }
             }
-            _ => make_tpm_error(TPM_RC_COMMAND_CODE),
+            // Default: return success for any command.
+            // ChromeOS mount-encrypted queries many TPM properties
+            // and NVRAM indices. Returning errors causes encstateful
+            // setup to fail and enter self_repair mode.
+            _ => make_tpm_response(&[]),
         }
     }
 }
