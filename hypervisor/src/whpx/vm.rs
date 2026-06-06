@@ -120,11 +120,7 @@ impl WhpxVm {
         // via handle_msr_read/write, so WHPX APIC support is not needed.
 
         // 3. LocalApicEmulationMode = None (QEMU kernel-irqchip=off)
-        // WHPX does not emulate the APIC. x2APIC MSR accesses cause X64MsrExit
-        // exits, handled by crosvm's MSR handlers. This allows intercepting
-        // MSR 0x830 (ICR) writes for software INIT/SIPI delivery.
-        // CPUID still reports x2APIC via IrqChipCap::X2Apic=true.
-        // QEMU passes sizeof(mode) = 4 bytes, not the full union.
+        // QEMU passes sizeof(mode) = 4 bytes.
         let apic_mode: WHV_X64_LOCAL_APIC_EMULATION_MODE =
             WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone;
         check_whpx!(unsafe {
