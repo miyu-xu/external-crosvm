@@ -745,13 +745,18 @@ impl WhpxVcpu {
             return Err(Error::new(EINVAL));
         }
 
-        // WHPX natively handles 52 MSRs (those with WHvX64Register* virtual registers);
-        // they do not cause VM exits.  MSRs that reach this handler are ones WHPX cannot
-        // virtualize.  Return 0 (RAZ) for unknown MSRs: safer than #GP which can crash
-        // the guest before its exception handler or console is initialized.
+        // QEMU kernel-irqchip=off: handle x2APIC MSR reads (0x800-0x8FF).
+        // With LocalApicEmulationMode=None, WHPX does not emulate x2APIC and
+        // all APIC MSR accesses cause #GP exits. We return 0 (RAZ) for most,
+        // and the per-vCPU x2APIC ID for MSR 0x802.
         let value = match id {
             HV_X64_MSR_TSC_FREQUENCY => self.tsc_frequency.unwrap_or(0),
             HV_X64_MSR_APIC_FREQUENCY => self.apic_frequency.unwrap_or(0) as u64,
+            // x2APIC MSRs: return RAZ/WI for reads, per-vCPU ID for 0x802
+            0x802 => self.index as u64, // x2APIC ID
+            0x803 => 0x0005_0014u64,    // APIC version (0x14, max LVT=5)
+            0x808 | 0x80A | 0x80D | 0x80E | 0x80F
+            | 0x828 | 0x82F..=0x837 | 0x838 | 0x839 | 0x83E => 0,
             _ => {
                 warn!("whpx: RDMSR 0x{:x} unsupported, returning 0", id);
                 0
@@ -793,13 +798,15 @@ impl WhpxVcpu {
             return Err(Error::new(EINVAL));
         }
 
-        // QEMU kernel-irqchip=off alignment: intercept x2APIC ICR writes (MSR 0x830).
-        // If WHPX internal x2APIC emulation cannot deliver INIT/SIPI to AP vCPUs,
-        // this handler uses WHvSetVirtualProcessorRegisters + WHvCancelRunVirtualProcessor
-        // to deliver INIT/SIPI directly to target vCPUs.
+        // QEMU kernel-irqchip=off: intercept x2APIC MSR writes (0x800-0x8FF).
+        // Most APIC MSRs are silently ignored (WI). MSR 0x830 (ICR) is handled
+        // with full INIT/SIPI delivery via WHvSetVirtualProcessorRegisters + cancel.
         let handled = match id {
             HV_X64_MSR_TSC_INVARIANT_CONTROL => true,
-            // x2APIC ICR (Interrupt Command Register)
+            // x2APIC MSRs: silently ignore writes (WI) for all except ICR
+            0x802 | 0x803 | 0x808 | 0x80A | 0x80B | 0x80D | 0x80E | 0x80F
+            | 0x828 | 0x82F..=0x837 | 0x838 | 0x839 | 0x83E => true,
+            // x2APIC ICR (Interrupt Command Register) — full INIT/SIPI handling
             0x830 => {
                 let delivery = (value >> 8) & 0x7; // 5=INIT, 6=SIPI
                 let vector = (value & 0xFF) as u32;

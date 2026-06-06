@@ -81,6 +81,8 @@ pub struct WhpxVm {
     ioevents: FnvHashMap<IoEventAddress, Event>,
     // Tube to send events to control.
     vm_evt_wrtube: Option<SendTube>,
+    /// Whether WHPX APIC emulation is enabled (X2Apic vs None).
+    apic_emulation: bool,
 }
 
 impl WhpxVm {
@@ -113,18 +115,18 @@ impl WhpxVm {
         })
         .map_err(WhpxError::SetProcessorCount)?;
 
-        // 2. Check APIC emulation support
-        if apic_emulation && !Whpx::check_whpx_feature(WhpxFeature::LocalApicEmulation)? {
-            return Err(WhpxError::LocalApicEmulationNotSupported);
-        }
+        // 2. Check APIC emulation support (only required for X2Apic mode; skipped for None).
+        // In kernel-irqchip=off mode (None), crosvm handles x2APIC MSRs in software
+        // via handle_msr_read/write, so WHPX APIC support is not needed.
 
-        // 3. LocalApicEmulationMode = X2Apic
-        // QEMU passes sizeof(WHV_X64_LOCAL_APIC_EMULATION_MODE) = 4 bytes, NOT the full union!
-        let apic_mode: WHV_X64_LOCAL_APIC_EMULATION_MODE = if apic_emulation {
-            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeX2Apic
-        } else {
-            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone
-        };
+        // 3. LocalApicEmulationMode = None (QEMU kernel-irqchip=off)
+        // WHPX does not emulate the APIC. x2APIC MSR accesses cause X64MsrExit
+        // exits, handled by crosvm's MSR handlers. This allows intercepting
+        // MSR 0x830 (ICR) writes for software INIT/SIPI delivery.
+        // CPUID still reports x2APIC via IrqChipCap::X2Apic=true.
+        // QEMU passes sizeof(mode) = 4 bytes, not the full union.
+        let apic_mode: WHV_X64_LOCAL_APIC_EMULATION_MODE =
+            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone;
         check_whpx!(unsafe {
             WHvSetPartitionProperty(
                 partition.partition,
@@ -136,7 +138,7 @@ impl WhpxVm {
         .map_err(WhpxError::SetLocalApicEmulationMode)?;
 
         // 4. ProcessorFeaturesBanks (QEMU: get capability + set BEFORE SetupPartition)
-        if apic_emulation {
+        {
             let mut features: WHV_PROCESSOR_FEATURES_BANKS = Default::default();
             features.BanksCount = 2;
             let mut cap_size: UINT32 = 0;
@@ -166,8 +168,8 @@ impl WhpxVm {
             }
         }
 
-        // 6. SyntheticProcessorFeaturesBanks (QEMU: set BEFORE SetupPartition, named bitfields)
-        if apic_emulation {
+        // 6. SyntheticProcessorFeaturesBanks (QEMU: set BEFORE SetupPartition)
+        {
             let mut synth = WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS::default();
             synth.BanksCount = 1;
             synth.Bank0 = (1u64 << 0)   // HypervisorPresent
@@ -179,12 +181,7 @@ impl WhpxVm {
                 | (1u64 << 11)  // AccessFrequencyRegs
                 | (1u64 << 15)  // EnableExtendedGvaRangesForFlushVirtualAddressList
                 | (1u64 << 8)   // AccessVpIndex
-                | (1u64 << 25)  // TbFlushHypercalls
-                | (1u64 << 4)   // AccessSynicRegs (IRQ chip)
-                | (1u64 << 5)   // AccessSyntheticTimerRegs (IRQ chip)
-                | (1u64 << 6)   // AccessIntrCtrlRegs (IRQ chip)
-                | (1u64 << 26)  // SyntheticClusterIpi (IRQ chip)
-                | (1u64 << 22); // DirectSyntheticTimers (IRQ chip)
+                | (1u64 << 25); // TbFlushHypercalls
             match check_whpx!(unsafe {
                 WHvSetPartitionProperty(
                     partition.partition,
@@ -292,12 +289,19 @@ impl WhpxVm {
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
             ioevents: FnvHashMap::default(),
             vm_evt_wrtube,
+            apic_emulation: apic_mode
+                != WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone,
         })
     }
 
     /// Get the current state of the specified VCPU's local APIC.
     /// Uses WHvGetVirtualProcessorInterruptControllerState2 (QEMU-equivalent, non-deprecated).
+    /// When APIC emulation is off, returns a default (zero) state.
     pub fn get_vcpu_lapic_state(&self, vcpu_id: usize) -> Result<LapicState> {
+        if !self.apic_emulation {
+            // No WHPX APIC — return default state
+            return Ok(LapicState { regs: [0; 64] });
+        }
         let buffer = WhpxLapicState { regs: [0u32; 1024] };
         let mut written_size = 0u32;
         let size = std::mem::size_of::<WhpxLapicState>();
@@ -317,7 +321,11 @@ impl WhpxVm {
 
     /// Set the current state of the specified VCPU's local APIC.
     /// Uses WHvSetVirtualProcessorInterruptControllerState2 (QEMU-equivalent, non-deprecated).
+    /// When APIC emulation is off, this is a no-op.
     pub fn set_vcpu_lapic_state(&mut self, vcpu_id: usize, state: &LapicState) -> Result<()> {
+        if !self.apic_emulation {
+            return Ok(());
+        }
         let buffer = WhpxLapicState::from(state);
         check_whpx!(unsafe {
             WHvSetVirtualProcessorInterruptControllerState2(
@@ -619,6 +627,7 @@ impl Vm for WhpxVm {
                 .vm_evt_wrtube
                 .as_ref()
                 .map(|t| t.try_clone().expect("could not clone vm_evt_wrtube")),
+            apic_emulation: self.apic_emulation,
         })
     }
 
