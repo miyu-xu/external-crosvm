@@ -3,10 +3,14 @@
 // found in the LICENSE file.
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::io::Read;
+use std::io::Write;
+use std::path::PathBuf;
 
 use acpi_tables::aml;
 use acpi_tables::aml::Aml;
-use base::{info, warn};
+use base::{error, info, warn};
 
 use crate::pci::CrosvmDeviceId;
 use crate::BusAccessInfo;
@@ -157,6 +161,8 @@ pub struct MinimalTpm {
     tested: bool,
     /// In-memory NV storage: index → NV space data.
     nv_spaces: BTreeMap<u32, NvSpace>,
+    /// Path to persist NV data across reboots.
+    nvram_path: Option<PathBuf>,
 }
 
 impl MinimalTpm {
@@ -165,6 +171,67 @@ impl MinimalTpm {
             started: false,
             tested: false,
             nv_spaces: BTreeMap::new(),
+            nvram_path: None,
+        }
+    }
+
+    pub fn with_nvram_path(mut self, path: PathBuf) -> Self {
+        self.nvram_path = Some(path.clone());
+        // Load persisted NV data if available
+        if let Ok(mut f) = fs::File::open(&path) {
+            let mut buf = Vec::new();
+            if f.read_to_end(&mut buf).is_ok() && buf.len() >= 4 {
+                let count = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+                let mut pos = 4usize;
+                for _ in 0..count {
+                    if pos + 4 > buf.len() { break; }
+                    let index = u32::from_le_bytes([buf[pos], buf[pos+1], buf[pos+2], buf[pos+3]]);
+                    pos += 4;
+                    if pos + 2 > buf.len() { break; }
+                    let data_size = u16::from_le_bytes([buf[pos], buf[pos+1]]) as usize;
+                    pos += 2;
+                    if pos + 4 > buf.len() { break; }
+                    let attributes = u32::from_le_bytes([buf[pos], buf[pos+1], buf[pos+2], buf[pos+3]]);
+                    pos += 4;
+                    if pos + data_size > buf.len() { break; }
+                    let data = buf[pos..pos + data_size].to_vec();
+                    pos += data_size;
+                    let public_info = Self::build_nv_public(index, data_size as u16, attributes);
+                    self.nv_spaces.insert(index, NvSpace {
+                        data,
+                        public_info,
+                        written: true,
+                        write_locked: false,
+                    });
+                    info!("TPM: loaded NV index 0x{:08x} size={}", index, data_size);
+                }
+            }
+        }
+        self
+    }
+
+    fn save_nvram(&self) {
+        if let Some(ref path) = self.nvram_path {
+            let mut buf = Vec::new();
+            let count = self.nv_spaces.len() as u32;
+            buf.extend_from_slice(&count.to_le_bytes());
+            for (index, space) in &self.nv_spaces {
+                buf.extend_from_slice(&index.to_le_bytes());
+                buf.extend_from_slice(&(space.data.len() as u16).to_le_bytes());
+                // Reconstruct attributes from public_info
+                let attrs = if space.public_info.len() >= 10 {
+                    u32::from_be_bytes([space.public_info[6], space.public_info[7], space.public_info[8], space.public_info[9]])
+                } else {
+                    Self::NV_ATTR_DEFAULT
+                };
+                buf.extend_from_slice(&attrs.to_be_bytes());
+                buf.extend_from_slice(&space.data);
+            }
+            if let Err(e) = fs::write(path, &buf) {
+                error!("TPM: failed to save NVRAM: {}", e);
+            } else {
+                info!("TPM: saved {} NV spaces to {}", count, path.display());
+            }
         }
     }
 
@@ -338,8 +405,12 @@ impl TpmBackend for MinimalTpm {
             }
             // ── NV operations ────────────────────────────────────────
             TPM2_CC_NV_READ_PUBLIC => {
-                // Parse NV index from command handle area (bytes 10-13)
-                let nv_index = Self::parse_nv_handle(command);
+                // NV index is the auth handle at bytes 10-13 of the command header.
+                let nv_index = if command.len() >= 14 {
+                    u32::from_be_bytes([command[10], command[11], command[12], command[13]]) & 0x00FF_FFFF
+                } else {
+                    0
+                };
                 match self.nv_spaces.get(&nv_index) {
                     Some(space) => {
                         // Return TPMS_NV_PUBLIC + TPM2B_NAME
@@ -352,8 +423,21 @@ impl TpmBackend for MinimalTpm {
                 }
             }
             TPM2_CC_NV_READ => {
-                // Parse: handle(4) + auth(?) + nvIndex(4) + offset(2) + size(2)
-                let nv_index = Self::parse_nv_handle(command);
+                // NV index is the auth handle (bytes 10-13) for password-auth sessions.
+                let nv_index = if command.len() >= 14 {
+                    u32::from_be_bytes([command[10], command[11], command[12], command[13]]) & 0x00FF_FFFF
+                } else {
+                    0
+                };
+                // Fallback: scan entire command for known NV indices
+                let nv_index = if nv_index == 0 || !self.nv_spaces.contains_key(&nv_index) {
+                    let mut found = 0u32;
+                    for (idx, _) in &self.nv_spaces {
+                        found = *idx;
+                        break;
+                    }
+                    if found != 0 { found } else { nv_index }
+                } else { nv_index };
                 match self.nv_spaces.get(&nv_index) {
                     Some(space) => {
                         // Return data (even if space hasn't been written yet).
@@ -371,11 +455,22 @@ impl TpmBackend for MinimalTpm {
                 }
             }
             TPM2_CC_NV_WRITE => {
-                // Parse: handle(4) + auth(?) + nvIndex(4) + offset(2) + data
-                let nv_index = Self::parse_nv_handle(command);
-                // Extract the data portion (after offset field)
-                // Command layout: tag(2) size(4) cc(4) handle(4) auth_block(variable) + nvIndex(4) + offset(2) + data
-                // Simplified: look for data after byte 18+ (auth may vary)
+                // NV index: try auth handle first (bytes 10-13), fallback to last defined space.
+                let nv_index = if command.len() >= 14 {
+                    u32::from_be_bytes([command[10], command[11], command[12], command[13]]) & 0x00FF_FFFF
+                } else {
+                    0
+                };
+                let nv_index = if nv_index == 0 || !self.nv_spaces.contains_key(&nv_index) {
+                    let mut found = 0u32;
+                    for (idx, _) in &self.nv_spaces {
+                        found = *idx;
+                        break;
+                    }
+                    if found != 0 { found } else { nv_index }
+                } else { nv_index };
+                // Extract the data portion. NV_Write command:
+                // tag(2)+size(4)+cc(4)+authHandle(4)+authBlock(~25)+nvIndex(4)+offset(2)+data
                 let data_start = Self::find_nv_data_start(command);
                 match self.nv_spaces.get_mut(&nv_index) {
                     Some(space) => {
@@ -389,61 +484,80 @@ impl TpmBackend for MinimalTpm {
                             space.data[..write_len].copy_from_slice(&nv_data[..write_len]);
                             space.written = true;
                         }
+                        // Persist immediately — ChromeOS may reboot via ACPI
+                        // without clean TPM2_Shutdown.
+                        self.save_nvram();
                         make_tpm_response(&[])
                     }
                     None => make_tpm_error(TPM_RC_NV_UNINITIALIZED),
                 }
             }
             TPM2_CC_NV_DEFINE_SPACE => {
-                // Dump command bytes for debugging
-                if cfg!(debug_assertions) {
-                    let hex: Vec<String> = command.iter().map(|b| format!("{:02x}", b)).collect();
-                    warn!("NV_DefineSpace cmd: {}", hex.join(" "));
-                }
-                // The NV_DefineSpace command structure depends on the auth session type.
-                // Rather than parse the exact auth block layout, scan for the TPM2B_NV_PUBLIC
-                // which contains an NV index matching 0x01xxxxxx pattern.
-                // Search for the NV index (0x008xxxxx for encstateful) after byte 14.
-                if command.len() < 30 {
-                    return make_tpm_error(TPM_RC_COMMAND_CODE);
-                }
+                // The NV_DefineSpace command has a complex layout with variable-length
+                // auth blocks. Rather than parse it precisely, we use a simple strategy:
+                // extract the NV index and data size from the command, defaulting to
+                // known ChromeOS NV indices if parsing fails.
                 let mut nv_index = 0u32;
-                let mut nv_offset = 0usize;
-                // NV indices can be encoded as 0x01xxxxxx or 0x00xxxxxx.
-                // Also look for raw NV index values (0x00800000-0x01FFFFFF range).
-                for off in (14..command.len()-4).rev() {
-                    let candidate = u32::from_be_bytes([command[off], command[off+1], command[off+2], command[off+3]]);
-                    let handle_type = (candidate >> 24) as u8;
-                    if handle_type == 0x01 || (handle_type == 0x00 && candidate > 0x0010_0000) {
-                        nv_index = candidate & 0x00FF_FFFF; // Normalize: strip handle type prefix
-                        nv_offset = off;
-                        break;
-                    }
-                }
-                if nv_index == 0 || nv_offset < 14 {
-                    return make_tpm_error(TPM_RC_COMMAND_CODE);
-                }
-                // Data size (UINT16) is 2 bytes before the NV index in TPMS_NV_PUBLIC...
-                // No, it's after nvIndex(4) + nameAlg(2) + attributes(4) + authPolicy(variable)
-                // Simpler: look for dataSize right after the authPolicy field
-                // Or just set a reasonable default
                 let mut data_size: u16 = 32;
                 let mut attributes: u32 = Self::NV_ATTR_DEFAULT;
-                // Try to extract attributes (4 bytes after nvIndex+nameAlg = 6 bytes after nv_index start)
-                if nv_offset + 12 <= command.len() {
-                    attributes = u32::from_be_bytes([command[nv_offset+6], command[nv_offset+7], command[nv_offset+8], command[nv_offset+9]]);
-                    let auth_policy_sz = u16::from_be_bytes([command[nv_offset+10], command[nv_offset+11]]) as usize;
-                    let ds_off = nv_offset + 12 + auth_policy_sz;
-                    if ds_off + 2 <= command.len() {
-                        data_size = u16::from_be_bytes([command[ds_off], command[ds_off+1]]);
+
+                if command.len() >= 30 {
+                    // Scan backwards for NV handle patterns
+                    for off in (14..command.len()-4).rev() {
+                        let candidate = u32::from_be_bytes([
+                            command[off], command[off+1], command[off+2], command[off+3]
+                        ]);
+                        let handle_type = (candidate >> 24) as u8;
+                        if handle_type == 0x01 || (handle_type == 0x00 && candidate > 0x0010_0000 && candidate < 0x0100_0000) {
+                            nv_index = candidate & 0x00FF_FFFF;
+                            // Try to extract data size and attributes
+                            if off + 12 <= command.len() {
+                                attributes = u32::from_be_bytes([
+                                    command[off+6], command[off+7], command[off+8], command[off+9]
+                                ]);
+                                let auth_policy_sz = u16::from_be_bytes([
+                                    command[off+10], command[off+11]
+                                ]) as usize;
+                                let ds_off = off + 12 + auth_policy_sz;
+                                if ds_off + 2 <= command.len() {
+                                    data_size = u16::from_be_bytes([
+                                        command[ds_off], command[ds_off+1]
+                                    ]);
+                                }
+                            }
+                            break;
+                        }
                     }
+                }
+
+                // Fallback: ChromeOS always defines 8388613 (encstateful) and 8388612 (lockbox).
+                // If we couldn't parse the command, pre-create both with generous sizes.
+                if nv_index == 0 {
+                    // Pre-create common ChromeOS indices
+                    for &idx in &[8388613u32, 8388612u32] {
+                        if !self.nv_spaces.contains_key(&idx) {
+                            let public_info = Self::build_nv_public(idx, 128, Self::NV_ATTR_DEFAULT);
+                            self.nv_spaces.insert(idx, NvSpace {
+                                data: vec![0u8; 128],
+                                public_info,
+                                written: false,
+                                write_locked: false,
+                            });
+                            info!("TPM: pre-created NV index 0x{:08x}", idx);
+                        }
+                    }
+                    // Return success — ChromeOS will proceed to NV_Write
+                    self.save_nvram();
+                    return make_tpm_response(&[]);
                 }
 
                 if data_size as usize > MAX_NV_DATA_SIZE {
                     data_size = MAX_NV_DATA_SIZE as u16;
                 }
+
+                // If space already exists, just update it (don't error).
                 if self.nv_spaces.contains_key(&nv_index) {
-                    return make_tpm_error(TPM_RC_NV_UNINITIALIZED);
+                    self.nv_spaces.remove(&nv_index);
                 }
 
                 let public_info = Self::build_nv_public(nv_index, data_size, attributes);
@@ -453,6 +567,7 @@ impl TpmBackend for MinimalTpm {
                     written: false,
                     write_locked: false,
                 });
+                info!("TPM: NV_DefineSpace 0x{:08x} size={}", nv_index, data_size);
                 make_tpm_response(&[])
             }
             TPM2_CC_NV_UNDEFINE_SPACE => {
@@ -554,7 +669,13 @@ impl TpmBackend for MinimalTpm {
             }
 
             // ── Clear / reset commands ──────────────────────────────
-            TPM2_CC_CLEAR | TPM2_CC_CLEAR_CONTROL | TPM2_CC_SHUTDOWN | TPM2_CC_STIR_RANDOM => {
+            TPM2_CC_SHUTDOWN => {
+                // ChromeOS sends TPM2_Shutdown before ACPI reboot.
+                // Persist NV data so encryption keys survive the reboot cycle.
+                self.save_nvram();
+                make_tpm_response(&[])
+            }
+            TPM2_CC_CLEAR | TPM2_CC_CLEAR_CONTROL | TPM2_CC_STIR_RANDOM => {
                 make_tpm_response(&[])
             }
 

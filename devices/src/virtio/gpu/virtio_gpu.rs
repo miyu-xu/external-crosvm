@@ -543,7 +543,7 @@ impl VirtioGpu {
             );
         }
 
-        let scanouts = display_params
+        let mut scanouts = display_params
             .iter()
             .enumerate()
             .map(|(display_index, display_param)| {
@@ -555,8 +555,20 @@ impl VirtioGpu {
             .collect::<Map<_, _>>();
         let cursor_scanout = VirtioGpuScanout::new_cursor();
 
+        // Auto-create surface for primary scanout (scanout 0) so the
+        // display window is visible immediately, without waiting for
+        // the guest userspace compositor to issue SET_SCANOUT.
+        // This ensures a GPU window appears even if ChromeOS UI services
+        // have trouble starting (e.g., missing TPM/Cr50 dependencies).
+        let display_rc = Rc::new(RefCell::new(display));
+        if let Some(scanout) = scanouts.get_mut(&0u32) {
+            if let Err(e) = scanout.create_surface(&display_rc, None) {
+                base::warn!("auto-create surface for scanout 0 failed: {:?}", e);
+            }
+        }
+
         Some(VirtioGpu {
-            display: Rc::new(RefCell::new(display)),
+            display: display_rc.clone(),
             scanouts,
             scanouts_updated: display_event,
             cursor_scanout,

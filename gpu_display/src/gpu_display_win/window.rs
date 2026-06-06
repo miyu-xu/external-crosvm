@@ -336,12 +336,10 @@ impl GuiWindow {
         )
         .context("When creating GuiWindow")?;
 
-        // Show the window immediately
-        unsafe {
-            use winapi::um::winuser::ShowWindow;
-            use winapi::um::winuser::SW_SHOW;
-            ShowWindow(hwnd, SW_SHOW);
-        }
+        // Do NOT show the window yet. Windows are pre-created at 1x1 for all
+        // potential scanouts (up to VIRTIO_GPU_MAX_SCANOUTS=16). Only the
+        // scanout actually used by the guest is resized and shown via
+        // SetWindowPos(SWP_SHOWWINDOW) when create_surface activates it.
 
         let window = Self {
             hwnd,

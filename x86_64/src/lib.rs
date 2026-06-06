@@ -2130,10 +2130,22 @@ impl X8664arch {
 
         // TPM TIS device at standard x86 MMIO address 0xFED40000.
         // ChromeOS requires a detectable TPM to avoid security shutdown.
+        // Persist NV data across guest reboots to prevent boot loops
+        // (ChromeOS saves encryption keys in TPM NV and reboots to verify).
+        // Use env var if set (e.g. for per-VM isolation), else use a fixed
+        // path in the user's home directory that survives process restarts.
+        let tpm_nvram_path = std::env::var("TPM_NVRAM_PATH").ok().map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var("USERPROFILE").ok().or_else(|| std::env::var("HOME").ok())
+                    .map(|home| std::path::PathBuf::from(home).join("crosvm_tpm_nvram.bin"))
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("crosvm_tpm_nvram.bin"));
+        info!("TPM NVRAM path: {}", tpm_nvram_path.display());
         let tpm_mmio = Arc::new(Mutex::new(TpmTisDevice::new(
             devices::tpm_tis::TPM_TIS_MMIO_BASE,
             cfg!(debug_assertions), // debug
-            Box::new(devices::tpm_tis::MinimalTpm::new()),
+            Box::new(devices::tpm_tis::MinimalTpm::new()
+                .with_nvram_path(tpm_nvram_path)),
         )));
         mmio_bus
             .insert(
