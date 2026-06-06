@@ -266,21 +266,25 @@ impl WhpxVm {
             // QEMU's WHPX SyntheticProcessorFeaturesBanks: tell WHPX to
             // assign unique VP indices (AccessVpIndex) and route SMP IPIs
             // (SyntheticClusterIpi). Without these, all vCPUs share APIC ID 0.
+            // Bit positions from SDK 10.0.26100 WHV_SYNTHETIC_PROCESSOR_FEATURES
             let bank0: u64 = (1 << 0)   // HypervisorPresent
                 | (1 << 1)   // Hv1
                 | (1 << 2)   // AccessVpRunTimeReg
                 | (1 << 3)   // AccessPartitionReferenceCounter
-                | (1 << 4)   // AccessPartitionReferenceTsc
-                | (1 << 5)   // AccessHypercallRegs
-                | (1 << 6)   // AccessFrequencyRegs
-                | (1 << 7)   // EnableExtendedGvaRanges
+                | (1 << 4)   // AccessSynicRegs
+                | (1 << 5)   // AccessSyntheticTimerRegs
+                | (1 << 6)   // AccessIntrCtrlRegs
+                | (1 << 7)   // AccessHypercallRegs
                 | (1 << 8)   // AccessVpIndex (per-vCPU ID!)
-                | (1 << 9)   // TbFlushHypercalls
-                | (1 << 10)  // AccessSynicRegs
-                | (1 << 11)  // AccessSyntheticTimerRegs
-                | (1 << 12)  // AccessIntrCtrlRegs
-                | (1 << 13)  // SyntheticClusterIpi (SMP!)
-                | (1 << 14); // DirectSyntheticTimers
+                | (1 << 9)   // AccessPartitionReferenceTsc
+                | (1 << 10)  // AccessGuestIdleReg
+                | (1 << 11)  // AccessFrequencyRegs
+                | (1 << 15)  // EnableExtendedGvaRangesForFlushVirtualAddressList
+                | (1 << 18)  // FastHypercallOutput
+                | (1 << 22)  // DirectSyntheticTimers
+                | (1 << 24)  // ExtendedProcessorMasks
+                | (1 << 25)  // TbFlushHypercalls
+                | (1 << 26); // SyntheticClusterIpi (SMP!)
             for &size in &[16u32, 24u32, 32u32, 40u32, 48u32] {
                 let mut buf = vec![0u8; size as usize];
                 buf[0] = 1; // BanksCount = 1
