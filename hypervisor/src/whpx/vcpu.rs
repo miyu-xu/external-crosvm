@@ -1101,8 +1101,55 @@ impl Vcpu for WhpxVcpu {
         }
     }
 
+    /// QEMU whpx_cpu_synchronize_state + do_cpu_init + whpx_set_registers:
+    /// fetch current state from WHPX, reset to x86 INIT defaults, push back.
+    /// WHPX may need this fetch-reset-push cycle to assign per-vCPU identity.
+    fn fetch_reset_push_init_state(&self) -> Result<()> {
+        // Phase 1: fetch GPRs + control regs from WHPX
+        let reg_names = [
+            WHV_REGISTER_NAME_WHvX64RegisterRip,
+            WHV_REGISTER_NAME_WHvX64RegisterRflags,
+            WHV_REGISTER_NAME_WHvX64RegisterCr0,
+            WHV_REGISTER_NAME_WHvX64RegisterCr4,
+            WHV_REGISTER_NAME_WHvX64RegisterEfer,
+        ];
+        let count = reg_names.len() as u32;
+        let mut vals: Vec<WHV_REGISTER_VALUE> = vec![
+            WHV_REGISTER_VALUE { Reg64: 0 }; count as usize
+        ];
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorRegisters(
+                self.vm_partition.partition, self.index,
+                reg_names.as_ptr(), count, vals.as_mut_ptr(),
+            )
+        })?;
+
+        // Phase 2: push back INIT state (do_cpu_init equivalent)
+        // RIP=0xFFF0, RFLAGS=2, CR0=0x60000010, CR4=0, EFER=0
+        vals[0] = WHV_REGISTER_VALUE { Reg64: 0xFFF0 };
+        vals[1] = WHV_REGISTER_VALUE { Reg64: 2 };
+        vals[2] = WHV_REGISTER_VALUE { Reg64: 0x60000010 };
+        vals[3] = WHV_REGISTER_VALUE { Reg64: 0 };
+        vals[4] = WHV_REGISTER_VALUE { Reg64: 0 };
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorRegisters(
+                self.vm_partition.partition, self.index,
+                reg_names.as_ptr(), count, vals.as_ptr(),
+            )
+        })
+    }
+
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
+        // QEMU fetch-reset-push: sync the vCPU state through WHPX to
+        // establish per-vCPU identity (unique APIC ID via MSR 0x802).
+        if self.index != 0 {
+            let state = *self.vp_state.0.lock().unwrap();
+            if state == MPState::Uninitialized {
+                let _ = self.fetch_reset_push_init_state();
+            }
+        }
+
         // safe because we own this whpx virtual processor index, and assume the vm partition is
         // still valid
         let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);
