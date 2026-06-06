@@ -204,9 +204,10 @@ impl WhpxVm {
         // Setup apic emulation mode
         let mut property: WHV_PARTITION_PROPERTY = Default::default();
         property.LocalApicEmulationMode = if apic_emulation {
-            // TODO(b/180966070): figure out if x2apic emulation mode is available on the host and
-            // enable it if it is.
-            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeXApic
+            // Use x2APIC mode (QEMU also uses X2Apic for WHPX). In x2APIC,
+            // INIT/SIPI is delivered via MSR writes (not MMIO), and WHPX
+            // routes them correctly by vCPU index regardless of APIC ID.
+            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeX2Apic
         } else {
             WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone
         };

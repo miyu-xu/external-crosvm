@@ -1245,6 +1245,14 @@ impl Vcpu for WhpxVcpu {
 
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
+        // Refresh GPA for cross-vCPU memory areas (wakeup buffer at 0x9F000,
+        // ExchangeInfo at 0x9F039, firmware volumes at 0x820000) so this vCPU
+        // sees recent writes from other vCPUs (AP signaling BSP, etc.).
+        if let Some(ref refresh) = self.gpa_refresh {
+            refresh(0, 0x100000);
+            refresh(0x800000, 0x200000);
+        }
+
         // safe because we own this whpx virtual processor index, and assume the vm partition is
         // still valid
         let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);
