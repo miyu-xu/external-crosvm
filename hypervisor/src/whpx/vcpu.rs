@@ -1301,6 +1301,14 @@ impl Vcpu for WhpxVcpu {
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
         // x2APIC WHPX mode: INIT/SIPI delivered correctly via MSR.
+        // Kick all other vCPUs out of WHvRunVirtualProcessor so they
+        // can refresh GPA and see fresh memory from other vCPUs.
+        for i in 0..self.vm_partition.processor_count {
+            if i != self.index {
+                unsafe { WHvCancelRunVirtualProcessor(self.vm_partition.partition, i, 0) };
+            }
+        }
+
         // Refresh GPA each iteration so the BSP sees the AP's readiness
         // signal in ExchangeInfo, and the AP sees the wakeup buffer.
         if let Some(ref refresh) = self.gpa_refresh {
