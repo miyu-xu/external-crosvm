@@ -197,38 +197,30 @@ impl WhpxVm {
         })
         .map_err(WhpxError::SetExtendedVmExits)?;
 
+        if apic_emulation && !Whpx::check_whpx_feature(WhpxFeature::LocalApicEmulation)? {
+            return Err(WhpxError::LocalApicEmulationNotSupported);
+        }
+
+        // Setup x2APIC emulation BEFORE WHvSetupPartition (required by this WHPX).
+        let mut property: WHV_PARTITION_PROPERTY = Default::default();
+        property.LocalApicEmulationMode = if apic_emulation {
+            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeX2Apic
+        } else {
+            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone
+        };
+        check_whpx!(unsafe {
+            WHvSetPartitionProperty(
+                partition.partition,
+                WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeLocalApicEmulationMode,
+                &property as *const _ as *const c_void,
+                std::mem::size_of::<WHV_PARTITION_PROPERTY>() as UINT32,
+            )
+        })
+        .map_err(WhpxError::SetLocalApicEmulationMode)?;
+
         // safe because we own this partition
         check_whpx!(unsafe { WHvSetupPartition(partition.partition) })
             .map_err(WhpxError::SetupPartition)?;
-
-        // Set APIC emulation mode AFTER WHvSetupPartition (QEMU ordering).
-        // QEMU tries X2Apic first; falls back silently if unsupported.
-        if apic_emulation && Whpx::check_whpx_feature(WhpxFeature::LocalApicEmulation)? {
-            let mut property: WHV_PARTITION_PROPERTY = Default::default();
-            property.LocalApicEmulationMode =
-                WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeX2Apic;
-            if let Err(e) = check_whpx!(unsafe {
-                WHvSetPartitionProperty(
-                    partition.partition,
-                    WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeLocalApicEmulationMode,
-                    &property as *const _ as *const c_void,
-                    std::mem::size_of::<WHV_PARTITION_PROPERTY>() as UINT32,
-                )
-            }) {
-                error!("WHPX: X2Apic mode failed ({}), trying XApic", e);
-                property.LocalApicEmulationMode =
-                    WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeXApic;
-                check_whpx!(unsafe {
-                    WHvSetPartitionProperty(
-                        partition.partition,
-                        WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeLocalApicEmulationMode,
-                        &property as *const _ as *const c_void,
-                        std::mem::size_of::<WHV_PARTITION_PROPERTY>() as UINT32,
-                    )
-                })
-                .map_err(WhpxError::SetLocalApicEmulationMode)?;
-            }
-        }
 
         for region in guest_mem.regions() {
             unsafe {

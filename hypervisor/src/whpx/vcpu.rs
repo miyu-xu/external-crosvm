@@ -1300,22 +1300,6 @@ impl Vcpu for WhpxVcpu {
 
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
-        // x2APIC WHPX mode: INIT/SIPI delivered correctly via MSR.
-        // Kick all other vCPUs out of WHvRunVirtualProcessor so they
-        // can refresh GPA and see fresh memory from other vCPUs.
-        for i in 0..self.vm_partition.processor_count {
-            if i != self.index {
-                unsafe { WHvCancelRunVirtualProcessor(self.vm_partition.partition, i, 0) };
-            }
-        }
-
-        // Refresh GPA each iteration so the BSP sees the AP's readiness
-        // signal in ExchangeInfo, and the AP sees the wakeup buffer.
-        if let Some(ref refresh) = self.gpa_refresh {
-            refresh(0, 0x100000);
-            refresh(0x800000, 0x200000);
-        }
-
         // safe because we own this whpx virtual processor index, and assume the vm partition is
         // still valid
         let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);
@@ -1327,6 +1311,11 @@ impl Vcpu for WhpxVcpu {
                 size_of::<WHV_RUN_VP_EXIT_CONTEXT>() as u32,
             )
         })?;
+
+        // Log the AP's exit reason for diagnostic purposes
+        if self.index != 0 {
+            warn!("AP vcpu={} exit reason={}", self.index, self.last_exit_context.ExitReason);
+        }
 
         match self.last_exit_context.ExitReason {
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonMemoryAccess => {
