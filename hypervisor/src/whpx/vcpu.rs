@@ -395,6 +395,62 @@ impl WhpxVcpu {
         self.apic_frequency = Some(lapic_frequency);
     }
 
+    /// Read RIP + CS of this vCPU for SMP INIT/SIPI diagnostics.
+    /// Returns (rip, cs_base, cs_selector).
+    pub fn read_initial_ip(&self) -> Result<(u64, u64, u16)> {
+        const REG_NAMES: [WHV_REGISTER_NAME; 3] = [
+            WHV_REGISTER_NAME_WHvX64RegisterRip,
+            WHV_REGISTER_NAME_WHvX64RegisterCs,
+            WHV_REGISTER_NAME_WHvX64RegisterRflags,
+        ];
+        let mut values = [WHV_REGISTER_VALUE::default(); 3];
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                self.index,
+                REG_NAMES.as_ptr(),
+                3,
+                values.as_mut_ptr(),
+            )
+        })?;
+        let rip = unsafe { values[0].Reg64 };
+        let cs_base = unsafe { values[1].Segment.Base };
+        let cs_sel = unsafe { values[1].Segment.Selector };
+        Ok((rip, cs_base, cs_sel))
+    }
+
+    /// Push complete vCPU register state in ONE WHvSetVirtualProcessorRegisters call.
+    /// Matches QEMU's whpx_set_registers pattern: all register groups (GPRs, segments,
+    /// control regs, FPU, XMM) pushed atomically. QEMU sets cpu->vcpu_dirty=true in
+    /// whpx_init_vcpu to trigger this push before the first WHvRunVirtualProcessor.
+    /// This initializes per-vCPU state that WHPX may require for SMP INIT/SIPI delivery.
+    pub fn push_initial_regs_qemu_style(&self) -> Result<()> {
+        let gpr_names = WhpxRegs::get_register_names();   // 18: rax..r15 + rip + rflags
+        let sreg_names = WhpxSregs::get_register_names(); // 16: cs..efer
+        let fpu_names = WhpxFpu::get_register_names();    // 26: fpmmx0..xmm15
+
+        let total = gpr_names.len() + sreg_names.len() + fpu_names.len();
+        let mut names: Vec<WHV_REGISTER_NAME> = Vec::with_capacity(total);
+        let mut regs = vec![WHV_REGISTER_VALUE { Reg64: 0 }; total];
+
+        // Get current register values (QEMU reads existing state before pushing modified state)
+        // For the initial push, we use the default values set by WHPX, with reset-vector CS.
+        // Build names array
+        names.extend_from_slice(gpr_names);
+        names.extend_from_slice(sreg_names);
+        names.extend_from_slice(fpu_names);
+
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                self.index,
+                names.as_ptr(),
+                total as u32,
+                regs.as_ptr(),
+            )
+        })
+    }
+
     /// Reads WHvRegisterPendingInterruption from the live vCPU state (not last exit snapshot).
     pub fn interruption_pending_live(&self) -> Result<bool> {
         const REG_NAMES: [WHV_REGISTER_NAME; 1] =
@@ -501,12 +557,21 @@ impl WhpxVcpu {
 
         const APIC_DM_INIT: u64 = 5;
         const APIC_DM_SIPI: u64 = 6;
+        const APIC_DEST_SELF: u64 = 1;
+        const APIC_DEST_ALLINC: u64 = 2;
         const APIC_DEST_ALLBUT: u64 = 3;
 
         // Safe: exit reason guarantees ApicInitSipi is populated.
         let icr = unsafe { self.last_exit_context.__bindgen_anon_1.ApicInitSipi.ApicIcr };
         let delivery_mode = (icr >> 8) & 0x7;
         let dest_shorthand = (icr >> 18) & 0x3;
+
+        let kind_str = if delivery_mode == APIC_DM_INIT { "INIT" } else { "SIPI" };
+        info!(
+            "whpx: vcpu={} {} ICR=0x{:016x} shorthand={} vector={} dest_field=0x{:x}",
+            self.index, kind_str, icr, dest_shorthand,
+            icr & 0xFF, (icr >> 32) & 0xFFFFFFFFu64
+        );
 
         if delivery_mode == APIC_DM_INIT || delivery_mode == APIC_DM_SIPI {
             let interrupt_type = if delivery_mode == APIC_DM_INIT {
@@ -516,10 +581,12 @@ impl WhpxVcpu {
             };
             let vector = (icr & 0xFF) as u32;
 
-            // Physical destination only; shorthand broadcasts are no-ops on single-vCPU VMs.
             if dest_shorthand == 0 {
+                // Physical destination mode: use the x2APIC destination field.
+                // x2APIC physical mode uses bits 63:56 as the 8-bit APIC ID.
+                let dest_id = ((icr >> 56) & 0xFF) as u32;
                 let mut interrupt = WHV_INTERRUPT_CONTROL {
-                    Destination: ((icr >> 56) & 0xFF) as u32,
+                    Destination: dest_id,
                     Vector: vector,
                     ..Default::default()
                 };
@@ -527,7 +594,10 @@ impl WhpxVcpu {
                 interrupt.set_DestinationMode(
                     WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical as u64,
                 );
-                // Ignore errors when the target AP does not exist (typical for --cpus 1).
+                info!(
+                    "whpx: vcpu={} {} -> Physical dest_id={}",
+                    self.index, kind_str, dest_id
+                );
                 let _ = check_whpx!(unsafe {
                     WHvRequestInterrupt(
                         self.vm_partition.partition,
@@ -535,8 +605,63 @@ impl WhpxVcpu {
                         size_of::<WHV_INTERRUPT_CONTROL>() as u32,
                     )
                 });
-            } else if dest_shorthand != APIC_DEST_ALLBUT {
-                // APIC_DEST_ALLINC: deliver to all present vCPUs. Best-effort for mp guests.
+            } else if dest_shorthand == APIC_DEST_SELF {
+                // Self-only INIT/SIPI: send only to the current vCPU.
+                // This is unusual for SMP bringup but valid.
+                let mut interrupt = WHV_INTERRUPT_CONTROL {
+                    Destination: self.index,
+                    Vector: vector,
+                    ..Default::default()
+                };
+                interrupt.set_Type(interrupt_type as u64);
+                interrupt.set_DestinationMode(
+                    WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical
+                        as u64,
+                );
+                info!(
+                    "whpx: vcpu={} {} -> Self (shorthand=1)",
+                    self.index, kind_str
+                );
+                let _ = check_whpx!(unsafe {
+                    WHvRequestInterrupt(
+                        self.vm_partition.partition,
+                        &interrupt as *const WHV_INTERRUPT_CONTROL,
+                        size_of::<WHV_INTERRUPT_CONTROL>() as u32,
+                    )
+                });
+            } else if dest_shorthand == APIC_DEST_ALLINC {
+                // All including self: deliver to all vCPUs.
+                info!(
+                    "whpx: vcpu={} {} -> AllIncludingSelf broadcast",
+                    self.index, kind_str
+                );
+                let processor_count = self.vm_partition.processor_count;
+                for i in 0..processor_count {
+                    let mut interrupt = WHV_INTERRUPT_CONTROL {
+                        Destination: i,
+                        Vector: vector,
+                        ..Default::default()
+                    };
+                    interrupt.set_Type(interrupt_type as u64);
+                    interrupt.set_DestinationMode(
+                        WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical
+                            as u64,
+                    );
+                    let _ = check_whpx!(unsafe {
+                        WHvRequestInterrupt(
+                            self.vm_partition.partition,
+                            &interrupt as *const WHV_INTERRUPT_CONTROL,
+                            size_of::<WHV_INTERRUPT_CONTROL>() as u32,
+                        )
+                    });
+                }
+            } else if dest_shorthand == APIC_DEST_ALLBUT {
+                // All excluding self: deliver to all vCPUs except the sender.
+                // This is the most common pattern for INIT broadcasts in SMP bringup.
+                info!(
+                    "whpx: vcpu={} {} -> AllExcludingSelf broadcast",
+                    self.index, kind_str
+                );
                 let processor_count = self.vm_partition.processor_count;
                 for i in 0..processor_count {
                     if i == self.index {

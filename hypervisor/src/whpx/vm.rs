@@ -95,10 +95,14 @@ impl WhpxVm {
         let mut partition = SafePartition::new()?;
         partition.processor_count = cpu_count as u32;
         let partition = Arc::new(partition);
-        // setup partition defaults.
+
+        // === QEMU-aligned partition property order ===
+        // ALL properties MUST be set BEFORE WHvSetupPartition.
+        // Property value sizes match QEMU's exact type sizes, not the full union.
+
+        // 1. ProcessorCount (uses full WHV_PARTITION_PROPERTY union like QEMU)
         let mut property: WHV_PARTITION_PROPERTY = Default::default();
         property.ProcessorCount = cpu_count as u32;
-        // safe because we own this partition, and the partition property is allocated on the stack.
         check_whpx!(unsafe {
             WHvSetPartitionProperty(
                 partition.partition,
@@ -109,30 +113,108 @@ impl WhpxVm {
         })
         .map_err(WhpxError::SetProcessorCount)?;
 
-        // Pre-set any cpuid results in cpuid.
+        // 2. Check APIC emulation support
+        if apic_emulation && !Whpx::check_whpx_feature(WhpxFeature::LocalApicEmulation)? {
+            return Err(WhpxError::LocalApicEmulationNotSupported);
+        }
+
+        // 3. LocalApicEmulationMode = X2Apic
+        // QEMU passes sizeof(WHV_X64_LOCAL_APIC_EMULATION_MODE) = 4 bytes, NOT the full union!
+        let apic_mode: WHV_X64_LOCAL_APIC_EMULATION_MODE = if apic_emulation {
+            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeX2Apic
+        } else {
+            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone
+        };
+        check_whpx!(unsafe {
+            WHvSetPartitionProperty(
+                partition.partition,
+                WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeLocalApicEmulationMode,
+                &apic_mode as *const _ as *const c_void,
+                std::mem::size_of::<WHV_X64_LOCAL_APIC_EMULATION_MODE>() as UINT32,
+            )
+        })
+        .map_err(WhpxError::SetLocalApicEmulationMode)?;
+
+        // 4. ProcessorFeaturesBanks (QEMU: get capability + set BEFORE SetupPartition)
+        if apic_emulation {
+            let mut features: WHV_PROCESSOR_FEATURES_BANKS = Default::default();
+            features.BanksCount = 2;
+            let mut cap_size: UINT32 = 0;
+            let cap_hr = unsafe {
+                WHvGetCapability(
+                    WHV_CAPABILITY_CODE_WHvCapabilityCodeProcessorFeaturesBanks,
+                    &mut features as *mut _ as *mut c_void,
+                    std::mem::size_of::<WHV_PROCESSOR_FEATURES_BANKS>() as u32,
+                    &mut cap_size,
+                )
+            };
+            if cap_hr == 0 {
+                match check_whpx!(unsafe {
+                    WHvSetPartitionProperty(
+                        partition.partition,
+                        WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeProcessorFeaturesBanks,
+                        &features as *const _ as *const c_void,
+                        std::mem::size_of::<WHV_PROCESSOR_FEATURES_BANKS>() as u32,
+                    )
+                }) {
+                    Ok(()) => info!("whpx: ProcessorFeaturesBanks set ok banks=2"),
+                    Err(e) => info!("whpx: ProcessorFeaturesBanks failed: {}", e),
+                }
+
+            } else {
+                info!("whpx: WHvGetCapability(ProcessorFeaturesBanks) not supported, hr={:#x}", cap_hr as u32);
+            }
+        }
+
+        // 6. SyntheticProcessorFeaturesBanks (QEMU: set BEFORE SetupPartition, named bitfields)
+        if apic_emulation {
+            let mut synth = WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS::default();
+            synth.BanksCount = 1;
+            synth.Bank0 = (1u64 << 0)   // HypervisorPresent
+                | (1u64 << 1)   // Hv1
+                | (1u64 << 2)   // AccessVpRunTimeReg
+                | (1u64 << 3)   // AccessPartitionReferenceCounter
+                | (1u64 << 9)   // AccessPartitionReferenceTsc
+                | (1u64 << 7)   // AccessHypercallRegs
+                | (1u64 << 11)  // AccessFrequencyRegs
+                | (1u64 << 15)  // EnableExtendedGvaRangesForFlushVirtualAddressList
+                | (1u64 << 8)   // AccessVpIndex
+                | (1u64 << 25)  // TbFlushHypercalls
+                | (1u64 << 4)   // AccessSynicRegs (IRQ chip)
+                | (1u64 << 5)   // AccessSyntheticTimerRegs (IRQ chip)
+                | (1u64 << 6)   // AccessIntrCtrlRegs (IRQ chip)
+                | (1u64 << 26)  // SyntheticClusterIpi (IRQ chip)
+                | (1u64 << 22); // DirectSyntheticTimers (IRQ chip)
+            match check_whpx!(unsafe {
+                WHvSetPartitionProperty(
+                    partition.partition,
+                    WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeSyntheticProcessorFeaturesBanks,
+                    &synth as *const _ as *const c_void,
+                    std::mem::size_of::<WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS>() as u32,
+                )
+            }) {
+                Ok(()) => info!("whpx: SyntheticProcessorFeatures set ok"),
+                Err(e) => info!("whpx: SyntheticProcessorFeatures failed: {}", e),
+            }
+        }
+
+        // 7. CPUID results (Hyper-V enlightenment)
         let mut cpuid_results: Vec<WHV_X64_CPUID_RESULT> = cpuid
             .cpu_id_entries
             .iter()
             .map(WHV_X64_CPUID_RESULT::from)
             .collect();
-
-        // Leaf HYPERV_CPUID_VENDOR_AND_MAX_FUNCTIONS tells linux that it's running under Hyper-V.
         cpuid_results.push(WHV_X64_CPUID_RESULT {
             Function: HYPERV_CPUID_VENDOR_AND_MAX_FUNCTIONS,
             Reserved: [0u32; 3],
-            // HYPERV_CPUID_MIN is the minimum leaf that we need to support returning to the guest
             Eax: HYPERV_CPUID_MIN,
             Ebx: u32::from_le_bytes([b'M', b'i', b'c', b'r']),
             Ecx: u32::from_le_bytes([b'o', b's', b'o', b'f']),
             Edx: u32::from_le_bytes([b't', b' ', b'H', b'v']),
         });
-
-        // HYPERV_CPUID_FEATURES leaf tells linux which Hyper-V features we support
         cpuid_results.push(WHV_X64_CPUID_RESULT {
             Function: HYPERV_CPUID_FEATURES,
             Reserved: [0u32; 3],
-            // We only support frequency MSRs and the HV_ACCESS_TSC_INVARIANT feature, which means
-            // TSC scaling/offseting is handled in hardware, not the guest.
             Eax: HV_ACCESS_FREQUENCY_MSRS
                 | HV_ACCESS_TSC_INVARIANT
                 | HV_MSR_REFERENCE_TSC_AVAILABLE,
@@ -140,8 +222,6 @@ impl WhpxVm {
             Edx: HV_FEATURE_FREQUENCY_MSRS_AVAILABLE,
             Ecx: 0,
         });
-
-        // safe because we own this partition, and the cpuid_results vec is local to this function.
         check_whpx!(unsafe {
             WHvSetPartitionProperty(
                 partition.partition,
@@ -152,11 +232,8 @@ impl WhpxVm {
         })
         .map_err(WhpxError::SetCpuidResultList)?;
 
-        // Setup exiting for cpuid leaves that we want crosvm to adjust, but that we can't pre-set.
-        // We can't pre-set leaves that rely on irqchip information, and we cannot pre-set leaves
-        // that return different results per-cpu.
+        // 8. CPUID exit list
         let exit_list: Vec<u32> = vec![0x1, 0x4, 0xB, 0x1F, 0x15];
-        // safe because we own this partition, and the exit_list vec local to this function.
         check_whpx!(unsafe {
             WHvSetPartitionProperty(
                 partition.partition,
@@ -167,21 +244,13 @@ impl WhpxVm {
         })
         .map_err(WhpxError::SetCpuidExitList)?;
 
-        // Setup exits for CPUID instruction.
+        // 9. ExtendedVmExits (X64CpuidExit + X64MsrExit)
+        // QEMU sets only X64MsrExit; crosvm also needs X64CpuidExit for per-vCPU CPUID adjustment.
         let mut property: WHV_PARTITION_PROPERTY = Default::default();
-        // safe because we own this partition, and the partition property is allocated on the stack.
         unsafe {
-            property
-                .ExtendedVmExits
-                .__bindgen_anon_1
-                .set_X64CpuidExit(1);
-            // X64MsrExit essentially causes WHPX to exit to crosvm when it would normally fail an
-            // MSR access and inject a GP fault. Crosvm, in turn, now handles select MSR accesses
-            // related to Hyper-V (see the handle_msr_* functions in vcpu.rs) and injects a GP
-            // fault for any unhandled MSR accesses.
+            property.ExtendedVmExits.__bindgen_anon_1.set_X64CpuidExit(1);
             property.ExtendedVmExits.__bindgen_anon_1.set_X64MsrExit(1);
         }
-        // safe because we own this partition, and the partition property is allocated on the stack.
         check_whpx!(unsafe {
             WHvSetPartitionProperty(
                 partition.partition,
@@ -192,94 +261,9 @@ impl WhpxVm {
         })
         .map_err(WhpxError::SetExtendedVmExits)?;
 
-        if apic_emulation && !Whpx::check_whpx_feature(WhpxFeature::LocalApicEmulation)? {
-            return Err(WhpxError::LocalApicEmulationNotSupported);
-        }
-
-        // Setup apic emulation mode
-        let mut property: WHV_PARTITION_PROPERTY = Default::default();
-        property.LocalApicEmulationMode = if apic_emulation {
-            // TODO(b/180966070): figure out if x2apic emulation mode is available on the host and
-            // enable it if it is.
-            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeX2Apic
-        } else {
-            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone
-        };
-
-        // safe because we own this partition, and the partition property is allocated on the stack.
-        check_whpx!(unsafe {
-            WHvSetPartitionProperty(
-                partition.partition,
-                WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeLocalApicEmulationMode,
-                &property as *const _ as *const c_void,
-                std::mem::size_of::<WHV_PARTITION_PROPERTY>() as UINT32,
-            )
-        })
-        .map_err(WhpxError::SetLocalApicEmulationMode)?;
-
-        // safe because we own this partition
+        // 10. WHvSetupPartition – MUST be LAST, after ALL properties are set (QEMU order)
         check_whpx!(unsafe { WHvSetupPartition(partition.partition) })
             .map_err(WhpxError::SetupPartition)?;
-
-        // ProcessorFeaturesBanks (QEMU sets this after SetupPartition).
-        // Tells WHPX about supported CPU features for per-vCPU identity.
-        if apic_emulation {
-            let mut features: WHV_PROCESSOR_FEATURES_BANKS = Default::default();
-            features.BanksCount = 2;
-            let mut cap_size: UINT32 = 0;
-            if unsafe {
-                WHvGetCapability(
-                    WHV_CAPABILITY_CODE_WHvCapabilityCodeProcessorFeaturesBanks,
-                    &mut features as *mut _ as *mut c_void,
-                    std::mem::size_of::<WHV_PROCESSOR_FEATURES_BANKS>() as u32,
-                    &mut cap_size,
-                )
-            } == 0
-            {
-                let _ = check_whpx!(unsafe {
-                    WHvSetPartitionProperty(
-                        partition.partition,
-                        WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeProcessorFeaturesBanks,
-                        &features as *const _ as *const c_void,
-                        std::mem::size_of::<WHV_PROCESSOR_FEATURES_BANKS>() as u32,
-                    )
-                });
-            }
-
-            // ApicRemoteReadSupport (QEMU also sets this). Enables VMM to
-            // read remote APIC state — may trigger WHPX per-vCPU APIC init.
-            {
-                let mut prop: WHV_PARTITION_PROPERTY = Default::default();
-                prop.ApicRemoteRead = 1;
-                let _ = check_whpx!(unsafe {
-                    WHvSetPartitionProperty(
-                        partition.partition,
-                        WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeApicRemoteReadSupport,
-                        &prop as *const _ as *const c_void,
-                        std::mem::size_of::<WHV_PARTITION_PROPERTY>() as u32,
-                    )
-                });
-            }
-
-            // SyntheticProcessorFeaturesBanks (QEMU also sets this).
-            // AccessVpIndex (bit 8) enables per-vCPU VP index → unique x2APIC ID.
-            // SyntheticClusterIpi (bit 26) enables proper SMP IPI routing.
-            let mut synth = WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS::default();
-            synth.BanksCount = 1;
-            synth.Bank0 = (1u64 << 0) | (1u64 << 1) | (1u64 << 2) | (1u64 << 3)
-                | (1u64 << 4) | (1u64 << 5) | (1u64 << 6) | (1u64 << 7)
-                | (1u64 << 8) | (1u64 << 9) | (1u64 << 10) | (1u64 << 11)
-                | (1u64 << 15) | (1u64 << 18) | (1u64 << 22)
-                | (1u64 << 24) | (1u64 << 25) | (1u64 << 26);
-            let _ = check_whpx!(unsafe {
-                WHvSetPartitionProperty(
-                    partition.partition,
-                    WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeSyntheticProcessorFeaturesBanks,
-                    &synth as *const _ as *const c_void,
-                    std::mem::size_of::<WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS>() as u32,
-                )
-            });
-        }
 
         for region in guest_mem.regions() {
             unsafe {

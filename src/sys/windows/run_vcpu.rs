@@ -222,8 +222,6 @@ impl VcpuRunThread {
     fn whpx_configure_vcpu(vcpu: &mut dyn VcpuArch, irq_chip: &mut dyn IrqChipArch) {
         // only apply to actual WhpxVcpu instances
         if let Some(whpx_vcpu) = vcpu.downcast_mut::<WhpxVcpu>() {
-            // WhpxVcpu instances need to know the TSC and Lapic frequencies to handle Hyper-V MSR
-            // reads and writes.
             let tsc_freq = devices::tsc::tsc_frequency()
                 .map_err(|e| {
                     error!(
@@ -792,11 +790,7 @@ where
                 let _trace_event = trace_event!(crosvm, "vcpu::run");
                 if let Some(ref monitoring_metadata) = context.monitoring_metadata {
                     monitoring_metadata.last_run_time.store(
-                        // Safe conversion because millis will always be < u32::MAX
-                        monitoring_metadata
-                            .start_instant
-                            .elapsed()
-                            .as_millis()
+                        (monitoring_metadata.start_instant.elapsed().as_millis())
                             .try_into()
                             .unwrap(),
                         Ordering::SeqCst,
