@@ -15,9 +15,20 @@ use once_cell::sync::Lazy;
 use thiserror::Error as ThisError;
 use winapi::shared::winerror::S_OK;
 
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
+
 use crate::CpuId;
 use crate::CpuIdEntry;
 use crate::Hypervisor;
+
+/// Shared atomics for AP vCPU SIPI delivery.
+/// QEMU starts AP vCPUs halted (cpu->halted = true in x86_cpu_reset_hold).
+/// crosvm's equivalent: AP threads wait on these flags before entering
+/// WHvRunVirtualProcessor. When the BSP's X64ApicInitSipiTrap handler
+/// receives a SIPI, it sets WHV_SIPI_VECTOR and WHV_SIPI_READY.
+pub static WHV_SIPI_READY: AtomicBool = AtomicBool::new(false);
+pub static WHV_SIPI_VECTOR: AtomicU32 = AtomicU32::new(0);
 use crate::HypervisorCap;
 use crate::HypervisorX86_64;
 

@@ -246,9 +246,10 @@ impl WhpxVm {
 
         // 9. ExtendedVmExits (X64CpuidExit + X64MsrExit)
         // QEMU sets only X64MsrExit; crosvm also needs X64CpuidExit.
-        // X64ApicInitSipiExitTrap is NOT used: it causes WHPX BSP deadlock
-        // on Win10 25H2. Instead, interrupt window notifications keep AP vCPUs
-        // exiting so WHPX can deliver INIT/SIPI between WHvRunVirtualProcessor calls.
+        // X64ApicInitSipiExitTrap is NOT enabled: on Win10 25H2, WHPX deadlocks
+        // the BSP inside WHvRunVirtualProcessor after the INIT trap.
+        // INIT/SIPI delivery is handled via MSR 0x830 interception in
+        // handle_msr_write (QEMU kernel-irqchip=off alignment).
         let mut property: WHV_PARTITION_PROPERTY = Default::default();
         unsafe {
             property.ExtendedVmExits.__bindgen_anon_1.set_X64CpuidExit(1);
