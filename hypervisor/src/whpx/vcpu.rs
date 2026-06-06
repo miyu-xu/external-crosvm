@@ -1245,12 +1245,6 @@ impl Vcpu for WhpxVcpu {
 
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
-        // AP vCPUs: block here until the BSP delivers SIPI via WHvRequestInterrupt.
-        // This prevents APs from running SEC/PEI simultaneously with the BSP,
-        // corrupting shared firmware data structures. WHPX handles the INIT+SIPI
-        // internally — we just manage mp_state and let WHPX set CS:IP.
-        self.wait_until_runnable();
-
         // safe because we own this whpx virtual processor index, and assume the vm partition is
         // still valid
         let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);
