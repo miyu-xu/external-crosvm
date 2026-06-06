@@ -471,40 +471,31 @@ impl WhpxVcpu {
         })
     }
 
-    /// Set all essential vCPU registers for real-mode execution at the SIPI
-    /// vector. QEMU's do_cpu_init + do_cpu_sipi resets ALL registers, not just
-    /// CS:IP. WHPX may require a full register set to properly initialize the
-    /// vCPU state before WHvRunVirtualProcessor.
+    /// QEMU whpx_set_registers(RUNTIME_STATE) equivalent: push ALL
+    /// registers in a SINGLE WHvSetVirtualProcessorRegisters call.
+    /// WHPX requires a complete register image when initializing a cold
+    /// vCPU — piecemeal writes may be silently ignored.
     fn apply_sipi_vector(&self, target_idx: u32, vector: u32) -> Result<()> {
         let sipi_addr = (vector as u64) << 12;
         let cs_sel = (vector << 8) as u16;
 
-        // QEMU pattern: whpx_cpu_synchronize_state (fetch from WHPX),
-        // then do_cpu_sipi (modify in-memory), then whpx_set_registers
-        // (push to WHPX), then WHvRunVirtualProcessor.
-        //
-        // The key: fetch first so WHPX marks the vCPU as "synced",
-        // then push the modified state, then run.
-        // Without the fetch, WHPX may ignore subsequent pushes on a
-        // vCPU that has never been fetched (cold vCPU).
+        // QEMU: whpx_cpu_synchronize_state (fetch) → modify → push all.
         self.fetch_whpx_state(target_idx)?;
 
-        // 1. Segment registers — real-mode defaults
-        let cs_name = WHV_REGISTER_NAME_WHvX64RegisterCs;
-        let mut cs_reg = WHV_X64_SEGMENT_REGISTER::default();
-        cs_reg.Base = 0;
-        cs_reg.Limit = 0xFFFF;
-        cs_reg.Selector = cs_sel;
-        let cs_val = WHV_REGISTER_VALUE { Segment: cs_reg };
-        check_whpx!(unsafe {
-            WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition, target_idx,
-                &cs_name, 1, &cs_val as *const WHV_REGISTER_VALUE,
-            )
-        })?;
+        let zero_seg = || WHV_X64_SEGMENT_REGISTER {
+            Base: 0, Limit: 0xFFFF, Selector: 0,
+            ..Default::default()
+        };
+        let cs_seg = || {
+            let mut s = zero_seg();
+            s.Selector = cs_sel;
+            s
+        };
 
-        // 2. GPRs — zeroed (x86 INIT state)
-        let gpr_names = [
+        // One array of (name, value) covering all registers QEMU's
+        // whpx_set_registers(LEVEL_RUNTIME_STATE) pushes.
+        let names = [
+            // 16 GPRs: zeroed (INIT state)
             WHV_REGISTER_NAME_WHvX64RegisterRax,
             WHV_REGISTER_NAME_WHvX64RegisterRbx,
             WHV_REGISTER_NAME_WHvX64RegisterRcx,
@@ -521,36 +512,70 @@ impl WhpxVcpu {
             WHV_REGISTER_NAME_WHvX64RegisterR13,
             WHV_REGISTER_NAME_WHvX64RegisterR14,
             WHV_REGISTER_NAME_WHvX64RegisterR15,
-        ];
-        let gpr_vals: Vec<WHV_REGISTER_VALUE> = (0..16).map(|_| WHV_REGISTER_VALUE { Reg64: 0 }).collect();
-        check_whpx!(unsafe {
-            WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition, target_idx,
-                gpr_names.as_ptr(), gpr_names.len() as u32,
-                gpr_vals.as_ptr(),
-            )
-        })?;
-
-        // 3. RIP and RFLAGS
-        let ctl_names = [
+            // RIP + RFLAGS
             WHV_REGISTER_NAME_WHvX64RegisterRip,
             WHV_REGISTER_NAME_WHvX64RegisterRflags,
+            // 6 segment registers (CS with SIPI selector)
+            WHV_REGISTER_NAME_WHvX64RegisterCs,
+            WHV_REGISTER_NAME_WHvX64RegisterDs,
+            WHV_REGISTER_NAME_WHvX64RegisterEs,
+            WHV_REGISTER_NAME_WHvX64RegisterFs,
+            WHV_REGISTER_NAME_WHvX64RegisterGs,
+            WHV_REGISTER_NAME_WHvX64RegisterSs,
+            // CR0, CR3, CR4 (CR0: real mode, no paging)
+            WHV_REGISTER_NAME_WHvX64RegisterCr0,
+            WHV_REGISTER_NAME_WHvX64RegisterCr3,
+            WHV_REGISTER_NAME_WHvX64RegisterCr4,
+            // EFER: all off
+            WHV_REGISTER_NAME_WHvX64RegisterEfer,
         ];
-        let ctl_vals = [
+        let vals = [
+            // 16 GPRs: zeroed
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            // RIP + RFLAGS
             WHV_REGISTER_VALUE { Reg64: sipi_addr },
             WHV_REGISTER_VALUE { Reg64: 0x2 },
+            // 6 segment registers
+            WHV_REGISTER_VALUE { Segment: cs_seg() },
+            WHV_REGISTER_VALUE { Segment: zero_seg() },
+            WHV_REGISTER_VALUE { Segment: zero_seg() },
+            WHV_REGISTER_VALUE { Segment: zero_seg() },
+            WHV_REGISTER_VALUE { Segment: zero_seg() },
+            WHV_REGISTER_VALUE { Segment: zero_seg() },
+            // CR0, CR3, CR4
+            WHV_REGISTER_VALUE { Reg64: 0x60000010 }, // CD, NW, ET
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            WHV_REGISTER_VALUE { Reg64: 0 },
+            // EFER
+            WHV_REGISTER_VALUE { Reg64: 0 },
         ];
+
         check_whpx!(unsafe {
             WHvSetVirtualProcessorRegisters(
                 self.vm_partition.partition, target_idx,
-                ctl_names.as_ptr(), ctl_names.len() as u32,
-                ctl_vals.as_ptr(),
+                names.as_ptr(), names.len() as u32,
+                vals.as_ptr(),
             )
         })?;
 
         warn!(
-            "SIPI applied: vcpu={} cs=0x{:04x} rip=0x{:x}",
-            target_idx, cs_sel, sipi_addr
+            "SIPI applied (full): vcpu={} addr=0x{:x}",
+            target_idx, sipi_addr
         );
         Ok(())
     }
@@ -613,6 +638,13 @@ impl WhpxVcpu {
                 MPState::SipiReceived => {
                     let vector = self.vp_state.2.load(Ordering::Acquire);
                     if vector != 0 {
+                        // Refresh GPA in the first 1MB so the AP sees the
+                        // BSP's wakeup buffer + firmware code. Without this
+                        // WHPX per-vCPU TLB may serve stale zeroes.
+                        if let Some(ref refresh) = self.gpa_refresh {
+                            refresh(0, 0x100000);
+                            refresh(0x800000, 0x200000);
+                        }
                         // QEMU do_cpu_sipi equivalent: set CS:IP in this thread
                         // before WHvRunVirtualProcessor. WHvRequestInterrupt
                         // already told WHPX about the SIPI — we also set the
