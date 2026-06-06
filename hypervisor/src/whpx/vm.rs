@@ -119,10 +119,15 @@ impl WhpxVm {
         // In kernel-irqchip=off mode (None), crosvm handles x2APIC MSRs in software
         // via handle_msr_read/write, so WHPX APIC support is not needed.
 
-        // 3. LocalApicEmulationMode = None (QEMU kernel-irqchip=off)
+        // 3. LocalApicEmulationMode = X2Apic
+        // Required: State2 API for per-vCPU APIC ID only works with X2Apic mode.
+        // Without unique APIC IDs, APs think they're BSP and crash.
         // QEMU passes sizeof(mode) = 4 bytes.
-        let apic_mode: WHV_X64_LOCAL_APIC_EMULATION_MODE =
-            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone;
+        let apic_mode: WHV_X64_LOCAL_APIC_EMULATION_MODE = if apic_emulation {
+            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeX2Apic
+        } else {
+            WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone
+        };
         check_whpx!(unsafe {
             WHvSetPartitionProperty(
                 partition.partition,
@@ -285,39 +290,57 @@ impl WhpxVm {
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
             ioevents: FnvHashMap::default(),
             vm_evt_wrtube,
-            apic_emulation: apic_mode
-                != WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone,
+            apic_emulation: apic_emulation,
         })
     }
 
+    /// Set per-vCPU APIC ID. QEMU's whpx_put_apic_state sets register 0x2 = id << 24.
+    /// Called during vCPU config to ensure each vCPU has a unique APIC ID.
+    /// Even with LocalApicEmulationMode=None, WHPX may need this for INIT/SIPI routing.
+    pub fn set_vcpu_apic_id(&self, vcpu_id: usize, apic_id: u32) -> Result<()> {
+        let mut state = WhpxLapicState { regs: [0u32; 1024] };
+        // APIC ID register (offset 0x2) = id << 24 (matching QEMU whpx_put_apic_state)
+        state.regs[2] = apic_id << 24;
+        // APIC version register (offset 0x3) = 0x00050014
+        state.regs[3] = 0x00050014;
+        // SVR (offset 0xF): APIC enabled, spurious vector = 0xFF
+        state.regs[0xF] = 0x1FF;
+
+        match check_whpx!(unsafe {
+            WHvSetVirtualProcessorInterruptControllerState2(
+                self.vm_partition.partition,
+                vcpu_id as u32,
+                state.regs.as_ptr() as *const c_void,
+                std::mem::size_of::<WhpxLapicState>() as u32,
+            )
+        }) {
+            Ok(()) => info!("whpx: vcpu={} APIC ID set to {}", vcpu_id, apic_id),
+            Err(e) => {
+                info!("whpx: vcpu={} APIC ID set failed (expected with None mode): {}", vcpu_id, e);
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
     /// Get the current state of the specified VCPU's local APIC.
-    /// Uses WHvGetVirtualProcessorInterruptControllerState2 (QEMU-equivalent, non-deprecated).
-    /// When APIC emulation is off, returns a default (zero) state.
     pub fn get_vcpu_lapic_state(&self, vcpu_id: usize) -> Result<LapicState> {
         if !self.apic_emulation {
-            // No WHPX APIC — return default state
             return Ok(LapicState { regs: [0; 64] });
         }
         let buffer = WhpxLapicState { regs: [0u32; 1024] };
         let mut written_size = 0u32;
         let size = std::mem::size_of::<WhpxLapicState>();
-
         check_whpx!(unsafe {
             WHvGetVirtualProcessorInterruptControllerState2(
-                self.vm_partition.partition,
-                vcpu_id as u32,
-                buffer.regs.as_ptr() as *mut c_void,
-                size as u32,
-                &mut written_size,
+                self.vm_partition.partition, vcpu_id as u32,
+                buffer.regs.as_ptr() as *mut c_void, size as u32, &mut written_size,
             )
         })?;
-
         Ok(LapicState::from(&buffer))
     }
 
     /// Set the current state of the specified VCPU's local APIC.
-    /// Uses WHvSetVirtualProcessorInterruptControllerState2 (QEMU-equivalent, non-deprecated).
-    /// When APIC emulation is off, this is a no-op.
     pub fn set_vcpu_lapic_state(&mut self, vcpu_id: usize, state: &LapicState) -> Result<()> {
         if !self.apic_emulation {
             return Ok(());
@@ -325,10 +348,8 @@ impl WhpxVm {
         let buffer = WhpxLapicState::from(state);
         check_whpx!(unsafe {
             WHvSetVirtualProcessorInterruptControllerState2(
-                self.vm_partition.partition,
-                vcpu_id as u32,
-                buffer.regs.as_ptr() as *mut c_void,
-                std::mem::size_of::<WhpxLapicState>() as u32,
+                self.vm_partition.partition, vcpu_id as u32,
+                buffer.regs.as_ptr() as *mut c_void, std::mem::size_of::<WhpxLapicState>() as u32,
             )
         })?;
         Ok(())

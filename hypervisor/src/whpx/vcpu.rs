@@ -488,6 +488,39 @@ impl WhpxVcpu {
         })
     }
 
+    /// Set per-vCPU APIC ID via WHvSetVirtualProcessorInterruptControllerState2.
+    /// QEMU's whpx_apic_put: whpx_lapic_state has fields[N].data at offset N*16.
+    /// Crosvm WhpxLapicState maps this as regs[N*4] (= offset N*16 bytes).
+    ///   APIC ID:   register 0x2 → regs[8]
+    ///   Version:   register 0x3 → regs[12]
+    ///   SVR:       register 0xF → regs[60]
+    pub fn set_apic_id(&self, apic_id: u32) -> Result<()> {
+        let mut state = [0u32; 1024];
+        // Read current state first (preserves WHPX-initialized values)
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorInterruptControllerState2(
+                self.vm_partition.partition, self.index,
+                state.as_mut_ptr() as *mut c_void, (state.len() * 4) as u32,
+                std::ptr::null_mut(),
+            )
+        })?;
+        // Set APIC ID in QEMU format: regs[register_index * 4]
+        state[0x2 * 4] = apic_id << 24;  // APIC ID register
+        state[0x3 * 4] = 0x00050014;     // APIC version 0x14, max LVT=5
+        state[0xF * 4] = 0x1FF;          // SVR: APIC enabled, spurious=0xFF
+        let ret = check_whpx!(unsafe {
+            WHvSetVirtualProcessorInterruptControllerState2(
+                self.vm_partition.partition, self.index,
+                state.as_ptr() as *const c_void, (state.len() * 4) as u32,
+            )
+        });
+        match ret {
+            Ok(()) => info!("whpx: vcpu={} APIC ID={}", self.index, apic_id),
+            Err(ref e) => info!("whpx: vcpu={} APIC ID set: {}", self.index, e),
+        }
+        ret
+    }
+
     /// Apply SIPI vector: set CS:IP so the vCPU starts at `vector << 12` in real mode.
     pub fn apply_sipi_vector(&self, vector: u32) -> Result<()> {
         let sipi_base = (vector as u64) << 12;
@@ -513,6 +546,48 @@ impl WhpxVcpu {
                 REGS.as_ptr(), 2, vals.as_ptr(),
             )
         })
+    }
+
+    /// QEMU's whpx_vcpu_kick_out_of_hlt: clear all suspend bits in Activity State.
+    /// WHPX puts AP vCPUs into StartupSuspend (bit 0, Wait-for-SIPI) or
+    /// HaltSuspend (bit 1) in X2Apic mode. Without clearing these, the vCPU
+    /// never executes instructions — appears as "stuck in PAUSE loop" (0 exits).
+    pub fn kick_out_of_halt(&self) -> Result<()> {
+        const REG: WHV_REGISTER_NAME = WHV_REGISTER_NAME_WHvRegisterInternalActivityState;
+        let mut val = WHV_REGISTER_VALUE::default();
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorRegisters(
+                self.vm_partition.partition, self.index, &REG, 1, &mut val,
+            )
+        })?;
+        let act = unsafe { val.InternalActivity.AsUINT64 };
+        if act != 0 {
+            // Clear ALL suspend bits: StartupSuspend(0), HaltSuspend(1), IdleSuspend(2)
+            unsafe {
+                val.InternalActivity.__bindgen_anon_1.set_StartupSuspend(0);
+                val.InternalActivity.__bindgen_anon_1.set_HaltSuspend(0);
+                val.InternalActivity.__bindgen_anon_1.set_IdleSuspend(0);
+            }
+            check_whpx!(unsafe {
+                WHvSetVirtualProcessorRegisters(
+                    self.vm_partition.partition, self.index, &REG, 1, &val,
+                )
+            })?;
+            info!("whpx: vcpu={} suspend bits cleared (was 0x{:x})", self.index, act);
+        }
+        Ok(())
+    }
+
+    /// Read Activity State register for INIT/SIPI diagnostics.
+    pub fn read_activity_state(&self) -> Result<u64> {
+        const REG: WHV_REGISTER_NAME = WHV_REGISTER_NAME_WHvRegisterInternalActivityState;
+        let mut val = WHV_REGISTER_VALUE::default();
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorRegisters(
+                self.vm_partition.partition, self.index, &REG, 1, &mut val,
+            )
+        })?;
+        Ok(unsafe { val.InternalActivity.AsUINT64 })
     }
 
     /// Read RIP + CS of this vCPU for SMP INIT/SIPI diagnostics.

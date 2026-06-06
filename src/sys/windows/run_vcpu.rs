@@ -232,8 +232,9 @@ impl VcpuRunThread {
                 })
                 .ok();
             whpx_vcpu.set_frequencies(tsc_freq, irq_chip.lapic_frequency());
-            // QEMU whpx_cpu_synchronize_post_reset: push complete register state
-            // + APIC_BASE MSR (with per-vCPU BSP/AP distinction) BEFORE first run.
+            let id = (whpx_vcpu as &dyn VcpuArch).id() as u32;
+            let _ = whpx_vcpu.set_apic_id(id);
+            // QEMU whpx_cpu_synchronize_post_reset: push complete register state + APIC_BASE.
             if let Err(e) = whpx_vcpu.qemu_push_reset_state() {
                 error!("whpx: qemu_push_reset_state failed: {}", e);
             }
@@ -747,6 +748,43 @@ fn vcpu_loop<V>(
 where
     V: VcpuArch + 'static,
 {
+    #[cfg(all(windows, feature = "whpx", target_arch = "x86_64"))]
+    {
+        if context.cpu_id > 0 {
+            // === MINIMAL EXPERIMENT: HaltSuspend → Running transition ===
+            // 1. Set CS:IP to reset vector (0xFFFF0000:FFF0)
+            // 2. Clear HaltSuspend
+            // 3. Run WHvRunVirtualProcessor
+            // 4. Check if RIP changes on first exit
+            // If RIP changes → HaltSuspend was the only blocker
+            // If RIP stays 0xFFF0 → another state prevents execution
+
+            let vcpu_arch: &dyn VcpuArch = &vcpu;
+            let whpx_vcpu = vcpu_arch.downcast_ref::<WhpxVcpu>().unwrap();
+
+            // Diagnostic BEFORE
+            let (rip_before, csb_before, _) = whpx_vcpu.read_initial_ip().unwrap_or((0,0,0));
+            let act_before = whpx_vcpu.read_activity_state().unwrap_or(0);
+            info!("whpx: vcpu={} BEFORE: RIP=0x{:x} CS.base=0x{:x} Activity=0x{:x}",
+                  context.cpu_id, rip_before, csb_before, act_before);
+
+            // Apply reset-vector (same as power-on)
+            let _ = whpx_vcpu.apply_sipi_vector(0xFFF0 >> 12); // Reset vector
+
+            // Clear HaltSuspend
+            match whpx_vcpu.kick_out_of_halt() {
+                Ok(()) => {}
+                Err(e) => info!("whpx: vcpu={} kick_out_of_halt failed: {}", context.cpu_id, e),
+            }
+
+            // Diagnostic AFTER
+            let (rip_after, csb_after, _) = whpx_vcpu.read_initial_ip().unwrap_or((0,0,0));
+            let act_after = whpx_vcpu.read_activity_state().unwrap_or(0);
+            info!("whpx: vcpu={} AFTER:  RIP=0x{:x} CS.base=0x{:x} Activity=0x{:x}",
+                  context.cpu_id, rip_after, csb_after, act_after);
+        }
+    }
+
     #[cfg(all(windows, feature = "whpx", target_arch = "x86_64"))]
     if context.cpu_id == 0 {
         use std::sync::atomic::AtomicBool;
