@@ -908,12 +908,67 @@ impl WhpxVcpu {
             return Err(Error::new(EINVAL));
         }
 
-        match id {
-            HV_X64_MSR_TSC_INVARIANT_CONTROL => {
-                // Do nothing — we assume TSC is always invariant.
+        // x2APIC ICR (MSR 0x830): decode INIT/SIPI and deliver via
+        // WHvRequestInterrupt by vCPU index (not APIC ID, which WHPX
+        // reports as 0 for all vCPUs).
+        const X2APIC_ICR: u32 = 0x830;
+        const APIC_DM_INIT: u64 = 5;
+        const APIC_DM_SIPI: u64 = 6;
+        const APIC_DEST_ALL_EXCL_SELF: u64 = 3;
+
+        if id == X2APIC_ICR {
+            let vector = (value & 0xFF) as u32;
+            let delivery_mode = (value >> 8) & 0x7;
+            let dest_shorthand = (value >> 18) & 0x3;
+            let dest_field = ((value >> 32) & 0xFFFFFFFF) as u32;
+
+            warn!("x2APIC ICR: vcpu={} mode={} shorthand={} dest={} vec={}",
+                self.index, delivery_mode, dest_shorthand, dest_field, vector);
+
+            if delivery_mode == APIC_DM_INIT || delivery_mode == APIC_DM_SIPI {
+                let interrupt_type = if delivery_mode == APIC_DM_INIT {
+                    WHV_INTERRUPT_TYPE_WHvX64InterruptTypeInit
+                } else {
+                    WHV_INTERRUPT_TYPE_WHvX64InterruptTypeSipi
+                };
+
+                let processor_count = self.vm_partition.processor_count;
+                let dests: Vec<u32> = if dest_shorthand == 0 {
+                    if dest_field < processor_count { vec![dest_field] } else { vec![] }
+                } else if dest_shorthand == APIC_DEST_ALL_EXCL_SELF {
+                    (0..processor_count).filter(|&i| i != self.index).collect()
+                } else {
+                    (0..processor_count).collect() // all including self
+                };
+
+                for &target_idx in &dests {
+                    let mut interrupt = WHV_INTERRUPT_CONTROL {
+                        Destination: target_idx,
+                        Vector: vector,
+                        ..Default::default()
+                    };
+                    interrupt.set_Type(interrupt_type as u64);
+                    interrupt.set_DestinationMode(
+                        WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical as u64,
+                    );
+                    let _ = check_whpx!(unsafe {
+                        WHvRequestInterrupt(
+                            self.vm_partition.partition,
+                            &interrupt as *const WHV_INTERRUPT_CONTROL,
+                            size_of::<WHV_INTERRUPT_CONTROL>() as u32,
+                        )
+                    });
+                    warn!("x2APIC {} to vcpu={}", if delivery_mode == APIC_DM_INIT {"INIT"} else {"SIPI"}, target_idx);
+                }
             }
-            _ => {
-                warn!("whpx: WRMSR 0x{:x} = 0x{:x} unsupported, ignoring", id, value);
+        } else {
+            match id {
+                HV_X64_MSR_TSC_INVARIANT_CONTROL => {
+                    // Do nothing — we assume TSC is always invariant.
+                }
+                _ => {
+                    warn!("whpx: WRMSR 0x{:x} = 0x{:x} unsupported, ignoring", id, value);
+                }
             }
         }
 
@@ -1245,10 +1300,9 @@ impl Vcpu for WhpxVcpu {
 
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
-        // Refresh GPA for cross-vCPU memory coherency (wakeup buffer,
-        // ExchangeInfo, firmware code). QEMU's WHPX SMP works with both
-        // vCPUs running from reset vector — WHPX's x2APIC INIT/SIPI
-        // delivery resets and redirects the AP internally.
+        // x2APIC WHPX mode: INIT/SIPI delivered correctly via MSR.
+        // Refresh GPA each iteration so the BSP sees the AP's readiness
+        // signal in ExchangeInfo, and the AP sees the wakeup buffer.
         if let Some(ref refresh) = self.gpa_refresh {
             refresh(0, 0x100000);
             refresh(0x800000, 0x200000);
