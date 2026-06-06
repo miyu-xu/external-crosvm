@@ -14,7 +14,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::Context;
-use base::error;
+use base::{error, info};
 use base::FromRawDescriptor;
 use base::IntoRawDescriptor;
 use base::Protection;
@@ -360,6 +360,7 @@ impl VirtioGpuScanout {
         if let Some(import_id) =
             VirtioGpuScanout::import_resource_to_display(display, surface_id, resource, rutabaga)
         {
+            base::info!("GpuFlush: flip_to surface={} import={}", surface_id, import_id);
             display
                 .borrow_mut()
                 .flip_to(surface_id, import_id, None, None, None)
@@ -371,6 +372,7 @@ impl VirtioGpuScanout {
         }
 
         // Import failed, fall back to a copy.
+        base::info!("GpuFlush: import failed, trying framebuffer copy for surface={}", surface_id);
         let mut display = display.borrow_mut();
 
         // Prevent overwriting a buffer that is currently being used by the compositor.
@@ -723,13 +725,15 @@ impl VirtioGpu {
 
     /// If the resource is the scanout resource, flush it to the display.
     pub fn flush_resource(&mut self, resource_id: u32) -> VirtioGpuResult {
+        info!("flush_resource: id={}", resource_id);
+        eprintln!("GPU-FRONTEND: flush_resource id={}", resource_id);
         if resource_id == 0 {
             return Ok(OkNoData);
         }
 
         #[cfg(windows)]
         match self.rutabaga.resource_flush(resource_id) {
-            Ok(_) => return Ok(OkNoData),
+            Ok(_) => {}, // Still need scanout flush for display output
             Err(RutabagaError::Unsupported) => {}
             Err(e) => return Err(ErrRutabaga(e)),
         }
@@ -1225,6 +1229,7 @@ impl VirtioGpu {
         scanout_data: Option<VirtioScanoutBlobData>,
         resource_id: u32,
     ) -> VirtioGpuResult {
+        eprintln!("GPU-FRONTEND: update_scanout_resource type={:?} scanout_id={} resource_id={}", scanout_type, scanout_id, resource_id);
         let scanout: &mut VirtioGpuScanout;
         let mut scanout_parent_surface_id = None;
 

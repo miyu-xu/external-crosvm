@@ -35,18 +35,18 @@ fn main() {
 
         // TODO(b:253039132) build sandbox prebuilts locally on windows from build.rs.
         let files = prebuilts::download_prebuilts("sandbox", version, &[SANDBOX_LIB]).unwrap();
-        println!(
-            r#"cargo:rustc-link-search={};{}"#,
-            std::env::var("PATH").unwrap(),
-            files
-                .get(0)
-                .unwrap()
-                .parent()
-                .unwrap()
-                .as_os_str()
-                .to_str()
-                .unwrap()
-        );
+        // Emit only the sandbox prebuilt library directory as a link-search
+        // path. Do NOT inject PATH into the linker's search path — it would
+        // blow up the command line on Windows hosts with long PATH values.
+        let lib_dir = files
+            .get(0)
+            .unwrap()
+            .parent()
+            .unwrap()
+            .as_os_str()
+            .to_str()
+            .unwrap();
+        println!("cargo:rustc-link-search={}", lib_dir);
         setup_windows_prebuilts();
     }
 }

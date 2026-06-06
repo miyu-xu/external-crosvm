@@ -335,6 +335,14 @@ impl GuiWindow {
             initial_window_size,
         )
         .context("When creating GuiWindow")?;
+
+        // Show the window immediately
+        unsafe {
+            use winapi::um::winuser::ShowWindow;
+            use winapi::um::winuser::SW_SHOW;
+            ShowWindow(hwnd, SW_SHOW);
+        }
+
         let window = Self {
             hwnd,
             scanout_id,

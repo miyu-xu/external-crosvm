@@ -9,6 +9,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 
+use base::warn;
+
 static USED_IDX_GPA: AtomicU64 = AtomicU64::new(0);
 static VCPU_TLB_FLUSH_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -19,6 +21,7 @@ static GPA_REFRESH: Mutex<Option<GpaRefreshFn>> = Mutex::new(None);
 /// Records the guest GPA of the virtio used-ring `idx` field (used_ring + 2).
 pub fn set_used_idx_gpa(gpa: u64) {
     if gpa != 0 {
+        warn!("whpx_ovmf: used.idx GPA = 0x{:016x}", gpa);
         USED_IDX_GPA.store(gpa, Ordering::Release);
     }
 }
@@ -38,6 +41,7 @@ pub fn refresh_gpa_range(gpa: u64, len: usize) {
     if gpa == 0 || len == 0 {
         return;
     }
+    warn!("whpx_ovmf: refresh_gpa gpa=0x{:x} len=0x{:x}", gpa, len);
     if let Some(f) = GPA_REFRESH.lock().unwrap().as_ref() {
         f(gpa, len);
     }

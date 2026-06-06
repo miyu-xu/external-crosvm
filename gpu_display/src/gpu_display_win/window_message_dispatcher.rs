@@ -23,8 +23,10 @@ use linux_input_sys::virtio_input_event;
 use vm_control::ServiceSendToGpu;
 use win_util::win32_wide_string;
 use winapi::shared::minwindef::LRESULT;
-use winapi::shared::windef::HWND;
+use winapi::shared::windef::{HDC, HWND};
+use winapi::um::wingdi::{SetDIBitsToDevice, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, BI_RGB};
 use winapi::um::winuser::DefWindowProcW;
+use winapi::um::winuser::GetDC;
 use winapi::um::winuser::GetForegroundWindow;
 use winapi::um::winuser::PostQuitMessage;
 use winapi::um::winuser::RemovePropW;
@@ -407,6 +409,15 @@ impl WindowMessageDispatcher {
                 surface_id,
                 mouse_mode,
             } => self.set_mouse_mode(surface_id, mouse_mode),
+            DisplaySendToWndProc::FlipFramebuffer {
+                surface_id,
+                pixels,
+                width,
+                height,
+            } => {
+                eprintln!("GPU-WNDPROC: handling FlipFramebuffer surface={} w={} h={} len={}", surface_id, width, height, pixels.len());
+                self.flip_framebuffer(surface_id, pixels, width, height);
+            }
         }
     }
 
@@ -518,6 +529,66 @@ impl WindowMessageDispatcher {
                 "Can't release surface {} because there is no window associated with it!",
                 surface_id
             ),
+        }
+    }
+
+    /// Handle FlipFramebuffer: copy pixel data to the window for 2D rendering.
+    fn flip_framebuffer(
+        &mut self,
+        surface_id: u32,
+        pixels: Vec<u8>,
+        width: u32,
+        height: u32,
+    ) {
+        eprintln!("GPU-WNDPROC: flip_framebuffer entry surface={}", surface_id);
+        // Find the window associated with this surface
+        let hwnd = match self
+            .in_use_gui_windows
+            .iter()
+            .find(|(_, processor)| processor.surface_id() == surface_id)
+        {
+            Some((hwnd, _)) => *hwnd,
+            None => {
+                error!("FlipFramebuffer: no window for surface {}", surface_id);
+                eprintln!("GPU-WNDPROC: flip_framebuffer FAILED - no window for surface {}", surface_id);
+                return;
+            }
+        };
+
+        eprintln!("GPU-WNDPROC: flip_framebuffer found hwnd={:?}, calling SetDIBitsToDevice", hwnd);
+
+        // Use GDI SetDIBitsToDevice to draw the pixel data
+        unsafe {
+            let hdc = GetDC(hwnd);
+            if hdc.is_null() {
+                error!("FlipFramebuffer: GetDC failed");
+                return;
+            }
+
+            let mut bmi = std::mem::zeroed::<BITMAPINFO>();
+            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            bmi.bmiHeader.biWidth = width as i32;
+            bmi.bmiHeader.biHeight = -(height as i32); // negative = top-down
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+
+            let result = SetDIBitsToDevice(
+                hdc,
+                0, 0,
+                width,
+                height,
+                0, 0,
+                0,
+                height,
+                pixels.as_ptr() as *const _,
+                &bmi,
+                DIB_RGB_COLORS,
+            );
+
+            if result == 0 {
+                error!("FlipFramebuffer: SetDIBitsToDevice failed");
+            }
         }
     }
 

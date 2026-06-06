@@ -629,13 +629,21 @@ fn create_virtio_devices(
     }
 
     #[cfg(feature = "gpu")]
-    let mut wndproc_thread = cfg
-        .window_procedure_thread_split_config
-        .as_mut()
-        .and_then(|cfg| cfg.wndproc_thread_builder.take())
-        .map(WindowProcedureThreadBuilder::start_thread)
-        .transpose()
-        .context("Failed to start the window procedure thread.")?;
+    let mut wndproc_thread = {
+        let has_builder = cfg
+            .window_procedure_thread_split_config
+            .as_ref()
+            .and_then(|cfg| cfg.wndproc_thread_builder.as_ref())
+            .is_some();
+        base::info!("WndProc: has_builder={} has_backend={}", has_builder, cfg.gpu_backend_config.is_some());
+        cfg
+            .window_procedure_thread_split_config
+            .as_mut()
+            .and_then(|cfg| cfg.wndproc_thread_builder.take())
+            .map(WindowProcedureThreadBuilder::start_thread)
+            .transpose()
+            .context("Failed to start the window procedure thread.")?
+    };
 
     #[cfg(feature = "gpu")]
     if let Some(gpu_vmm_config) = cfg.gpu_vmm_config.take() {
@@ -748,7 +756,19 @@ fn create_virtio_gpu_device(
             .ok_or_else(|| anyhow!("Window procedure thread is missing."))?;
 
         std::thread::spawn(move || {
-            run_gpu_device_worker(backend_config, event_devices, wndproc_thread)
+            eprintln!("GPU-WORKER: thread started, entering run_gpu_device_worker");
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_gpu_device_worker(backend_config, event_devices, wndproc_thread)
+            })) {
+                Ok(Ok(())) => eprintln!("GPU-WORKER: run_gpu_device_worker returned Ok"),
+                Ok(Err(e)) => eprintln!("GPU-WORKER: run_gpu_device_worker ERROR: {:#}", e),
+                Err(panic) => {
+                    let msg = panic.downcast_ref::<String>().map(|s| s.as_str())
+                        .or_else(|| panic.downcast_ref::<&str>().copied())
+                        .unwrap_or("<unknown panic>");
+                    eprintln!("GPU-WORKER: PANICKED: {}", msg);
+                }
+            }
         });
     }
 

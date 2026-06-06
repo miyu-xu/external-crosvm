@@ -219,7 +219,7 @@ impl VcpuRunThread {
 
     /// Perform WHPX-specific vcpu configurations
     #[cfg(feature = "whpx")]
-    fn whpx_configure_vcpu(vcpu: &mut dyn VcpuArch, irq_chip: &mut dyn IrqChipArch) {
+    fn whpx_configure_vcpu(vcpu: &mut dyn VcpuArch, irq_chip: &mut dyn IrqChipArch, cpu_id: usize) {
         // only apply to actual WhpxVcpu instances
         if let Some(whpx_vcpu) = vcpu.downcast_mut::<WhpxVcpu>() {
             // WhpxVcpu instances need to know the TSC and Lapic frequencies to handle Hyper-V MSR
@@ -234,6 +234,15 @@ impl VcpuRunThread {
                 })
                 .ok();
             whpx_vcpu.set_frequencies(tsc_freq, irq_chip.lapic_frequency());
+
+            // AP vCPUs: clear the reset-vector register state that
+            // configure_vcpu() set (RIP=0xFFF0, CS.base=0xFFFF0000).
+            // WHPX caches this as the vCPU's initial state for the first
+            // WHvRunVirtualProcessor call and ignores later WHvSetVirtualProcessorRegisters.
+            // The SIPI handler will set the correct CS:IP when it delivers SIPI.
+            if cpu_id > 0 {
+                whpx_vcpu.clear_reset_vector_state();
+            }
         }
     }
 
@@ -306,7 +315,7 @@ impl VcpuRunThread {
         .exit_context(Exit::ConfigureVcpu, "failed to configure vcpu")?;
 
         #[cfg(feature = "whpx")]
-        Self::whpx_configure_vcpu(&mut vcpu, irq_chip);
+        Self::whpx_configure_vcpu(&mut vcpu, irq_chip, cpu_id);
 
         let mut thread_priority_handle = None;
         if run_rt {
@@ -925,6 +934,11 @@ where
                 }
                 Ok(VcpuExit::Mmio) => {
                     let _trace_event = trace_event!(crosvm, "VcpuExit::Mmio");
+                    static MMIO_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                    let n = MMIO_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if n < 5 || n % 500 == 0 {
+                        info!("MMIO-EXIT #{}", n);
+                    }
                     #[cfg(all(feature = "whpx", target_arch = "x86_64"))]
                     let intr_state = {
                         let vcpu_arch: &mut dyn VcpuArch = &mut vcpu;
@@ -976,7 +990,14 @@ where
                                         "failed to handle ioevent for mmio write to {} on vcpu {}: {}",
                                         address, context.cpu_id, e
                                     ));
-                                if !mmio_bus.write(address, data) {
+                                // Log first ~20 MMIO writes to understand BAR addresses
+                                static MMIO_WRITE_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                                let count = MMIO_WRITE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if count < 20 || count % 1000 == 0 {
+                                    info!("MMIO-WRITE #{}: addr=0x{:x} size={} data={:02x?}", count, address, size, &data[..size.min(8)]);
+                                }
+                                let bus_write_ok = mmio_bus.write(address, data);
+                                if !bus_write_ok {
                                     info!(
                                         "mmio write failed: {:x}; trying memory write..",
                                         address

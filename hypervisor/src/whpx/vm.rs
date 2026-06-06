@@ -54,6 +54,7 @@ use crate::DestinationMode;
 use crate::DeviceKind;
 use crate::IoEventAddress;
 use crate::LapicState;
+use crate::MPState;
 use crate::MemCacheType;
 use crate::MemSlot;
 use crate::TriggerMode;
@@ -81,6 +82,9 @@ pub struct WhpxVm {
     ioevents: FnvHashMap<IoEventAddress, Event>,
     // Tube to send events to control.
     vm_evt_wrtube: Option<SendTube>,
+    /// Shared MP-state handles for all vCPUs, indexed by vCPU index.
+    /// Pre-allocated in WhpxVm::new() and passed to each WhpxVcpu.
+    vp_states: Vec<VpState>,
 }
 
 impl WhpxVm {
@@ -236,6 +240,19 @@ impl WhpxVm {
             .map_err(WhpxError::MapGpaRange)?;
         }
 
+        // Pre-allocate shared MP-state handles for SMP boot.
+        // BSP (index 0) starts as Runnable; APs start as Uninitialized and
+        // block in wait_until_runnable() until the BSP delivers INIT+SIPI.
+        // Note: VpState uses std::sync::Mutex (not the crosvm sync::Mutex).
+        let vp_states: Vec<VpState> = (0..cpu_count)
+            .map(|_| {
+                Arc::new((
+                    std::sync::Mutex::new(MPState::Uninitialized),
+                    std::sync::Condvar::new(),
+                ))
+            })
+            .collect();
+
         Ok(WhpxVm {
             whpx: whpx.clone(),
             vm_partition: partition,
@@ -244,6 +261,7 @@ impl WhpxVm {
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
             ioevents: FnvHashMap::default(),
             vm_evt_wrtube,
+            vp_states,
         })
     }
 
@@ -569,6 +587,7 @@ impl Vm for WhpxVm {
                 .vm_evt_wrtube
                 .as_ref()
                 .map(|t| t.try_clone().expect("could not clone vm_evt_wrtube")),
+            vp_states: self.vp_states.clone(),
         })
     }
 
@@ -835,10 +854,45 @@ impl VmX86_64 for WhpxVm {
     }
 
     fn create_vcpu(&self, id: usize) -> Result<Box<dyn VcpuX86_64>> {
-        Ok(Box::new(WhpxVcpu::new(
+        let vp_state = self.vp_states[id].clone();
+        let mut vcpu = WhpxVcpu::new(
             self.vm_partition.clone(),
             id.try_into().unwrap(),
-        )?))
+            vp_state,
+            self.vp_states.clone(),
+        )?;
+
+        // Wire up GPA refresh so the INIT/SIPI handler can flush TLB
+        // entries for the wakeup buffer (0x0..0x100000) before starting
+        // an AP. Without this the AP may read stale zeroes and crash.
+        let partition = self.vm_partition.clone();
+        let guest_mem = self.guest_mem.clone();
+        vcpu.set_gpa_refresh(Arc::new(move |gpa, len| {
+            let ps = pagesize();
+            let sync_start = gpa & !(ps as u64 - 1);
+            let sync_end = ((gpa + len as u64 + ps as u64 - 1) & !(ps as u64 - 1)).min(gpa + 0x100000);
+            if sync_end <= sync_start {
+                return;
+            }
+            let sync_len = sync_end - sync_start;
+            for region in guest_mem.regions() {
+                let slot_start = region.guest_addr.offset();
+                let slot_end = slot_start + region.size as u64;
+                if sync_start >= slot_start && sync_end <= slot_end {
+                    let offset_in_slot = (sync_start - slot_start) as usize;
+                    let host_ptr = (region.host_addr + offset_in_slot) as *mut u8;
+                    unsafe {
+                        let _ = super::vm::set_user_memory_region(
+                            &partition,
+                            false, false, sync_start, sync_len, host_ptr,
+                        );
+                    }
+                    break;
+                }
+            }
+        }));
+
+        Ok(Box::new(vcpu))
     }
 
     /// Sets the address of the three-page region in the VM's address space.

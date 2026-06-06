@@ -892,7 +892,7 @@ impl GpuResponse {
             GpuResponse::OkEdid(ref edid_bytes) => {
                 let mut edid_resp = virtio_gpu_resp_get_edid {
                     hdr,
-                    size: Le32::from(1024),
+                    size: Le32::from(edid_bytes.len() as u32),
                     padding: Le32::from(0),
                     edid: [0; 1024],
                 };

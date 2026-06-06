@@ -115,6 +115,12 @@ pub enum DisplaySendToWndProc {
         surface_id: u32,
         mouse_mode: MouseMode,
     },
+    FlipFramebuffer {
+        surface_id: u32,
+        pixels: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
 }
 
 /// This struct wraps a `GuiWindow` that is currently not associated with any `Surface`.

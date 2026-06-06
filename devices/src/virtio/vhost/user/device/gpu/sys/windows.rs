@@ -275,6 +275,8 @@ pub fn run_gpu_device_worker(
     event_devices: Vec<EventDevice>,
     wndproc_thread: WindowProcedureThread,
 ) -> anyhow::Result<()> {
+    eprintln!("GPU-WORKER: run_gpu_device_worker entry");
+
     let vhost_user_tube = config
         .device_vhost_user_tube
         .expect("vhost-user gpu tube must be set");
@@ -324,6 +326,7 @@ pub fn run_gpu_device_worker(
     let handler = DeviceRequestHandler::new(backend);
 
     info!("vhost-user gpu device ready, starting run loop...");
+    eprintln!("GPU-WORKER: vhost-user gpu ready, entering run_handler");
 
     // Run until the backend is finished.
     if let Err(e) = ex.run_until(run_handler(
@@ -332,6 +335,7 @@ pub fn run_gpu_device_worker(
         config.exit_event,
         &ex,
     )) {
+        eprintln!("GPU-WORKER: run_handler ERROR: {}", e);
         bail!("error occurred: {}", e);
     }
 

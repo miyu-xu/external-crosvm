@@ -37,6 +37,12 @@ impl From<AsyncError> for io::Error {
     }
 }
 
+impl From<std::io::Error> for AsyncError {
+    fn from(e: std::io::Error) -> Self {
+        AsyncError::Io(e)
+    }
+}
+
 /// Marker trait signifying that the implementor is suitable for use with
 /// cros_async. Examples of this include File, and base::net::UnixSeqpacket.
 ///

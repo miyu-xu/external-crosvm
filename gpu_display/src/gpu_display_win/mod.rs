@@ -50,11 +50,13 @@ pub use window_procedure_thread::WindowProcedureThreadBuilder;
 use crate::gpu_display_win::window::BasicWindow;
 #[cfg(feature = "vulkan_display")]
 use crate::vulkan::VulkanDisplay;
+use base::VolatileSlice;
 use crate::DisplayExternalResourceImport;
 use crate::DisplayT;
 use crate::EventDevice;
 use crate::FlipToExtraInfo;
 use crate::GpuDisplayError;
+use crate::GpuDisplayFramebuffer;
 use crate::GpuDisplayResult;
 use crate::GpuDisplaySurface;
 use crate::MouseMode;
@@ -284,6 +286,7 @@ impl DisplayT for DisplayWin {
         display_params: &DisplayParameters,
         surface_type: SurfaceType,
     ) -> GpuDisplayResult<Box<dyn GpuDisplaySurface>> {
+        info!("create_surface: id={} scanout={:?} type={:?}", surface_id, scanout_id, surface_type);
         if parent_surface_id.is_some() {
             return Err(GpuDisplayError::Unsupported);
         }
@@ -321,6 +324,25 @@ impl DisplayT for DisplayWin {
             }
         }
 
+        let (fb_width, fb_height) = display_params.get_virtual_display_size();
+        let fb_bytes_per_pixel = 4u32;
+        let fb_stride = fb_width * fb_bytes_per_pixel;
+        let fb_size = (fb_stride * fb_height) as usize;
+
+        // TEST: immediately fill the window with a red color to verify display pipeline
+        let test_pixels: Vec<u8> = (0..fb_size).map(|i| {
+            if i % 4 == 2 { 0xFF } else if i % 4 == 0 { 0x80 } else { 0 } // BGRA: blue tint
+        }).collect();
+        let _ = self.wndproc_thread.post_display_command(
+            DisplaySendToWndProc::FlipFramebuffer {
+                surface_id,
+                pixels: test_pixels,
+                width: fb_width,
+                height: fb_height,
+            },
+        );
+        info!("SurfaceWin: posted initial FlipFramebuffer for surface {}", surface_id);
+
         Ok(Box::new(SurfaceWin {
             surface_id,
             wndproc_thread: Rc::downgrade(&self.wndproc_thread),
@@ -329,6 +351,11 @@ impl DisplayT for DisplayWin {
                 GpuDisplayError::Allocate
             })?,
             vulkan_display,
+            framebuffer_data: vec![0u8; fb_size],
+            framebuffer_width: fb_width,
+            framebuffer_height: fb_height,
+            framebuffer_stride: fb_stride,
+            framebuffer_bytes_per_pixel: fb_bytes_per_pixel,
         }))
     }
 
@@ -426,9 +453,54 @@ pub(crate) struct SurfaceWin {
     close_requested_event: Event,
     #[allow(dead_code)]
     vulkan_display: Arc<Mutex<VulkanDisplayWrapper>>,
+    /// Framebuffer for 2D rendering fallback.
+    framebuffer_data: Vec<u8>,
+    /// Dimensions for the framebuffer.
+    framebuffer_width: u32,
+    framebuffer_height: u32,
+    framebuffer_stride: u32,
+    framebuffer_bytes_per_pixel: u32,
 }
 
 impl GpuDisplaySurface for SurfaceWin {
+    fn framebuffer(&mut self) -> Option<GpuDisplayFramebuffer> {
+        let bytes_per_pixel = self.framebuffer_bytes_per_pixel;
+        let stride = self.framebuffer_stride;
+        let fb = GpuDisplayFramebuffer::new(
+            VolatileSlice::new(
+                // SAFETY: framebuffer_data owns the memory and will not be dropped
+                // while this framebuffer is in use.
+                unsafe {
+                    std::slice::from_raw_parts_mut(
+                        self.framebuffer_data.as_mut_ptr(),
+                        self.framebuffer_data.len(),
+                    )
+                },
+            ),
+            stride,
+            bytes_per_pixel,
+        );
+        Some(fb)
+    }
+
+    fn flip(&mut self) {
+        if let Some(wndproc_thread) = self.wndproc_thread.upgrade() {
+            let fb_data = std::mem::take(&mut self.framebuffer_data);
+            // Re-allocate for next frame
+            let fb_size = (self.framebuffer_stride * self.framebuffer_height) as usize;
+            self.framebuffer_data = vec![0u8; fb_size];
+
+            let _ = wndproc_thread.post_display_command(
+                DisplaySendToWndProc::FlipFramebuffer {
+                    surface_id: self.surface_id,
+                    pixels: fb_data,
+                    width: self.framebuffer_width,
+                    height: self.framebuffer_height,
+                },
+            );
+        }
+    }
+
     /// The entire VM will be shut down when this function returns true. We don't want that happen
     /// until we know our display is expected to be closed.
     fn close_requested(&self) -> bool {

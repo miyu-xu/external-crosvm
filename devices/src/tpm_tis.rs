@@ -2,15 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::collections::BTreeMap;
+
 use acpi_tables::aml;
 use acpi_tables::aml::Aml;
-use base::warn;
+use base::{info, warn};
 
 use crate::pci::CrosvmDeviceId;
 use crate::BusAccessInfo;
 use crate::BusDevice;
 use crate::DeviceId;
 use crate::Suspendable;
+
+/// Maximum NV index value (TPM spec limit).
+const MAX_NV_INDEX: u32 = 0x01FF_FFFF;
+/// Maximum data size per NV space.
+const MAX_NV_DATA_SIZE: usize = 2048;
 
 /// TPM TIS (TPM Interface Specification) MMIO device.
 ///
@@ -63,11 +70,37 @@ const TPM2_CC_GET_RANDOM: u32 = 0x0000_017B;
 /// TPM 1.2 command codes (needed for initial probe before TPM_CHIP_FLAG_TPM2 is set).
 const TPM12_CC_GET_CAPABILITY: u32 = 0x0000_0065;
 
+/// TPM 2.0 command codes — NVRAM and other commonly probed commands.
+const TPM2_CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
+const TPM2_CC_NV_READ: u32 = 0x0000_014E;
+const TPM2_CC_NV_WRITE: u32 = 0x0000_0137;
+const TPM2_CC_NV_DEFINE_SPACE: u32 = 0x0000_012A;
+const TPM2_CC_NV_UNDEFINE_SPACE: u32 = 0x0000_0122;
+const TPM2_CC_NV_WRITE_LOCK: u32 = 0x0000_0138;
+const TPM2_CC_HIERARCHY_CONTROL: u32 = 0x0000_0121;
+const TPM2_CC_CREATE_PRIMARY: u32 = 0x0000_0131;
+const TPM2_CC_EVICT_CONTROL: u32 = 0x0000_0120;
+const TPM2_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
+const TPM2_CC_CONTEXT_LOAD: u32 = 0x0000_0161;
+const TPM2_CC_PCR_READ: u32 = 0x0000_017E;
+const TPM2_CC_PCR_EXTEND: u32 = 0x0000_0182;
+const TPM2_CC_HMAC_START: u32 = 0x0000_0155;
+const TPM2_CC_HMAC: u32 = 0x0000_0152;
+const TPM2_CC_SEQUENCE_UPDATE: u32 = 0x0000_015C;
+const TPM2_CC_SEQUENCE_COMPLETE: u32 = 0x0000_013E;
+const TPM2_CC_CLEAR: u32 = 0x0000_0126;
+const TPM2_CC_CLEAR_CONTROL: u32 = 0x0000_0119;
+const TPM2_CC_SHUTDOWN: u32 = 0x0000_0145;
+const TPM2_CC_STIR_RANDOM: u32 = 0x0000_0146;
+
 /// TPM 2.0 response codes.
 const TPM_RC_SUCCESS: u32 = 0x000;
 const TPM_RC_COMMAND_CODE: u32 = 0x08F;
 const TPM_RC_VALUE: u32 = 0x084;
 const TPM_RC_INITIALIZE: u32 = 0x100;
+const TPM_RC_HANDLE: u32 = 0x08B;
+const TPM_RC_NV_UNINITIALIZED: u32 = 0x14A;
+const TPM_RC_NV_LOCKED: u32 = 0x148;
 
 /// TPM 2.0 tags.
 const TPM_ST_NO_SESSIONS: u16 = 0x8001;
@@ -97,17 +130,33 @@ pub trait TpmBackend: Send {
     fn execute_command(&mut self, command: &[u8]) -> Vec<u8>;
 }
 
-/// Minimal TPM 2.0 backend that handles kernel probe commands.
+/// Per-NV-space metadata.
+#[derive(Clone, Debug)]
+struct NvSpace {
+    data: Vec<u8>,
+    public_info: Vec<u8>, // TPMS_NV_PUBLIC serialized
+    written: bool,
+    write_locked: bool,
+}
+
+/// Minimal TPM 2.0 backend with in-memory NV storage.
 ///
-/// Handles:
-/// - TPM2_Startup(SU_CLEAR)
-/// - TPM2_SelfTest(fullTest=YES)
-/// - TPM2_GetCapability(family/level/rev/manufacturer)
+/// Handles kernel probe + enough TPM commands for ChromeOS lockbox-cache
+/// and encstateful to function. NV spaces are stored in a BTreeMap.
 ///
-/// All other commands return TPM_RC_COMMAND_CODE.
+/// Supported command families:
+/// - Startup / SelfTest / GetCapability / GetRandom (probe)
+/// - NV_ReadPublic / NV_Read / NV_Write / NV_DefineSpace / NV_UndefineSpace / NV_WriteLock
+/// - HierarchyControl / CreatePrimary / EvictControl / FlushContext / ContextLoad
+/// - PCR_Read / PCR_Extend
+/// - HMAC_Start / HMAC / SequenceUpdate / SequenceComplete
+///
+/// All other commands return a success response with empty data.
 pub struct MinimalTpm {
     started: bool,
     tested: bool,
+    /// In-memory NV storage: index → NV space data.
+    nv_spaces: BTreeMap<u32, NvSpace>,
 }
 
 impl MinimalTpm {
@@ -115,6 +164,66 @@ impl MinimalTpm {
         MinimalTpm {
             started: false,
             tested: false,
+            nv_spaces: BTreeMap::new(),
+        }
+    }
+
+    /// Build a TPMS_NV_PUBLIC structure for a given NV index.
+    /// Format (TPM 2.0 spec Part 2, Table 99):
+    ///   TPMS_NV_PUBLIC:
+    ///     nvIndex: TPMI_RH_NV_INDEX (4 bytes)
+    ///     nameAlg: TPMI_ALG_HASH (2 bytes) = TPM_ALG_SHA256 (0x000B)
+    ///     attributes: TPMA_NV (4 bytes) = TPMA_NV_AUTHWRITE | TPMA_NV_AUTHREAD | TPMA_NV_ORDERLY
+    ///     authPolicy: TPM2B_DIGEST (2 bytes size + 0 bytes data)
+    ///     dataSize: UINT16 (2 bytes)
+    fn build_nv_public(index: u32, data_size: u16, attributes: u32) -> Vec<u8> {
+        let mut out = Vec::with_capacity(14);
+        out.extend_from_slice(&index.to_be_bytes());          // nvIndex
+        out.extend_from_slice(&0x000Bu16.to_be_bytes());      // nameAlg = SHA256
+        out.extend_from_slice(&attributes.to_be_bytes());     // attributes
+        out.extend_from_slice(&0x0000u16.to_be_bytes());      // authPolicy size = 0
+        out.extend_from_slice(&data_size.to_be_bytes());      // dataSize
+        out
+    }
+
+    /// NV attributes: owner write + owner read + orderly (no auth required for simplicity).
+    const NV_ATTR_OWNERWRITE: u32 = 0x0000_0200;
+    const NV_ATTR_OWNERREAD: u32 = 0x0004_0000;
+    const NV_ATTR_ORDERLY: u32 = 0x8000_0000;
+    const NV_ATTR_DEFAULT: u32 = Self::NV_ATTR_OWNERWRITE | Self::NV_ATTR_OWNERREAD | Self::NV_ATTR_ORDERLY;
+
+    /// Create a TPMS_NV_PUBLIC for a generic NV space of the given size.
+    fn nv_public_for(&self, index: u32, size: u16) -> Vec<u8> {
+        Self::build_nv_public(index, size, Self::NV_ATTR_DEFAULT)
+    }
+
+    /// Parse the NV index from a command buffer by scanning for valid NV handle values.
+    /// Returns the normalized NV index (low 24 bits, without handle type prefix).
+    fn parse_nv_handle(command: &[u8]) -> u32 {
+        // Scan backwards from byte 14 for an NV handle (0x01xxxxxx or low 0x00xxxxxx above 0x100000)
+        for off in (14..command.len().saturating_sub(3)).rev() {
+            let candidate = u32::from_be_bytes([command[off], command[off+1], command[off+2], command[off+3]]);
+            let handle_type = (candidate >> 24) as u8;
+            if handle_type == 0x01 || (handle_type == 0x00 && candidate > 0x0010_0000 && candidate < 0x0100_0000) {
+                return candidate & 0x00FF_FFFF; // Normalize: strip handle type prefix
+            }
+        }
+        0
+    }
+
+    /// Find where the NV write data starts in the command buffer.
+    /// For NV_Write: header(10) + handle(4) + auth(variable) + nvIndex(4) + offset(2) + data
+    fn find_nv_data_start(command: &[u8]) -> usize {
+        // Auth area is typically ~13 bytes for simple password auth
+        // header(10) + handle(4) + auth(~13) + nvIndex(4) + dataOffset(2) = ~33
+        // But this varies. Look for data after the second 4-byte zero region (offset field is 2 bytes)
+        // Conservative: start data at offset 34
+        let start = 34usize;
+        if start + 2 <= command.len() {
+            // Verify: bytes at start-2 and start-1 should be the offset field (2 bytes, typically 0)
+            start
+        } else {
+            command.len()
         }
     }
 }
@@ -126,6 +235,8 @@ impl TpmBackend for MinimalTpm {
         }
 
         let cc = u32::from_be_bytes([command[6], command[7], command[8], command[9]]);
+        // Log every command for debugging
+        base::info!("TPM cmd: 0x{:08x} len={}", cc, command.len());
 
         match cc {
             TPM12_CC_GET_CAPABILITY => {
@@ -211,11 +322,11 @@ impl TpmBackend for MinimalTpm {
                             )
                         }
                         TPM_PT_TOTAL_COMMANDS => {
-                            // Return small number to limit probe loop iterations.
-                            // The kernel uses this to iterate over all supported
-                            // commands — returning a large number creates many
-                            // transmit cycles.
-                            make_tpm_capability_response(prop, &4u32.to_be_bytes())
+                            // Return 0 — tells kernel there are no command
+                            // attributes to enumerate. Prevents kernel from
+                            // entering a retry loop querying TPM_CAP_COMMANDS
+                            // which our minimal backend doesn't support.
+                            make_tpm_capability_response(prop, &0u32.to_be_bytes())
                         }
                         // Unknown fixed property — return 0 (most TPM properties
                         // default to 0). This is better than an error for the probe.
@@ -225,10 +336,231 @@ impl TpmBackend for MinimalTpm {
                     _ => make_tpm_capability_simple(cap, &[]),
                 }
             }
+            // ── NV operations ────────────────────────────────────────
+            TPM2_CC_NV_READ_PUBLIC => {
+                // Parse NV index from command handle area (bytes 10-13)
+                let nv_index = Self::parse_nv_handle(command);
+                match self.nv_spaces.get(&nv_index) {
+                    Some(space) => {
+                        // Return TPMS_NV_PUBLIC + TPM2B_NAME
+                        let mut data = space.public_info.clone();
+                        // Empty name (size=0, no digest)
+                        data.extend_from_slice(&0u16.to_be_bytes());
+                        make_tpm_response(&data)
+                    }
+                    None => make_tpm_error(TPM_RC_NV_UNINITIALIZED),
+                }
+            }
+            TPM2_CC_NV_READ => {
+                // Parse: handle(4) + auth(?) + nvIndex(4) + offset(2) + size(2)
+                let nv_index = Self::parse_nv_handle(command);
+                match self.nv_spaces.get(&nv_index) {
+                    Some(space) => {
+                        // Return data (even if space hasn't been written yet).
+                        // Returning error for unwritten spaces causes infinite retry.
+                        let mut resp = Vec::new();
+                        if space.written {
+                            resp.extend_from_slice(&(space.data.len() as u16).to_be_bytes());
+                            resp.extend_from_slice(&space.data);
+                        } else {
+                            resp.extend_from_slice(&0u16.to_be_bytes()); // empty data
+                        }
+                        make_tpm_response(&resp)
+                    }
+                    None => make_tpm_error(TPM_RC_NV_UNINITIALIZED),
+                }
+            }
+            TPM2_CC_NV_WRITE => {
+                // Parse: handle(4) + auth(?) + nvIndex(4) + offset(2) + data
+                let nv_index = Self::parse_nv_handle(command);
+                // Extract the data portion (after offset field)
+                // Command layout: tag(2) size(4) cc(4) handle(4) auth_block(variable) + nvIndex(4) + offset(2) + data
+                // Simplified: look for data after byte 18+ (auth may vary)
+                let data_start = Self::find_nv_data_start(command);
+                match self.nv_spaces.get_mut(&nv_index) {
+                    Some(space) => {
+                        if space.write_locked {
+                            return make_tpm_error(TPM_RC_NV_LOCKED);
+                        }
+                        if data_start < command.len() {
+                            let nv_data = &command[data_start..];
+                            let max_size = space.data.len();
+                            let write_len = nv_data.len().min(max_size);
+                            space.data[..write_len].copy_from_slice(&nv_data[..write_len]);
+                            space.written = true;
+                        }
+                        make_tpm_response(&[])
+                    }
+                    None => make_tpm_error(TPM_RC_NV_UNINITIALIZED),
+                }
+            }
+            TPM2_CC_NV_DEFINE_SPACE => {
+                // Dump command bytes for debugging
+                if cfg!(debug_assertions) {
+                    let hex: Vec<String> = command.iter().map(|b| format!("{:02x}", b)).collect();
+                    warn!("NV_DefineSpace cmd: {}", hex.join(" "));
+                }
+                // The NV_DefineSpace command structure depends on the auth session type.
+                // Rather than parse the exact auth block layout, scan for the TPM2B_NV_PUBLIC
+                // which contains an NV index matching 0x01xxxxxx pattern.
+                // Search for the NV index (0x008xxxxx for encstateful) after byte 14.
+                if command.len() < 30 {
+                    return make_tpm_error(TPM_RC_COMMAND_CODE);
+                }
+                let mut nv_index = 0u32;
+                let mut nv_offset = 0usize;
+                // NV indices can be encoded as 0x01xxxxxx or 0x00xxxxxx.
+                // Also look for raw NV index values (0x00800000-0x01FFFFFF range).
+                for off in (14..command.len()-4).rev() {
+                    let candidate = u32::from_be_bytes([command[off], command[off+1], command[off+2], command[off+3]]);
+                    let handle_type = (candidate >> 24) as u8;
+                    if handle_type == 0x01 || (handle_type == 0x00 && candidate > 0x0010_0000) {
+                        nv_index = candidate & 0x00FF_FFFF; // Normalize: strip handle type prefix
+                        nv_offset = off;
+                        break;
+                    }
+                }
+                if nv_index == 0 || nv_offset < 14 {
+                    return make_tpm_error(TPM_RC_COMMAND_CODE);
+                }
+                // Data size (UINT16) is 2 bytes before the NV index in TPMS_NV_PUBLIC...
+                // No, it's after nvIndex(4) + nameAlg(2) + attributes(4) + authPolicy(variable)
+                // Simpler: look for dataSize right after the authPolicy field
+                // Or just set a reasonable default
+                let mut data_size: u16 = 32;
+                let mut attributes: u32 = Self::NV_ATTR_DEFAULT;
+                // Try to extract attributes (4 bytes after nvIndex+nameAlg = 6 bytes after nv_index start)
+                if nv_offset + 12 <= command.len() {
+                    attributes = u32::from_be_bytes([command[nv_offset+6], command[nv_offset+7], command[nv_offset+8], command[nv_offset+9]]);
+                    let auth_policy_sz = u16::from_be_bytes([command[nv_offset+10], command[nv_offset+11]]) as usize;
+                    let ds_off = nv_offset + 12 + auth_policy_sz;
+                    if ds_off + 2 <= command.len() {
+                        data_size = u16::from_be_bytes([command[ds_off], command[ds_off+1]]);
+                    }
+                }
+
+                if data_size as usize > MAX_NV_DATA_SIZE {
+                    data_size = MAX_NV_DATA_SIZE as u16;
+                }
+                if self.nv_spaces.contains_key(&nv_index) {
+                    return make_tpm_error(TPM_RC_NV_UNINITIALIZED);
+                }
+
+                let public_info = Self::build_nv_public(nv_index, data_size, attributes);
+                self.nv_spaces.insert(nv_index, NvSpace {
+                    data: vec![0u8; data_size as usize],
+                    public_info,
+                    written: false,
+                    write_locked: false,
+                });
+                make_tpm_response(&[])
+            }
+            TPM2_CC_NV_UNDEFINE_SPACE => {
+                let nv_index = Self::parse_nv_handle(command);
+                self.nv_spaces.remove(&nv_index);
+                make_tpm_response(&[])
+            }
+            TPM2_CC_NV_WRITE_LOCK => {
+                let nv_index = Self::parse_nv_handle(command);
+                match self.nv_spaces.get_mut(&nv_index) {
+                    Some(space) => {
+                        space.write_locked = true;
+                        make_tpm_response(&[])
+                    }
+                    None => make_tpm_error(TPM_RC_NV_UNINITIALIZED),
+                }
+            }
+
+            // ── Hierarchy & object management ────────────────────────
+            TPM2_CC_HIERARCHY_CONTROL => {
+                // Allow enabling/disabling TPM hierarchies
+                make_tpm_response(&[])
+            }
+            TPM2_CC_CREATE_PRIMARY => {
+                // Return a dummy persistent key handle
+                // The response contains: handle(4) + outPublic(variable) + creationData + creationHash + creationTicket
+                // Minimal: return handle 0x80000000 (first transient) and minimal public area
+                let handle: u32 = 0x8000_0000;
+                let mut resp = Vec::new();
+                resp.extend_from_slice(&handle.to_be_bytes());
+                // Minimal TPM2B_PUBLIC: size(2) + TPMA_OBJECT + algorithm info
+                // Just return empty public key area
+                resp.extend_from_slice(&0x0000u16.to_be_bytes()); // empty public
+                // creationData (empty)
+                resp.extend_from_slice(&0x0000u16.to_be_bytes());
+                // creationHash (SHA256 dummy)
+                resp.extend_from_slice(&0x0020u16.to_be_bytes()); // size = 32
+                resp.extend_from_slice(&[0u8; 32]);
+                // creationTicket: tag(2) + hierarchy(4) + digest(32)
+                resp.extend_from_slice(&0x8020u16.to_be_bytes()); // TPM_ST_CREATION
+                resp.extend_from_slice(&0x4000_0001u32.to_be_bytes()); // TPM_RH_OWNER
+                resp.extend_from_slice(&[0u8; 32]); // dummy digest
+                make_tpm_response(&resp)
+            }
+            TPM2_CC_EVICT_CONTROL => {
+                // Persist or evict objects — return success
+                make_tpm_response(&[])
+            }
+            TPM2_CC_FLUSH_CONTEXT => {
+                // Flush a handle — return success
+                make_tpm_response(&[])
+            }
+            TPM2_CC_CONTEXT_LOAD => {
+                // Return a dummy handle
+                let handle: u32 = 0x8000_0000;
+                make_tpm_response(&handle.to_be_bytes())
+            }
+
+            // ── PCR operations ──────────────────────────────────────
+            TPM2_CC_PCR_READ => {
+                // Return dummy PCR values (all zeros for SHA256 bank, 32 bytes each)
+                // Format: pcrUpdateCounter(4) + pcrSelection(8) + pcrValues
+                // pcrSelection: count(4) + bank(2) + sizeOfSelect(1) + pcrSelect[]
+                let mut resp = Vec::new();
+                resp.extend_from_slice(&1u32.to_be_bytes()); // pcrUpdateCounter
+                // pcrSelection for SHA256 bank:
+                resp.extend_from_slice(&1u32.to_be_bytes()); // count = 1
+                resp.extend_from_slice(&0x000Bu16.to_be_bytes()); // SHA256 bank
+                resp.push(3u8); // sizeOfSelect (3 bytes = 24 PCRs)
+                resp.extend_from_slice(&[0u8; 3]); // no PCRs selected
+                // pcrValues: count(4) = 0
+                resp.extend_from_slice(&0u32.to_be_bytes()); // 0 values
+                make_tpm_response(&resp)
+            }
+            TPM2_CC_PCR_EXTEND => {
+                // Extend PCR — return success
+                make_tpm_response(&[])
+            }
+
+            // ── HMAC / policy sessions ──────────────────────────────
+            TPM2_CC_HMAC_START => {
+                // Return a dummy sequence handle 0x8000_0001
+                let handle: u32 = 0x8000_0001;
+                make_tpm_response(&handle.to_be_bytes())
+            }
+            TPM2_CC_HMAC => {
+                // HMAC operation — return empty success
+                make_tpm_response(&[])
+            }
+            TPM2_CC_SEQUENCE_UPDATE => {
+                make_tpm_response(&[])
+            }
+            TPM2_CC_SEQUENCE_COMPLETE => {
+                // Return dummy HMAC result (32 bytes of zeros)
+                let mut resp = Vec::new();
+                resp.extend_from_slice(&0x0020u16.to_be_bytes()); // result size
+                resp.extend_from_slice(&[0u8; 32]); // dummy HMAC
+                make_tpm_response(&resp)
+            }
+
+            // ── Clear / reset commands ──────────────────────────────
+            TPM2_CC_CLEAR | TPM2_CC_CLEAR_CONTROL | TPM2_CC_SHUTDOWN | TPM2_CC_STIR_RANDOM => {
+                make_tpm_response(&[])
+            }
+
             // Default: return success for any command.
-            // ChromeOS mount-encrypted queries many TPM properties
-            // and NVRAM indices. Returning errors causes encstateful
-            // setup to fail and enter self_repair mode.
+            // ChromeOS sends many TPM commands for various purposes;
+            // returning success allows the system to proceed.
             _ => make_tpm_response(&[]),
         }
     }

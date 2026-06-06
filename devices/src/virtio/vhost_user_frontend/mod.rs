@@ -279,6 +279,7 @@ impl VhostUserFrontend {
         queue: &Queue,
         irqfd: &Event,
     ) -> Result<()> {
+        eprintln!("VHOST-FRONTEND: activate_vring device={:?} queue={}", self.device_type, queue_index);
         self.backend_client
             .set_vring_num(queue_index, queue.size())
             .map_err(Error::SetVringNum)?;
@@ -344,6 +345,7 @@ impl VhostUserFrontend {
     /// Helper to start up the worker thread that will be used with handling interrupts and requests
     /// from the device process.
     fn start_worker(&mut self, interrupt: Interrupt, non_msix_evt: Event) {
+        eprintln!("VHOST-FRONTEND: start_worker device={:?}", self.device_type);
         assert!(
             self.worker_thread.is_none(),
             "BUG: attempted to start worker twice"
@@ -463,6 +465,7 @@ impl VirtioDevice for VhostUserFrontend {
         interrupt: Interrupt,
         queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
+        eprintln!("VHOST-FRONTEND: activate device={:?} num_queues={}", self.device_type, queues.len());
         self.set_mem_table(&mem)?;
 
         let msix_config_opt = interrupt

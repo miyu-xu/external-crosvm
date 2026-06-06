@@ -454,9 +454,11 @@ impl Frontend {
         self.virtio_gpu.force_ctx_0();
 
         match cmd {
-            GpuCommand::GetDisplayInfo(_) => Ok(GpuResponse::OkDisplayInfo(
-                self.virtio_gpu.display_info().to_vec(),
-            )),
+            GpuCommand::GetDisplayInfo(_) => {
+                let info = self.virtio_gpu.display_info();
+                base::info!("GetDisplayInfo: {:?}", info);
+                Ok(GpuResponse::OkDisplayInfo(info.to_vec()))
+            }
             GpuCommand::ResourceCreate2d(info) => {
                 let resource_id = info.resource_id.to_native();
 
@@ -729,7 +731,11 @@ impl Frontend {
                 let resource_id = info.resource_id.to_native();
                 self.virtio_gpu.resource_unmap_blob(resource_id)
             }
-            GpuCommand::GetEdid(info) => self.virtio_gpu.get_edid(info.scanout.to_native()),
+            GpuCommand::GetEdid(info) => {
+                let scanout = info.scanout.to_native();
+                base::info!("GetEdid: scanout={}", scanout);
+                self.virtio_gpu.get_edid(scanout)
+            }
         }
     }
 

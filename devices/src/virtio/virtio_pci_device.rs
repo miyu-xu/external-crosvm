@@ -680,10 +680,13 @@ impl VirtioPciDevice {
             })
             .collect::<anyhow::Result<BTreeMap<usize, Queue>>>()?;
 
+        info!("VHOST-PCI: calling device.activate for {}", self.debug_label());
         if let Err(e) = self.device.activate(self.mem.clone(), interrupt, queues) {
             error!("{} activate failed: {:#}", self.debug_label(), e);
+            info!("VHOST-PCI: device.activate FAILED for {}: {:#}", self.debug_label(), e);
             self.common_config.driver_status |= VIRTIO_CONFIG_S_NEEDS_RESET as u8;
         } else {
+            info!("VHOST-PCI: device.activate SUCCESS for {}", self.debug_label());
             self.device_activated = true;
         }
 
@@ -939,16 +942,33 @@ impl PciDevice for VirtioPciDevice {
     }
 
     fn write_bar(&mut self, bar_index: usize, offset: u64, data: &[u8]) {
+        // Log first 30 write_bar calls for any device to trace activation path
+        static WB_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = WB_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n < 30 {
+            info!("WRITE-BAR #{}: {} bar={} offset=0x{:x} size={} data={:02x?} activated={}",
+                n, self.debug_label(), bar_index, offset, data.len(), data, self.device_activated);
+        }
         let was_suspended = self.is_device_suspended();
 
         if bar_index == self.settings_bar {
             match offset {
-                COMMON_CONFIG_BAR_OFFSET..=COMMON_CONFIG_LAST => self.common_config.write(
-                    offset - COMMON_CONFIG_BAR_OFFSET,
-                    data,
-                    &mut self.queues,
-                    self.device.as_mut(),
-                ),
+                COMMON_CONFIG_BAR_OFFSET..=COMMON_CONFIG_LAST => {
+                    let offset_in_config = offset - COMMON_CONFIG_BAR_OFFSET;
+                    let old_status = self.common_config.driver_status;
+                    self.common_config.write(
+                        offset_in_config,
+                        data,
+                        &mut self.queues,
+                        self.device.as_mut(),
+                    );
+                    let new_status = self.common_config.driver_status;
+                    if offset_in_config == 20 || old_status != new_status {
+                        info!("VHOST-PCI: {} write_bar common offset={} data={:02x?} status:{:02x}->{:02x} ready={} activated={}",
+                            self.debug_label(), offset_in_config, data, old_status, new_status,
+                            self.is_driver_ready(), self.device_activated);
+                    }
+                }
                 ISR_CONFIG_BAR_OFFSET..=ISR_CONFIG_LAST => {
                     if let Some(v) = data.first() {
                         if let Some(interrupt) = &self.interrupt {
@@ -1001,8 +1021,12 @@ impl PciDevice for VirtioPciDevice {
         }
 
         if !self.device_activated && self.is_driver_ready() {
+            info!("VHOST-PCI: device {} is ready, calling activate", self.debug_label());
             if let Err(e) = self.activate() {
                 error!("failed to activate device: {:#}", e);
+                info!("VHOST-PCI: activate FAILED for {}: {:#}", self.debug_label(), e);
+            } else {
+                info!("VHOST-PCI: activate SUCCESS for {}", self.debug_label());
             }
         }
 

@@ -65,10 +65,17 @@ async fn run_ctrl_queue(
     kick_evt: EventAsync,
     state: Rc<RefCell<gpu::Frontend>>,
 ) {
+    eprintln!("GPU-BACKEND: run_ctrl_queue started, waiting for kick events");
+    let mut kick_count = 0u64;
     loop {
         if let Err(e) = kick_evt.next_val().await {
             error!("Failed to read kick event for ctrl queue: {}", e);
             break;
+        }
+
+        kick_count += 1;
+        if kick_count <= 10 || kick_count % 100 == 0 {
+            eprintln!("GPU-BACKEND: kick event #{} received", kick_count);
         }
 
         let mut state = state.borrow_mut();
@@ -78,6 +85,7 @@ async fn run_ctrl_queue(
             reader.signal_used();
         }
     }
+    eprintln!("GPU-BACKEND: run_ctrl_queue exiting after {} kicks", kick_count);
 }
 
 struct GpuBackend {
