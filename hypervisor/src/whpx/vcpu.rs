@@ -52,7 +52,10 @@ static WHPX_IO_DEBUG_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Reference-counted multi-processor state shared between WhpxVm (INIT/SIPI
 /// delivery) and the vCPU run loop (which blocks APs until they receive SIPI).
-pub(super) type VpState = Arc<(Mutex<MPState>, Condvar)>;
+/// - Mutex<MPState>: BSP=Runnable, AP=Uninitialized → InitReceived → Runnable
+/// - Condvar: signaled when mp_state transitions so the AP can wake up
+/// - AtomicU32: SIPI vector written by BSP, consumed by AP before WHvRunVP
+pub(super) type VpState = Arc<(Mutex<MPState>, Condvar, AtomicU32)>;
 
 fn whpx_io_debug_enabled() -> bool {
     std::env::var_os("CROSWVM_WHPX_IO_DEBUG").is_some_and(|v| !v.is_empty() && v != "0")
@@ -429,48 +432,50 @@ impl WhpxVcpu {
         self.gpa_refresh = Some(f);
     }
 
-    /// For AP vCPUs: clear the reset-vector register state that configure_vcpu()
-    /// set (RIP=0xFFF0, CS.base=0xFFFF0000). WHPX uses the initial vCPU state
-    /// for the first WHvRunVirtualProcessor call and ignores later register writes.
-    /// The SIPI handler will set the correct CS:IP when it delivers SIPI.
+    /// For AP vCPUs: zero out the reset-vector state so the warm-up run
+    /// at RIP=0 produces a clean exit instead of executing firmware code.
     pub fn clear_reset_vector_state(&self) {
-        // For AP vCPUs: clear the reset-vector register state that configure_vcpu()
-        // set (RIP=0xFFF0, CS.base=0xFFFF0000). WHPX uses the initial vCPU state
-        // for the first WHvRunVirtualProcessor call and ignores later register writes.
-        // The SIPI handler will set the correct CS:IP when it delivers SIPI.
-        let reg_names = [
-            WHV_REGISTER_NAME_WHvX64RegisterRip,
-            WHV_REGISTER_NAME_WHvX64RegisterRflags,
-        ];
-        let values = [
-            WHV_REGISTER_VALUE { Reg64: 0 },  // RIP = 0
-            WHV_REGISTER_VALUE { Reg64: 0 },  // RFLAGS = 0
-        ];
+        let rip_name = WHV_REGISTER_NAME_WHvX64RegisterRip;
+        let zero_val = WHV_REGISTER_VALUE { Reg64: 0 };
         let _ = check_whpx!(unsafe {
             WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition,
-                self.index,
-                reg_names.as_ptr(),
-                reg_names.len() as u32,
-                values.as_ptr(),
+                self.vm_partition.partition, self.index,
+                &rip_name, 1, &zero_val as *const WHV_REGISTER_VALUE,
             )
         });
+    }
 
-        // Clear CS segment to avoid the reset-vector base 0xFFFF0000.
-        let cs_name = WHV_REGISTER_NAME_WHvX64RegisterCs;
-        let mut cs_reg = WHV_X64_SEGMENT_REGISTER::default();
-        cs_reg.Base = 0;
-        cs_reg.Limit = 0;
-        cs_reg.Selector = 0;
-        let cs_val = WHV_REGISTER_VALUE { Segment: cs_reg };
-        let _ = check_whpx!(unsafe {
-            WHvSetVirtualProcessorRegisters(
+    /// For AP vCPUs (index > 0): warm up the vCPU with one dummy
+    /// WHvRunVirtualProcessor call so WHPX will honor subsequent
+    /// WHvSetVirtualProcessorRegisters calls. The dummy run starts from
+    /// RIP=0 (set by clear_reset_vector_state) which faults immediately.
+    /// Without this warm-up, WHPX silently ignores register writes on a
+    /// vCPU that has never called WHvRunVirtualProcessor.
+    pub fn warm_up_vcpu(&mut self) {
+        let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);
+        warn!("AP vcpu {} warm-up WHvRunVirtualProcessor...", self.index);
+        match check_whpx!(unsafe {
+            WHvRunVirtualProcessor(
                 self.vm_partition.partition,
                 self.index,
-                &cs_name, 1,
-                &cs_val as *const WHV_REGISTER_VALUE,
+                exit_context_ptr as *mut WHV_RUN_VP_EXIT_CONTEXT as *mut c_void,
+                size_of::<WHV_RUN_VP_EXIT_CONTEXT>() as u32,
             )
-        });
+        }) {
+            Ok(()) => {
+                warn!(
+                    "AP vcpu {} warm-up OK, exit reason={}",
+                    self.index,
+                    self.last_exit_context.ExitReason
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "AP vcpu {} warm-up error (expected): {}",
+                    self.index, e
+                );
+            }
+        }
     }
 
     /// Returns a clone of the shared MP state handle (for WhpxVm cross-vCPU access).
@@ -488,11 +493,25 @@ impl WhpxVcpu {
     }
 
     /// Block until mp_state is not Uninitialized or InitReceived.
+    /// APs woken by SIPI get their CS:IP applied here IN the vCPU thread
+    /// context so WHPX honors the WHvSetVirtualProcessorRegisters call.
     pub fn wait_until_runnable(&self) {
         let mut guard = self.vp_state.0.lock().unwrap();
         loop {
             match *guard {
-                MPState::Runnable | MPState::Halted | MPState::SipiReceived | MPState::Stopped => {
+                MPState::Runnable | MPState::Halted | MPState::Stopped => {
+                    break;
+                }
+                MPState::SipiReceived => {
+                    let vector = self.vp_state.2.load(Ordering::Acquire);
+                    if vector != 0 {
+                        // Apply CS:IP in our own thread before WHvRunVP.
+                        // Note: WHPX may still ignore this if the vCPU has
+                        // never run — see the warm-up logic in run().
+                        let _ = self.apply_sipi_vector(self.index, vector);
+                    }
+                    *guard = MPState::Runnable;
+                    self.vp_state.1.notify_all();
                     break;
                 }
                 _ => {
@@ -670,21 +689,10 @@ impl WhpxVcpu {
             }
             let target = &self.ap_states[target_idx_usize];
 
-            // Before SIPI, refresh the first 1 MB of GPA so the AP sees
-            // the BSP's wakeup buffer (0x9F000) and firmware code (0x820000).
-            // WHPX can cache per-vCPU TLB; without this the AP reads stale
-            // zeroes and triple-faults → restart from reset vector.
-            if !is_init {
-                if let Some(ref refresh) = self.gpa_refresh {
-                    refresh(0, 0x100000);       // IVT, BDA, wakeup buffer
-                    refresh(0x800000, 0x200000); // Firmware volumes
-                }
-            }
-
-            // QEMU kernel-irqchip=off style: completely bypass WHPX's
-            // APIC emulation (which gives all vCPUs APIC ID 0, making
-            // INIT/SIPI routing unreliable). Manage vCPU registers and
-            // mp_state entirely in userspace.
+            // QEMU-style: write the SIPI vector to shared memory so the
+            // AP can apply CS:IP in its OWN thread context before calling
+            // WHvRunVirtualProcessor. (Cross-thread WHvSetVPRegisters is
+            // silently ignored by WHPX.)
             if is_init {
                 let mut st = target.0.lock().unwrap();
                 warn!("INIT: vcpu {} -> InitReceived (was {:?})", target_idx, *st);
@@ -693,10 +701,9 @@ impl WhpxVcpu {
                 let mut st = target.0.lock().unwrap();
                 warn!("SIPI: vcpu {} vec=0x{:x} (was {:?})", target_idx, vector, *st);
                 if *st == MPState::InitReceived || *st == MPState::Uninitialized {
-                    if let Err(e) = self.apply_sipi_vector(target_idx, vector) {
-                        warn!("SIPI reg write fail: vcpu {}: {}", target_idx, e);
-                    }
-                    *st = MPState::Runnable;
+                    // Store the vector — the AP will apply it in wait_until_runnable().
+                    target.2.store(vector, Ordering::Release);
+                    *st = MPState::SipiReceived;
                 }
             }
             target.1.notify_all();
@@ -705,18 +712,10 @@ impl WhpxVcpu {
         self.advance_rip()
     }
 
-    /// Set the target vCPU's registers for real-mode execution at the
-    /// SIPI vector. Intel SDM Vol 3 §8.4.2: AP starts at V<<12.
-    /// WHPX's internal SIPI routing is unreliable when all vCPUs share
-    /// APIC ID 0, so we explicitly program CS:IP here.
     /// Set CS:IP for the AP to start at the SIPI vector address.
-    /// Intel SDM: SIPI vector V → AP starts at V << 12.
-    ///
-    /// WHPX uses flat addressing: linear address = CS.base + RIP.
-    /// We use the real-hardware convention: CS.selector = V<<8, CS.base = 0,
-    /// RIP = V<<12, so linear address = 0 + V<<12 = V<<12.
-    /// (Real hardware uses CS.selector<<4 + IP, but WHPX ignores the selector
-    /// and uses the segment BASE directly for linear address.)
+    /// Must be called from the AP's own vCPU thread — cross-thread
+    /// WHvSetVirtualProcessorRegisters is silently ignored by WHPX.
+    /// WHPX uses flat addressing: linear = CS.base + RIP.
     fn apply_sipi_vector(&self, target_idx: u32, vector: u32) -> Result<()> {
         let sipi_addr = (vector as u64) << 12;
         let cs_sel = (vector << 8) as u16;
@@ -726,7 +725,7 @@ impl WhpxVcpu {
             target_idx, cs_sel, sipi_addr
         );
 
-        // CS segment: base=0, RIP=sipi_addr → linear = 0 + sipi_addr.
+        // CS segment: base=0, selector=V<<8
         let cs_name = WHV_REGISTER_NAME_WHvX64RegisterCs;
         let mut cs_reg = WHV_X64_SEGMENT_REGISTER::default();
         cs_reg.Base = 0;
@@ -740,7 +739,7 @@ impl WhpxVcpu {
             )
         })?;
 
-        // RIP = V<<12, RFLAGS = 0x2.
+        // RIP = V<<12, RFLAGS = 0x2
         let reg_names = [
             WHV_REGISTER_NAME_WHvX64RegisterRip,
             WHV_REGISTER_NAME_WHvX64RegisterRflags,
@@ -1153,11 +1152,6 @@ impl Vcpu for WhpxVcpu {
 
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
-        // AP vCPUs: wait until the BSP delivers INIT+SIPI and transitions
-        // this vCPU to Runnable. This prevents APs from executing the
-        // firmware reset vector and causing SMP boot loops.
-        self.wait_until_runnable();
-
         // safe because we own this whpx virtual processor index, and assume the vm partition is
         // still valid
         let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);

@@ -235,14 +235,12 @@ impl VcpuRunThread {
                 .ok();
             whpx_vcpu.set_frequencies(tsc_freq, irq_chip.lapic_frequency());
 
-            // AP vCPUs: clear the reset-vector register state that
-            // configure_vcpu() set (RIP=0xFFF0, CS.base=0xFFFF0000).
-            // WHPX caches this as the vCPU's initial state for the first
-            // WHvRunVirtualProcessor call and ignores later WHvSetVirtualProcessorRegisters.
-            // The SIPI handler will set the correct CS:IP when it delivers SIPI.
-            if cpu_id > 0 {
-                whpx_vcpu.clear_reset_vector_state();
-            }
+            // AP vCPUs boot normally (from the reset vector, like the BSP).
+            // OVMF CpuMpPei uses CPUID leaf 1.EBX[31:24] for APIC ID,
+            // which cpuid.rs already sets to the vCPU index, so APs can
+            // distinguish themselves from the BSP without LAPIC MMIO.
+            // The INIT/SIPI handler only suppresses INIT/SIPI from
+            // non-BSP vCPUs (index != 0) to prevent boot loops.
         }
     }
 

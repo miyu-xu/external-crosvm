@@ -7,6 +7,7 @@ use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
 use std::convert::TryInto;
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
 use base::error;
@@ -249,6 +250,7 @@ impl WhpxVm {
                 Arc::new((
                     std::sync::Mutex::new(MPState::Uninitialized),
                     std::sync::Condvar::new(),
+                    AtomicU32::new(0), // SIPI vector
                 ))
             })
             .collect();
