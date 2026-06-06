@@ -1245,9 +1245,10 @@ impl Vcpu for WhpxVcpu {
 
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
-        // Refresh GPA for cross-vCPU memory areas (wakeup buffer at 0x9F000,
-        // ExchangeInfo at 0x9F039, firmware volumes at 0x820000) so this vCPU
-        // sees recent writes from other vCPUs (AP signaling BSP, etc.).
+        // Refresh GPA for cross-vCPU memory coherency (wakeup buffer,
+        // ExchangeInfo, firmware code). QEMU's WHPX SMP works with both
+        // vCPUs running from reset vector — WHPX's x2APIC INIT/SIPI
+        // delivery resets and redirects the AP internally.
         if let Some(ref refresh) = self.gpa_refresh {
             refresh(0, 0x100000);
             refresh(0x800000, 0x200000);
