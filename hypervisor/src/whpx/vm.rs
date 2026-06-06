@@ -221,28 +221,25 @@ impl WhpxVm {
         })
         .map_err(WhpxError::SetLocalApicEmulationMode)?;
 
-        // QEMU sets ProcessorFeaturesBanks to tell WHPX about supported
-        // processor features (SLAT, NestedVirt, ApicRemoteRead, etc.).
-        // This enables proper per-vCPU x2APIC ID assignment via MSR 0x802
-        // and correct INIT/SIPI routing.
+        // safe because we own this partition
+        check_whpx!(unsafe { WHvSetupPartition(partition.partition) })
+            .map_err(WhpxError::SetupPartition)?;
+
+        // QEMU sets these properties AFTER WHvSetupPartition.
+        // ProcessorFeaturesBanks tells WHPX about supported processor features
+        // for proper per-vCPU x2APIC ID assignment and cross-vCPU coherency.
         {
             let mut features: WHV_PROCESSOR_FEATURES_BANKS = Default::default();
             features.BanksCount = 2;
             let mut cap_size: UINT32 = 0;
-            let hr = unsafe {
+            if unsafe {
                 WHvGetCapability(
                     WHV_CAPABILITY_CODE_WHvCapabilityCodeProcessorFeaturesBanks,
                     &mut features as *mut _ as *mut c_void,
                     std::mem::size_of::<WHV_PROCESSOR_FEATURES_BANKS>() as u32,
                     &mut cap_size,
                 )
-            };
-            if hr == S_OK {
-                info!(
-                    "WHPX: ProcessorFeaturesBanks Bank0={:016x} Bank1={:016x}",
-                    unsafe { features.__bindgen_anon_1.AsUINT64[0] },
-                    unsafe { features.__bindgen_anon_1.AsUINT64[1] }
-                );
+            } == S_OK {
                 let _ = check_whpx!(unsafe {
                     WHvSetPartitionProperty(
                         partition.partition,
@@ -251,14 +248,20 @@ impl WhpxVm {
                         std::mem::size_of::<WHV_PROCESSOR_FEATURES_BANKS>() as u32,
                     )
                 });
-            } else {
-                info!("WHPX: ProcessorFeaturesBanks not available (hr=0x{:08x})", hr);
             }
-        }
 
-        // safe because we own this partition
-        check_whpx!(unsafe { WHvSetupPartition(partition.partition) })
-            .map_err(WhpxError::SetupPartition)?;
+            // Try NestedVirtualization (non-fatal, QEMU also tries it)
+            let mut prop: WHV_PARTITION_PROPERTY = Default::default();
+            unsafe { prop.NestedVirtualization = 1 };
+            let _ = check_whpx!(unsafe {
+                WHvSetPartitionProperty(
+                    partition.partition,
+                    WHV_PARTITION_PROPERTY_CODE_WHvPartitionPropertyCodeNestedVirtualization,
+                    &prop as *const _ as *const c_void,
+                    std::mem::size_of::<WHV_PARTITION_PROPERTY>() as u32,
+                )
+            });
+        }
 
         for region in guest_mem.regions() {
             unsafe {
