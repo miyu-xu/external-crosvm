@@ -290,14 +290,17 @@ impl WhpxVm {
                 | (1 << 13)  // SyntheticClusterIpi (SMP routing!)
                 | (1 << 14); // DirectSyntheticTimers
             synth[8..16].copy_from_slice(&bank0.to_le_bytes());
-            let synth_result = check_whpx!(unsafe {
+            match check_whpx!(unsafe {
                 WHvSetPartitionProperty(
                     partition.partition,
                     0x0000100C, // WHvPartitionPropertyCodeSyntheticProcessorFeaturesBanks
                     synth.as_ptr() as *const c_void,
                     16u32, // sizeof(WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS)
                 )
-            });
+            }) {
+                Ok(()) => info!("WHPX: SyntheticProcessorFeatures OK"),
+                Err(e) => info!("WHPX: SyntheticProcessorFeatures failed: {}", e),
+            }
         }
 
         for region in guest_mem.regions() {

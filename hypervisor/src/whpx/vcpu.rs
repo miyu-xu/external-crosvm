@@ -1103,17 +1103,6 @@ impl Vcpu for WhpxVcpu {
 
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
-        // QEMU model: both vCPUs run from reset. With x2APIC +
-        // SyntheticProcessorFeatures, WHPX handles INIT/SIPI via MSR 0x830
-        // internally, resetting/redirecting the AP while it's running.
-        // GPA refresh ensures the BSP sees the AP's ExchangeInfo signal.
-        if self.index != 0 {
-            if let Some(ref refresh) = self.gpa_refresh {
-                refresh(0, 0x100000);
-                refresh(0x800000, 0x200000);
-            }
-        }
-
         // safe because we own this whpx virtual processor index, and assume the vm partition is
         // still valid
         let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);
