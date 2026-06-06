@@ -263,17 +263,9 @@ impl WhpxVm {
             // QEMU sets SyntheticProcessorFeaturesBanks (property code 0x100C)
             // to enable AccessVpIndex and SyntheticClusterIpi. These tell
             // WHPX to assign unique VP indices and properly route SMP IPIs.
-            // Without these, WHPX assigns APIC ID 0 to all vCPUs even in
-            // x2APIC mode, breaking OVMF CpuMpPei BSP/AP detection.
-            let mut synth: [u8; 16] = [0u8; 16];
-            // BanksCount = 1
-            synth[0] = 1;
-            // Bank0: HypervisorPresent|Hv1|AccessVpRunTimeReg|
-            //        AccessPartitionReferenceCounter|AccessPartitionReferenceTsc|
-            //        AccessHypercallRegs|AccessFrequencyRegs|
-            //        EnableExtendedGvaRanges|AccessVpIndex|TbFlushHypercalls|
-            //        AccessSynicRegs|AccessSyntheticTimerRegs|AccessIntrCtrlRegs|
-            //        SyntheticClusterIpi|DirectSyntheticTimers
+            // QEMU's WHPX SyntheticProcessorFeaturesBanks: tell WHPX to
+            // assign unique VP indices (AccessVpIndex) and route SMP IPIs
+            // (SyntheticClusterIpi). Without these, all vCPUs share APIC ID 0.
             let bank0: u64 = (1 << 0)   // HypervisorPresent
                 | (1 << 1)   // Hv1
                 | (1 << 2)   // AccessVpRunTimeReg
@@ -281,25 +273,27 @@ impl WhpxVm {
                 | (1 << 4)   // AccessPartitionReferenceTsc
                 | (1 << 5)   // AccessHypercallRegs
                 | (1 << 6)   // AccessFrequencyRegs
-                | (1 << 7)   // EnableExtendedGvaRangesForFlushVirtualAddressList
+                | (1 << 7)   // EnableExtendedGvaRanges
                 | (1 << 8)   // AccessVpIndex (per-vCPU ID!)
                 | (1 << 9)   // TbFlushHypercalls
                 | (1 << 10)  // AccessSynicRegs
                 | (1 << 11)  // AccessSyntheticTimerRegs
                 | (1 << 12)  // AccessIntrCtrlRegs
-                | (1 << 13)  // SyntheticClusterIpi (SMP routing!)
+                | (1 << 13)  // SyntheticClusterIpi (SMP!)
                 | (1 << 14); // DirectSyntheticTimers
-            synth[8..16].copy_from_slice(&bank0.to_le_bytes());
-            match check_whpx!(unsafe {
-                WHvSetPartitionProperty(
-                    partition.partition,
-                    0x0000100C, // WHvPartitionPropertyCodeSyntheticProcessorFeaturesBanks
-                    synth.as_ptr() as *const c_void,
-                    16u32, // sizeof(WHV_SYNTHETIC_PROCESSOR_FEATURES_BANKS)
-                )
-            }) {
-                Ok(()) => info!("WHPX: SyntheticProcessorFeatures OK"),
-                Err(e) => info!("WHPX: SyntheticProcessorFeatures failed: {}", e),
+            for &size in &[16u32, 24u32, 32u32, 40u32, 48u32] {
+                let mut buf = vec![0u8; size as usize];
+                buf[0] = 1; // BanksCount = 1
+                buf[8..16].copy_from_slice(&bank0.to_le_bytes());
+                match check_whpx!(unsafe {
+                    WHvSetPartitionProperty(
+                        partition.partition, 0x0000100C,
+                        buf.as_ptr() as *const c_void, size,
+                    )
+                }) {
+                    Ok(()) => { info!("WHPX: SyntheticProcessor OK size={}", size); break; }
+                    Err(_) => {}
+                }
             }
         }
 
