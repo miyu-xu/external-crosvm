@@ -521,6 +521,71 @@ impl WhpxVcpu {
         ret
     }
 
+    /// Apply SIPI vector for x2APIC non-16-bit entry: flat protected mode.
+    /// The non-16-bit startup vector at BFF35000 is 32-bit code, expects flat CS (base=0).
+    /// Sets CS to flat 32-bit ring0, DS/ES/SS to flat data, RIP to the target address.
+    pub fn apply_sipi_flat(&self, target_addr: u64) -> Result<()> {
+        // Build flat 32-bit code segment: base=0, limit=4GB, D=1 (32-bit)
+        let mut cs = WHV_X64_SEGMENT_REGISTER {
+            Base: 0,
+            Limit: 0xFFFFF,  // 4GB in 4K pages
+            Selector: 0x10,   // typical ring0 code
+            ..Default::default()
+        };
+        unsafe {
+            let mut a = cs.__bindgen_anon_1.__bindgen_anon_1;
+            a.set_SegmentType(0xB);       // code, exec/read, accessed
+            a.set_NonSystemSegment(1);     // S=1
+            a.set_DescriptorPrivilegeLevel(0);
+            a.set_Present(1);
+            a.set_Default(1);              // D=1: 32-bit default operand size
+            a.set_Granularity(1);          // G=1: 4KB granularity
+            cs.__bindgen_anon_1.__bindgen_anon_1 = a;
+        }
+        // Build flat data segment
+        let mut ds = WHV_X64_SEGMENT_REGISTER {
+            Base: 0, Limit: 0xFFFFF, Selector: 0x18, ..Default::default()
+        };
+        unsafe {
+            let mut a = ds.__bindgen_anon_1.__bindgen_anon_1;
+            a.set_SegmentType(0x3);        // data, read/write, accessed
+            a.set_NonSystemSegment(1);
+            a.set_DescriptorPrivilegeLevel(0);
+            a.set_Present(1);
+            a.set_Default(1);
+            a.set_Granularity(1);
+            ds.__bindgen_anon_1.__bindgen_anon_1 = a;
+        }
+
+        const REGS: [WHV_REGISTER_NAME; 7] = [
+            WHV_REGISTER_NAME_WHvX64RegisterRip,
+            WHV_REGISTER_NAME_WHvX64RegisterCs,
+            WHV_REGISTER_NAME_WHvX64RegisterDs,
+            WHV_REGISTER_NAME_WHvX64RegisterEs,
+            WHV_REGISTER_NAME_WHvX64RegisterSs,
+            WHV_REGISTER_NAME_WHvX64RegisterCr0,
+            WHV_REGISTER_NAME_WHvX64RegisterCr4,
+        ];
+        // CR0: PE=1 (protected mode), PG=0 (paging off), NE=1, ET=1
+        let cr0: u64 = (1 << 0) | (1 << 5) | (1 << 4);
+        let cr4: u64 = 0;
+        let vals = [
+            WHV_REGISTER_VALUE { Reg64: target_addr },          // RIP
+            WHV_REGISTER_VALUE { Segment: cs },                  // CS
+            WHV_REGISTER_VALUE { Segment: ds },                  // DS
+            WHV_REGISTER_VALUE { Segment: ds },                  // ES
+            WHV_REGISTER_VALUE { Segment: ds },                  // SS
+            WHV_REGISTER_VALUE { Reg64: cr0 },                   // CR0
+            WHV_REGISTER_VALUE { Reg64: cr4 },                   // CR4
+        ];
+        info!("whpx: vcpu={} apply_sipi_flat RIP=0x{:x}", self.index, target_addr);
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorRegisters(
+                self.vm_partition.partition, self.index, REGS.as_ptr(), 7, vals.as_ptr(),
+            )
+        })
+    }
+
     /// Apply SIPI vector: set CS:IP so the vCPU starts at `vector << 12` in real mode.
     pub fn apply_sipi_vector(&self, vector: u32) -> Result<()> {
         let sipi_base = (vector as u64) << 12;
@@ -578,7 +643,22 @@ impl WhpxVcpu {
         Ok(())
     }
 
-    /// Read Activity State register for INIT/SIPI diagnostics.
+    /// Partition accessor for cross-vCPU operations.
+    pub fn partition_handle(&self) -> WHV_PARTITION_HANDLE {
+        self.vm_partition.partition
+    }
+
+    /// Read RIP of another vCPU (for BSP diagnostic from AP thread).
+    pub fn read_other_rip(&self, vp_index: u32) -> Result<u64> {
+        const REG: WHV_REGISTER_NAME = WHV_REGISTER_NAME_WHvX64RegisterRip;
+        let mut val = WHV_REGISTER_VALUE::default();
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorRegisters(
+                self.vm_partition.partition, vp_index, &REG, 1, &mut val,
+            )
+        })?;
+        Ok(unsafe { val.Reg64 })
+    }
     pub fn read_activity_state(&self) -> Result<u64> {
         const REG: WHV_REGISTER_NAME = WHV_REGISTER_NAME_WHvRegisterInternalActivityState;
         let mut val = WHV_REGISTER_VALUE::default();

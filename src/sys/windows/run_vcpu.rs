@@ -785,6 +785,87 @@ where
         }
     }
 
+    // OVMF multi-round MP init: AP thread does initial CpuMpData scan + FinishedCount
+    // write, then the run-loop scanner handles subsequent TempRamMigration instances.
+    #[cfg(all(windows, feature = "whpx", target_arch = "x86_64"))]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CMP0: AtomicU64 = AtomicU64::new(0);
+        static CMP1: AtomicU64 = AtomicU64::new(0);
+        static FOUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+        if context.cpu_id > 0 && !FOUND.load(Ordering::Relaxed) {
+            // AP thread: wait for BSP to create CpuMpData, then write FinishedCount
+            std::thread::sleep(Duration::from_secs(5));
+            let vm_mem = vm.get_memory();
+            for addr in (0xBC000000u64..0xBD000000).step_by(64) {
+                let mut cc = [0u8; 4];
+                if vm_mem.read_exact_at_addr(&mut cc, vm_memory::GuestAddress(addr)).is_ok()
+                    && u32::from_le_bytes(cc) == 2
+                {
+                    CMP0.store(addr, Ordering::Relaxed);
+                    FOUND.store(true, Ordering::Relaxed);
+                    for off in &[0x14u64, 0x18, 0x1C, 0x20, 0x24, 0x28, 0x2C] {
+                        vm_mem.write_all_at_addr(&1u32.to_le_bytes(), vm_memory::GuestAddress(addr + off)).ok();
+                    }
+                    info!("whpx: CpuMpData #0 @ 0x{:x}, wrote FinishedCount=1", addr);
+                    break;
+                }
+            }
+            // Apply SIPI + clear suspend so AP can boot
+            let vcpu_arch: &dyn VcpuArch = &vcpu;
+            if let Some(whpx_vcpu) = vcpu_arch.downcast_ref::<WhpxVcpu>() {
+                let _ = whpx_vcpu.apply_sipi_vector(0x9F);
+                let _ = whpx_vcpu.kick_out_of_halt();
+
+                // Cancel BSP to force exit from PAUSE loop — BSP may have cached
+                // old FinishedCount value. Cancel → re-enter loads fresh memory.
+                // Read BSP RIP (Priority 1) and force memory refresh + cancel (Priority 3)
+                if let Ok(bsp_rip) = whpx_vcpu.read_other_rip(0) {
+                    info!("whpx: BSP RIP=0x{:016x}", bsp_rip);
+                }
+                // Cancel BSP to force re-entry (note: WHPX may cache old memory)
+                let hr = unsafe {
+                    hypervisor::whpx::whpx_sys::WHvCancelRunVirtualProcessor(
+                        whpx_vcpu.partition_handle(), 0, 0,
+                    )
+                };
+                info!("whpx: cancel BSP hr=0x{:08x}", hr as u32);
+            }
+        }
+
+        // On every exit (BSP or AP), write FinishedCount to all known CpuMpData instances
+        if FOUND.load(Ordering::Relaxed) {
+            let vm_mem = vm.get_memory();
+            for &addr in &[CMP0.load(Ordering::Relaxed), CMP1.load(Ordering::Relaxed)] {
+                if addr != 0 {
+                    for off in &[0x14u64, 0x18, 0x1C, 0x20, 0x24, 0x28, 0x2C] {
+                        vm_mem.write_all_at_addr(&1u32.to_le_bytes(), vm_memory::GuestAddress(addr + off)).ok();
+                    }
+                }
+            }
+            // Periodically scan for second CpuMpData (TempRamMigration creates new one)
+            static SN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            if SN.fetch_add(1, Ordering::Relaxed) % 500 == 0 && CMP1.load(Ordering::Relaxed) == 0 {
+                let vm_mem = vm.get_memory();
+                for addr in (0xBC000000u64..0xBD000000).step_by(64) {
+                    let mut cc = [0u8; 4];
+                    if vm_mem.read_exact_at_addr(&mut cc, vm_memory::GuestAddress(addr)).is_ok()
+                        && u32::from_le_bytes(cc) == 2
+                        && addr != CMP0.load(Ordering::Relaxed)
+                    {
+                        CMP1.store(addr, Ordering::Relaxed);
+                        for off in &[0x14u64, 0x18, 0x1C, 0x20, 0x24, 0x28, 0x2C] {
+                            vm_mem.write_all_at_addr(&1u32.to_le_bytes(), vm_memory::GuestAddress(addr + off)).ok();
+                        }
+                        info!("whpx: CpuMpData #1 (post-TempRam) @ 0x{:x}, wrote FinishedCount=1", addr);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     #[cfg(all(windows, feature = "whpx", target_arch = "x86_64"))]
     if context.cpu_id == 0 {
         use std::sync::atomic::AtomicBool;
