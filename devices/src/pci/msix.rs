@@ -5,6 +5,7 @@
 use std::convert::TryInto;
 
 use anyhow::Context;
+use base::debug;
 use base::error;
 use base::info;
 use base::AsRawDescriptor;
@@ -673,10 +674,25 @@ impl MsixConfig {
     /// If the vector is unmasked, writing to irqfd which wakes up KVM to
     /// inject virtual interrupt to the guest.
     pub fn trigger(&mut self, vector: u16) {
-        if self.table_entries[vector as usize].masked() || self.masked() {
+        let entry_masked = self.table_entries[vector as usize].masked();
+        let fn_masked = self.masked();
+        if entry_masked || fn_masked {
+            debug!(
+                "msix: trigger vector={} pending (entry_masked={} fn_masked={})",
+                vector, entry_masked, fn_masked
+            );
             self.set_pba_bit(vector, true);
+            // WHPX: bootloaders may mask MSIX entries during ExitBootServices while virtio-blk
+            // completions still need to reach the guest (SYSLINUX kernel load).
+            #[cfg(windows)]
+            if let Some(irq) = self.irq_vec.get(vector as usize).unwrap_or(&None) {
+                let _ = irq.irqfd.signal();
+            }
         } else if let Some(irq) = self.irq_vec.get(vector as usize).unwrap_or(&None) {
+            debug!("msix: trigger vector={} gsi={} irqfd", vector, irq.gsi);
             irq.irqfd.signal().unwrap();
+        } else {
+            debug!("msix: trigger vector={} has no irqfd", vector);
         }
     }
 

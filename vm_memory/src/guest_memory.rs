@@ -830,6 +830,32 @@ impl GuestMemory {
             })
     }
 
+    /// Flush host writes to guest RAM so WHPX vCPUs observe virtio ring updates.
+    #[cfg(windows)]
+    pub fn sync_guest_range(&self, guest_addr: GuestAddress, len: usize) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+
+        let (mapping, region_offset, _) = self.find_region(guest_addr)?;
+        let end = region_offset
+            .checked_add(len)
+            .ok_or(Error::InvalidSize(len))?;
+        if end > mapping.size() {
+            return Err(Error::InvalidGuestAddress(guest_addr));
+        }
+
+        let ps = pagesize();
+        let sync_start = region_offset & !(ps - 1);
+        let sync_end = (end + ps - 1) & !(ps - 1);
+        let sync_len = sync_end - sync_start;
+        use base::MappedRegion;
+        let _ = <dyn MappedRegion>::msync(mapping, sync_start, sync_len);
+        mapping
+            .flush_region(sync_start, sync_len)
+            .map_err(|e| Error::MemoryAccess(guest_addr, e))
+    }
+
     /// Convert a GuestAddress into an offset within the associated shm region.
     ///
     /// Due to potential gaps within GuestMemory, it is helpful to know the

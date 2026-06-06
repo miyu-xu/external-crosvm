@@ -66,6 +66,30 @@ impl DescriptorChainRegions {
         self.bytes_consumed
     }
 
+    #[cfg(windows)]
+    fn sync_consumed(&self, mem: &GuestMemory) {
+        use base::warn;
+
+        let mut remaining = self.bytes_consumed;
+        if remaining == 0 {
+            return;
+        }
+        for region in &self.regions {
+            if remaining == 0 {
+                break;
+            }
+            let sync_len = std::cmp::min(remaining, region.len);
+            if let Err(e) = mem.sync_guest_range(GuestAddress(region.offset), sync_len) {
+                warn!(
+                    "virtio: failed to sync guest write at {:#x}: {:#}",
+                    region.offset, e
+                );
+            }
+            crate::virtio::whpx_ovmf::refresh_gpa_range(region.offset, sync_len);
+            remaining -= sync_len;
+        }
+    }
+
     /// Returns all the remaining buffers in the `DescriptorChain`. Calling this function does not
     /// consume any bytes from the `DescriptorChain`. Instead callers should use the `consume`
     /// method to advance the `DescriptorChain`. Multiple calls to `get` with no intervening calls
@@ -725,6 +749,12 @@ impl Writer {
             mem: self.mem.clone(),
             regions: self.regions.split_at(offset),
         }
+    }
+
+    /// Flush host writes to guest RAM so WHPX vCPUs observe block I/O results.
+    #[cfg(windows)]
+    pub fn sync_guest_writes(&self) {
+        self.regions.sync_consumed(&self.mem);
     }
 }
 

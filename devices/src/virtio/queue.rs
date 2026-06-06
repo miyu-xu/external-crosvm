@@ -207,6 +207,8 @@ impl QueueConfig {
         }
 
         self.used_ring = val;
+        #[cfg(windows)]
+        crate::virtio::whpx_ovmf::set_used_idx_gpa(val.offset().saturating_add(2));
     }
 
     /// Getter for next_avail index
@@ -445,6 +447,14 @@ impl Queue {
         match self {
             Queue::SplitVirtQueue(sq) => sq.trigger_interrupt(),
             Queue::PackedVirtQueue(pq) => pq.trigger_interrupt(),
+        }
+    }
+
+    /// Force a used-ring notification (see `SplitQueue::force_used_interrupt`).
+    pub fn force_used_interrupt(&mut self) {
+        match self {
+            Queue::SplitVirtQueue(sq) => sq.force_used_interrupt(),
+            Queue::PackedVirtQueue(pq) => pq.force_used_interrupt(),
         }
     }
 

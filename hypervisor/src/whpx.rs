@@ -42,6 +42,7 @@ pub use whpx_sys::*;
 // used by both the vm and vcpu
 struct SafePartition {
     partition: WHV_PARTITION_HANDLE,
+    processor_count: u32,
 }
 
 // we can send the partition over safely even though it is void*, it can be sent
@@ -58,6 +59,7 @@ impl SafePartition {
 
         Ok(SafePartition {
             partition: partition_handle,
+            processor_count: 1,
         })
     }
 }

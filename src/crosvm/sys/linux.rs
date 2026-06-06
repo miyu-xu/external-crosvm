@@ -834,7 +834,7 @@ fn create_virtio_devices(
                 create_fs_device(
                     cfg.protection_type,
                     &cfg.jail_config,
-                    ugid,
+                    *ugid,
                     uid_map,
                     gid_map,
                     src,
@@ -846,7 +846,7 @@ fn create_virtio_devices(
             SharedDirKind::P9 => create_9p_device(
                 cfg.protection_type,
                 &cfg.jail_config,
-                ugid,
+                *ugid,
                 &uid_map,
                 &gid_map,
                 &src,

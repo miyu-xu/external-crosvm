@@ -392,6 +392,19 @@ const ACPI_HI_RSDP_WINDOW_BASE: u64 = 0x000E_0000;
 // the VM entry point.
 const PROTECTED_VM_FW_MAX_SIZE: u64 = 0x40_0000;
 const PROTECTED_VM_FW_START: u64 = END_ADDR_BEFORE_32BITS - PROTECTED_VM_FW_MAX_SIZE;
+// OVMF/QEMU Q35 place ECAM at 0xE000_0000 with MMIO32 below it (not overlapping).
+const QEMU_ECAM_BASE: u64 = 0xE000_0000;
+const QEMU_PCI_MMIO32_START: u64 = 0xC000_0000;
+
+/// When ECAM sits in the low 4G MMIO window, PCI BAR space must end below it so ACPI _CRS
+/// does not describe a range spanning the ECAM hole (OVMF PciHostBridge then fails allocation).
+fn pci_mmio32_end_before_ecam(pcie_cfg_mmio: &AddressRange) -> Option<u64> {
+    if pcie_cfg_mmio.start >= QEMU_ECAM_BASE && pcie_cfg_mmio.start <= PCI_MMIO_END {
+        Some(pcie_cfg_mmio.start - 1)
+    } else {
+        None
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CpuManufacturer {
@@ -428,11 +441,17 @@ pub fn init_low_memory_layout(
         };
 
         let pcie_cfg_mmio = pcie_ecam.unwrap_or(DEFAULT_PCIE_CFG_MMIO);
+        let pci_mmio32_end = pci_mmio32_end_before_ecam(&pcie_cfg_mmio).unwrap_or(PCI_MMIO_END);
 
         let pci_mmio = if let Some(pci_low) = pci_low_start {
             AddressRange {
                 start: pci_low,
-                end: PCI_MMIO_END,
+                end: pci_mmio32_end,
+            }
+        } else if pci_mmio32_end_before_ecam(&pcie_cfg_mmio).is_some() {
+            AddressRange {
+                start: QEMU_PCI_MMIO32_START,
+                end: pci_mmio32_end,
             }
         } else {
             AddressRange {
@@ -948,6 +967,7 @@ impl arch::LinuxArch for X8664arch {
                 &io_bus,
                 components.fw_cfg_parameters.clone(),
                 components.bootorder_fw_cfg_blob.clone(),
+                components.vcpu_count,
                 fw_cfg_jail,
                 #[cfg(feature = "swap")]
                 swap_controller,
@@ -1762,11 +1782,25 @@ impl X8664arch {
         io_bus: &Bus,
         fw_cfg_parameters: Vec<FwCfgParameters>,
         bootorder_fw_cfg_blob: Vec<u8>,
+        vcpu_count: usize,
         fw_cfg_jail: Option<Minijail>,
         #[cfg(feature = "swap")] swap_controller: &mut Option<swap::SwapController>,
     ) -> Result<()> {
         let fw_cfg = match devices::FwCfgDevice::new(FW_CFG_MAX_FILE_SLOTS, fw_cfg_parameters) {
             Ok(mut device) => {
+                // OVMF reads QemuFwCfgItemSmpCpuCount (selector 5) during PEI. Without this,
+                // BootCpuCount=0 and CpuMpPei waits for APs until timeout.
+                let nb_cpus = (vcpu_count as u16).to_le_bytes().to_vec();
+                device.set_generic_item(devices::FW_CFG_NB_CPUS_SELECTOR, nb_cpus);
+                // crosvm does not emulate QEMU's CPU hotplug PIO block at 0xCD8. OVMF documents
+                // this fw_cfg knob for non-QEMU VMMs (see PlatformCpuCountBugCheck in OvmfPkg).
+                if let Err(err) = device.add_file(
+                    "opt/org.tianocore/X-Cpuhp-Bugcheck-Override",
+                    b"yes".to_vec(),
+                    devices::FwCfgItemType::GenericItem,
+                ) {
+                    return Err(Error::CreateFwCfgDevice(err));
+                }
                 // this condition will only be true if the user specified at least one bootindex
                 // option on the command line. If none were specified, bootorder_fw_cfg_blob will
                 // only have a null byte (null terminator)
@@ -1816,6 +1850,17 @@ impl X8664arch {
 
         io_bus
             .insert(fw_cfg, FW_CFG_BASE_PORT, FW_CFG_WIDTH)
+            .map_err(Error::InsertBus)?;
+
+        let cpu_hotplug = Arc::new(Mutex::new(devices::qemu_cpu_hotplug::QemuCpuHotplug::new(
+            vcpu_count,
+        )));
+        io_bus
+            .insert(
+                cpu_hotplug,
+                devices::qemu_cpu_hotplug::QEMU_CPU_HOTPLUG_BASE,
+                devices::qemu_cpu_hotplug::QEMU_CPU_HOTPLUG_LEN,
+            )
             .map_err(Error::InsertBus)?;
 
         Ok(())
@@ -2054,6 +2099,37 @@ impl X8664arch {
             )
             .map_err(Error::RegisterIrqfd)?;
         pmresource.start();
+
+        // Add COM1-COM4 serial ports so the kernel's 8250 driver can discover them
+        // via ACPI PNP enumeration (PNP0501). Without these entries, the kernel's
+        // earlycon/console on ttyS0 has no way to locate the UART at 0x3F8.
+        for (idx, (name, port, irq)) in [
+            ("COM1", 0x3F8u16, 4u32),
+            ("COM2", 0x2F8u16, 3u32),
+            ("COM3", 0x3E8u16, 4u32),
+            ("COM4", 0x2E8u16, 3u32),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let uid = (idx + 1) as u32;
+            let dev_path = format!("_SB_.{}", name);
+            aml::Device::new(
+                dev_path.as_str().into(),
+                vec![
+                    &aml::Name::new("_HID".into(), &aml::EISAName::new("PNP0501")),
+                    &aml::Name::new("_UID".into(), &uid),
+                    &aml::Name::new(
+                        "_CRS".into(),
+                        &aml::ResourceTemplate::new(vec![
+                            &aml::IO::new(*port, *port, 0, 0x8),
+                            &aml::Interrupt::new(true, true, false, false, *irq),
+                        ]),
+                    ),
+                ],
+            )
+            .to_aml_bytes(&mut amls);
+        }
 
         let mut crs_entries: Vec<Box<dyn Aml>> = vec![
             Box::new(aml::AddressSpace::new_bus_number(0x0u16, max_bus as u16)),

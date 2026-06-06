@@ -106,6 +106,11 @@ fn upsert_renderer_feature(
     ));
 }
 
+#[cfg(not(feature = "gfxstream"))]
+fn get_renderer_features(gpu_parameters: &GpuParameters) -> Option<String> {
+    gpu_parameters.renderer_features.clone()
+}
+
 #[cfg(feature = "gfxstream")]
 fn get_renderer_features(gpu_parameters: &GpuParameters) -> Option<String> {
     let mut renderer_features = gpu_parameters

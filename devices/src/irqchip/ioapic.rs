@@ -8,12 +8,15 @@
 
 use anyhow::Context;
 use base::error;
+use base::info;
 use base::warn;
 use base::Error;
 use base::Event;
 use base::Result;
 use base::Tube;
 use base::TubeError;
+use hypervisor::DeliveryMode;
+use hypervisor::DestinationMode;
 use hypervisor::IoapicRedirectionTableEntry;
 use hypervisor::IoapicState;
 use hypervisor::MsiAddressMessage;
@@ -361,6 +364,184 @@ impl Ioapic {
         injected
     }
 
+    /// Returns the MSI address/data programmed for an IOAPIC pin, if any.
+    pub fn msi_for_pin(&self, irq: usize) -> Option<(u32, u32)> {
+        if irq >= self.redirect_table.len() {
+            return None;
+        }
+        let entry = &self.redirect_table[irq];
+        if entry.get_interrupt_mask() {
+            return None;
+        }
+
+        let mut address = MsiAddressMessage::new();
+        let mut data = MsiDataMessage::new();
+        address.set_destination_mode(entry.get_dest_mode());
+        address.set_destination_id(entry.get_dest_id());
+        address.set_always_0xfee(0xfee);
+        data.set_vector(entry.get_vector());
+        data.set_delivery_mode(entry.get_delivery_mode());
+        data.set_trigger(entry.get_trigger_mode());
+
+        let msi_address = address.get(0, 32) as u32;
+        let msi_data = data.get(0, 32) as u32;
+        if msi_data == 0 {
+            return None;
+        }
+        Some((msi_address, msi_data))
+    }
+
+    /// Returns redirect-table interrupt parameters when a vector is programmed but MSI routing
+    /// may not be ready yet (typical during early OVMF virtio-blk init on WHPX).
+    pub fn redirect_interrupt_for_pin(
+        &self,
+        irq: usize,
+    ) -> Option<(u8, u8, DestinationMode, TriggerMode, DeliveryMode)> {
+        if irq >= self.redirect_table.len() {
+            return None;
+        }
+        let entry = &self.redirect_table[irq];
+        if entry.get_interrupt_mask() {
+            return None;
+        }
+        let vector = entry.get_vector();
+        if vector == 0 {
+            return None;
+        }
+        Some((
+            vector,
+            entry.get_dest_id(),
+            entry.get_dest_mode(),
+            entry.get_trigger_mode(),
+            entry.get_delivery_mode(),
+        ))
+    }
+
+    /// Like [`redirect_interrupt_for_pin`] but ignores the mask bit (WHPX emergency delivery).
+    pub fn redirect_interrupt_for_pin_unchecked(
+        &self,
+        irq: usize,
+    ) -> Option<(u8, u8, DestinationMode, TriggerMode, DeliveryMode)> {
+        if irq >= self.redirect_table.len() {
+            return None;
+        }
+        let entry = &self.redirect_table[irq];
+        let vector = entry.get_vector();
+        if vector == 0 {
+            return None;
+        }
+        Some((
+            vector,
+            entry.get_dest_id(),
+            entry.get_dest_mode(),
+            entry.get_trigger_mode(),
+            entry.get_delivery_mode(),
+        ))
+    }
+
+    /// Returns the programmed vector for an IOAPIC pin, ignoring mask/MSI state.
+    pub fn redirect_vector(&self, irq: usize) -> Option<u8> {
+        if irq >= self.redirect_table.len() {
+            return None;
+        }
+        let vector = self.redirect_table[irq].get_vector();
+        if vector == 0 {
+            None
+        } else {
+            Some(vector)
+        }
+    }
+
+    /// Pre-configure redirect-table fields only (no MSI tube traffic; safe during device init).
+    pub fn preconfigure_redirect_table(&mut self, pin: usize, vector: u8) {
+        if pin >= self.num_pins || vector == 0 {
+            return;
+        }
+        let entry = &self.redirect_table[pin];
+        if entry.get_vector() != 0 {
+            return;
+        }
+        let entry = &mut self.redirect_table[pin];
+        entry.set_vector(vector);
+        entry.set_interrupt_mask(false);
+        entry.set_dest_id(0);
+        entry.set_dest_mode(DestinationMode::Physical);
+        // Edge delivery avoids level/resample deadlocks when OVMF polls instead of
+        // acking virtio PCI ISR (common during early VirtioBlkDxe bring-up on WHPX).
+        entry.set_trigger_mode(TriggerMode::Edge);
+        entry.set_delivery_mode(DeliveryMode::Fixed);
+    }
+
+    /// Returns true when the outgoing MSI route for this pin has not been allocated yet.
+    pub fn needs_msi_setup(&self, pin: usize) -> bool {
+        pin < self.num_pins && self.out_events[pin].is_none()
+    }
+
+    /// Allocate the outgoing MSI route for a legacy INTx pin (must run while the VM irq tube
+    /// handler is active — e.g. from the irq thread, not during `create_devices`).
+    pub fn setup_legacy_pin_msi_route(&mut self, pin: usize) -> Result<()> {
+        if pin >= self.num_pins || self.out_events[pin].is_some() {
+            return Ok(());
+        }
+        let entry = &self.redirect_table[pin];
+        let vector = entry.get_vector();
+        if vector == 0 {
+            return Ok(());
+        }
+
+        let mut address = MsiAddressMessage::new();
+        let mut data = MsiDataMessage::new();
+        address.set_destination_mode(entry.get_dest_mode());
+        address.set_destination_id(entry.get_dest_id());
+        address.set_always_0xfee(0xfee);
+        data.set_vector(entry.get_vector());
+        data.set_delivery_mode(entry.get_delivery_mode());
+        data.set_trigger(entry.get_trigger_mode());
+
+        let msi_address = address.get(0, 32);
+        let msi_data = data.get(0, 32) as u32;
+        if let Err(e) = self.setup_msi(pin, msi_address, msi_data) {
+            error!("IOAPIC failed to set up MSI route for pin {}: {}", pin, e);
+        }
+        Ok(())
+    }
+
+    /// Pre-create the outgoing MSI route and `out_event` for a pin (WHPX early boot).
+    ///
+    /// Must run from a non-irq thread while the irq tube handler is active (e.g. vCPU 0
+    /// thread after `IrqWaitWorker` has started).
+    pub fn pre_create_out_event_for_pin(&mut self, pin: usize) -> Result<()> {
+        if pin >= self.num_pins || self.out_events[pin].is_some() {
+            return Ok(());
+        }
+        let vector = 0x20u8.saturating_add(pin as u8);
+        self.preconfigure_redirect_table(pin, vector);
+        self.setup_legacy_pin_msi_route(pin)
+    }
+
+    /// Pre-create outgoing MSI routes for all IOAPIC pins (WHPX firmware may use INTx
+    /// before programming the redirect table).
+    pub fn pre_create_all_out_events(&mut self) -> Result<()> {
+        for pin in 0..self.num_pins {
+            self.pre_create_out_event_for_pin(pin)?;
+        }
+        Ok(())
+    }
+
+    /// Diagnostic snapshot for WHPX IOAPIC delivery debugging.
+    pub fn pin_delivery_state(&self, irq: usize) -> (bool, u8, bool) {
+        if irq >= self.redirect_table.len() {
+            return (true, 0, false);
+        }
+        let entry = &self.redirect_table[irq];
+        let has_out = self
+            .out_events
+            .get(irq)
+            .map(|e| e.is_some())
+            .unwrap_or(false);
+        (entry.get_interrupt_mask(), entry.get_vector(), has_out)
+    }
+
     fn ioapic_write(&mut self, val: u32) {
         match self.ioregsel {
             IOAPIC_REG_VERSION => { /* read-only register */ }
@@ -396,6 +577,15 @@ impl Ioapic {
                     // NOTE: on pre-4.0 kernels, there's a race we would need to work around.
                     // "KVM: x86: ioapic: Fix level-triggered EOI and IOAPIC reconfigure race"
                     // is the fix for this.
+
+                    let entry = &self.redirect_table[index];
+                    info!(
+                        "ioapic: guest programmed pin={} vector={:#x} masked={} trigger={:?}",
+                        index,
+                        entry.get_vector(),
+                        entry.get_interrupt_mask(),
+                        entry.get_trigger_mode()
+                    );
                 }
 
                 if self.redirect_table[index].get_trigger_mode() == TriggerMode::Level

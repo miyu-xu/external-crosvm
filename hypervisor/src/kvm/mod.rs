@@ -1202,6 +1202,7 @@ impl TryFrom<HypervisorCap> for KvmCap {
             HypervisorCap::CalibratedTscLeafRequired => Err(Error::new(libc::EINVAL)),
             HypervisorCap::StaticSwiotlbAllocationRequired => Err(Error::new(libc::EINVAL)),
             HypervisorCap::HypervisorInitializedBootContext => Err(Error::new(libc::EINVAL)),
+            HypervisorCap::VcpuRunThreadLocal => Err(Error::new(libc::EINVAL)),
         }
     }
 }

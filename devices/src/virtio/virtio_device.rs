@@ -145,6 +145,14 @@ pub trait VirtioDevice: Send {
 
     fn control_notify(&self, _behavior: MsixStatus) {}
 
+    /// On WHPX, reset the queue-batch completion event before MMIO queue notify.
+    #[cfg(windows)]
+    fn whpx_reset_queue_batch(&self, _queue_index: usize) {}
+
+    /// On WHPX, block until the virtio queue worker finishes the current batch (MMIO notify path).
+    #[cfg(windows)]
+    fn whpx_wait_queue_batch(&self, _queue_index: usize) {}
+
     #[cfg(target_arch = "x86_64")]
     fn generate_acpi(
         &mut self,

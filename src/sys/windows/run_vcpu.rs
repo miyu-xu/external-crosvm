@@ -88,6 +88,87 @@ use crate::sys::windows::ExitState;
 
 const ERROR_RETRY_I32: i32 = ERROR_RETRY as i32;
 
+fn pio_trace_enabled() -> bool {
+    std::env::var_os("CROSWVM_PIO_TRACE").is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+fn trace_pio_access(address: u64, size: usize, operation: &IoOperation) {
+    if !pio_trace_enabled() {
+        return;
+    }
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    let n = COUNT.fetch_add(1, Ordering::Relaxed);
+    // Always log reset / firmware debug ports (SYSLINUX post-ExitBootServices resets).
+    let always_log = matches!(address, 0xcf9 | 0x510 | 0x92 | 0x402 | 0x3f8);
+    if n >= 512 && !always_log {
+        return;
+    }
+    let dir = match operation {
+        IoOperation::Read => "in",
+        IoOperation::Write { .. } => "out",
+    };
+    let data_str = match operation {
+        IoOperation::Read => String::new(),
+        IoOperation::Write { data } if !data.is_empty() && matches!(address, 0x3f8 | 0xcf9) => {
+            format!(" data={:#04x} '{}'", data[0], data[0] as char)
+        }
+        IoOperation::Write { .. } => String::new(),
+    };
+    warn!(
+        "pio trace #{}: port=0x{:x} size={} dir={} unaligned32={}{}",
+        n,
+        address,
+        size,
+        dir,
+        (address & 3) != 0 && size == 4,
+        data_str
+    );
+}
+
+/// OVMF VirtioBlkDxe polls these GPAs during WHPX virtio-blk bring-up (MMIO fallback to RAM).
+const VIRTIOBLK_POLL_ADDR_LO: u64 = 0xbf09fa3a;
+const VIRTIOBLK_POLL_ADDR_HI: u64 = 0xbf09fa3c;
+const VIRTIOBLK_USED_RING_LO: u64 = 0xbec35000;
+const VIRTIOBLK_USED_RING_HI: u64 = 0xbec35010;
+
+fn log_virtio_poll_read(
+    address: u64,
+    data: &[u8],
+    intr_state: Option<(bool, bool, bool)>,
+) {
+    if address != VIRTIOBLK_POLL_ADDR_LO
+        && address != VIRTIOBLK_POLL_ADDR_HI
+        && (address < VIRTIOBLK_USED_RING_LO || address > VIRTIOBLK_USED_RING_HI)
+    {
+        return;
+    }
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    let n = COUNT.fetch_add(1, Ordering::Relaxed);
+    if n >= 20 && n % 100 != 0 {
+        return;
+    }
+    let val = match data.len() {
+        1 => u64::from(data[0]),
+        2 => u64::from(u16::from_le_bytes([data[0], data[1]])),
+        4 => u64::from(u32::from_le_bytes([data[0], data[1], data[2], data[3]])),
+        _ => 0,
+    };
+    match intr_state {
+        Some((if_flag, shadow, pending)) => {
+            info!(
+                "virtio-poll: addr={:#x} val={:#x} size={} IF={} shadow={} pending={} (#{})",
+                address, val, data.len(), if_flag, shadow, pending, n
+            );
+        }
+        None => {
+            info!(
+                "virtio-poll: addr={:#x} val={:#x} size={} (#{})",
+                address, val, data.len(), n
+            );
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct VcpuRunMode {
     mtx: Mutex<VmRunMode>,
@@ -652,7 +733,7 @@ fn vcpu_loop<V>(
     context: &VcpuRunThread,
     mut vcpu: V,
     vm: impl VmArch + 'static,
-    irq_chip: Box<dyn IrqChipArch + 'static>,
+    mut irq_chip: Box<dyn IrqChipArch + 'static>,
     io_bus: Bus,
     mmio_bus: Bus,
     run_mode_arc: Arc<VcpuRunMode>,
@@ -663,6 +744,20 @@ fn vcpu_loop<V>(
 where
     V: VcpuArch + 'static,
 {
+    #[cfg(all(windows, feature = "whpx", target_arch = "x86_64"))]
+    if context.cpu_id == 0 {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::atomic::Ordering;
+
+        use devices::IrqChipX86_64;
+        static WHPX_IOAPIC_PRECREATED: AtomicBool = AtomicBool::new(false);
+        if !WHPX_IOAPIC_PRECREATED.swap(true, Ordering::SeqCst) {
+            if let Err(e) = irq_chip.pre_create_ioapic_out_events() {
+                error!("whpx: pre_create_ioapic_out_events failed: {}", e);
+            }
+        }
+    }
+
     #[cfg(feature = "stats")]
     let mut exit_stats = VmExitStatistics::new();
 
@@ -732,35 +827,111 @@ where
             match exit {
                 Ok(VcpuExit::Io) => {
                     let _trace_event = trace_event!(crosvm, "VcpuExit::Io");
-                    vcpu.handle_io(&mut |IoParams { address, mut size, operation}| {
-                        match operation {
-                            IoOperation::Read => {
-                                let mut data = [0u8; 8];
-                                if size > data.len() {
-                                    error!("unsupported IoIn size of {} bytes", size);
-                                    size = data.len();
+                    let io_result = {
+                        let mut io_handler = |IoParams { address, mut size, operation }| {
+                            trace_pio_access(address, size, &operation);
+                            match operation {
+                                IoOperation::Read => {
+                                    let mut data = [0u8; 8];
+                                    if size > data.len() {
+                                        error!("unsupported IoIn size of {} bytes", size);
+                                        size = data.len();
+                                    }
+                                    io_bus.read(address, &mut data[..size]);
+                                    Some(data)
                                 }
-                                io_bus.read(address, &mut data[..size]);
-                                Some(data)
+                                IoOperation::Write { data } => {
+                                    if size > data.len() {
+                                        error!("unsupported IoOut size of {} bytes", size);
+                                        size = data.len()
+                                    }
+                                    vm.handle_io_events(IoEventAddress::Pio(address), &data[..size])
+                                        .unwrap_or_else(|e| error!(
+                                            "failed to handle ioevent for pio write to {} on vcpu {}: {}",
+                                            address, context.cpu_id, e
+                                        ));
+                                    io_bus.write(address, &data[..size]);
+                                    None
+                                }
                             }
-                            IoOperation::Write { data } => {
-                                if size > data.len() {
-                                    error!("unsupported IoOut size of {} bytes", size);
-                                    size = data.len()
+                        };
+                        let mut mmio_handler = |IoParams { address, mut size, operation }| {
+                            match operation {
+                                IoOperation::Read => {
+                                    let mut data = [0u8; 8];
+                                    if size > data.len() {
+                                        error!("unsupported MmioRead size of {} bytes", size);
+                                        size = data.len();
+                                    }
+                                    {
+                                        let data = &mut data[..size];
+                                        if !mmio_bus.read(address, data) {
+                                            vm.get_memory()
+                                                .read_exact_at_addr(
+                                                    data,
+                                                    vm_memory::GuestAddress(address),
+                                                )
+                                                .unwrap_or_else(|e| {
+                                                    error!(
+                                                        "guest memory read failed at {:x}: {}",
+                                                        address, e
+                                                    )
+                                                });
+                                        }
+                                    }
+                                    Ok(Some(data))
                                 }
-                                vm.handle_io_events(IoEventAddress::Pio(address), &data[..size])
-                                    .unwrap_or_else(|e| error!(
-                                        "failed to handle ioevent for pio write to {} on vcpu {}: {}",
-                                        address, context.cpu_id, e
-                                    ));
-                                io_bus.write(address, &data[..size]);
-                                None
+                                IoOperation::Write { data } => {
+                                    if size > data.len() {
+                                        error!("unsupported MmioWrite size of {} bytes", size);
+                                        size = data.len()
+                                    }
+                                    let data = &data[..size];
+                                    vm.handle_io_events(IoEventAddress::Mmio(address), data)
+                                        .unwrap_or_else(|e| error!(
+                                            "failed to handle ioevent for mmio write to {} on vcpu {}: {}",
+                                            address, context.cpu_id, e
+                                        ));
+                                    if !mmio_bus.write(address, data) {
+                                        vm.get_memory()
+                                            .write_all_at_addr(
+                                                data,
+                                                vm_memory::GuestAddress(address),
+                                            )
+                                            .unwrap_or_else(|e| error!(
+                                                "guest memory write failed at {:x}: {}",
+                                                address, e
+                                            ));
+                                    }
+                                    Ok(None)
+                                }
+                            }
+                        };
+                        #[cfg(feature = "whpx")]
+                        {
+                            let vcpu_arch: &mut dyn VcpuArch = &mut vcpu;
+                            if let Some(whpx_vcpu) = vcpu_arch.downcast_mut::<WhpxVcpu>() {
+                                whpx_vcpu.handle_io_with_mmio(&mut io_handler, &mut mmio_handler)
+                            } else {
+                                vcpu.handle_io(&mut io_handler)
                             }
                         }
-                    }).unwrap_or_else(|e| error!("failed to handle io: {}", e));
+                        #[cfg(not(feature = "whpx"))]
+                        {
+                            vcpu.handle_io(&mut io_handler)
+                        }
+                    };
+                    io_result.unwrap_or_else(|e| error!("failed to handle io: {}", e));
                 }
                 Ok(VcpuExit::Mmio) => {
                     let _trace_event = trace_event!(crosvm, "VcpuExit::Mmio");
+                    #[cfg(all(feature = "whpx", target_arch = "x86_64"))]
+                    let intr_state = {
+                        let vcpu_arch: &mut dyn VcpuArch = &mut vcpu;
+                        vcpu_arch
+                            .downcast_ref::<WhpxVcpu>()
+                            .map(WhpxVcpu::interrupt_delivery_state)
+                    };
                     vcpu.handle_mmio(&mut |IoParams { address, mut size, operation }| {
                         match operation {
                             IoOperation::Read => {
@@ -771,7 +942,8 @@ where
                                 }
                                 {
                                     let data = &mut data[..size];
-                                    if !mmio_bus.read(address, data) {
+                                    let mmio_handled = mmio_bus.read(address, data);
+                                    if !mmio_handled {
                                         info!(
                                             "mmio read failed: {:x}; trying memory read..",
                                             address
@@ -788,6 +960,8 @@ where
                                                 )
                                             });
                                     }
+                                    #[cfg(all(feature = "whpx", target_arch = "x86_64"))]
+                                    log_virtio_poll_read(address, data, intr_state);
                                 }
                                 Ok(Some(data))
                             }
@@ -829,6 +1003,39 @@ where
                 }
                 Ok(VcpuExit::IrqWindowOpen) => {}
                 Ok(VcpuExit::Hlt) => irq_chip.halted(context.cpu_id),
+
+                Ok(VcpuExit::UnrecoverableException) => {
+                    #[cfg(all(feature = "whpx", target_arch = "x86_64"))]
+                    {
+                        let vcpu_arch: &dyn VcpuArch = &vcpu;
+                        if let Some(whpx) = vcpu_arch.downcast_ref::<WhpxVcpu>() {
+                            whpx.log_last_exit("vcpu");
+                        }
+                    }
+                    error!(
+                        "whpx: UnrecoverableException on vcpu {} (possible triple fault)",
+                        context.cpu_id
+                    );
+                }
+                #[cfg(target_arch = "x86_64")]
+                Ok(VcpuExit::Exception) => {
+                    #[cfg(all(feature = "whpx", target_arch = "x86_64"))]
+                    {
+                        let vcpu_arch: &dyn VcpuArch = &vcpu;
+                        if let Some(whpx) = vcpu_arch.downcast_ref::<WhpxVcpu>() {
+                            whpx.log_last_exit("vcpu");
+                        }
+                    }
+                }
+                Ok(VcpuExit::UnsupportedFeature) => {
+                    #[cfg(all(feature = "whpx", target_arch = "x86_64"))]
+                    {
+                        let vcpu_arch: &dyn VcpuArch = &vcpu;
+                        if let Some(whpx) = vcpu_arch.downcast_ref::<WhpxVcpu>() {
+                            whpx.log_last_exit("vcpu");
+                        }
+                    }
+                }
 
                 // VcpuExit::Shutdown is always an error on Windows.  HAXM exits with
                 // Shutdown only for triple faults and other vcpu panics.  WHPX never exits
@@ -883,6 +1090,10 @@ where
                 }
                 #[cfg(target_arch = "x86_64")]
                 Ok(VcpuExit::MsrAccess) => {} // MsrAccess handled by hypervisor impl
+                #[cfg(target_arch = "x86_64")]
+                Ok(VcpuExit::ApicInitSipiTrap) => {} // handled in hypervisor impl
+                #[cfg(target_arch = "x86_64")]
+                Ok(VcpuExit::ApicSmiTrap) => {} // no host action required
                 Ok(r) => {
                     error!("unexpected vcpu.run return value: {:?}", r);
                     check_vm_shutdown = true;
@@ -941,6 +1152,19 @@ where
                 // will block. When the condition variable is notified, `wait` will
                 // unblock and return a new exclusive lock.
                 run_mode_lock = run_mode_arc.cvar.wait(run_mode_lock);
+            }
+        }
+
+        #[cfg(all(feature = "whpx", target_arch = "x86_64"))]
+        if devices::virtio::whpx_ovmf::take_vcpu_tlb_flush_request() {
+            let vcpu_arch: &mut dyn VcpuArch = &mut vcpu;
+            if let Some(whpx_vcpu) = vcpu_arch.downcast_mut::<WhpxVcpu>() {
+                if let Err(e) = whpx_vcpu.flush_tlb() {
+                    warn!(
+                        "whpx: vCPU {} TLB flush failed: {}",
+                        context.cpu_id, e
+                    );
+                }
             }
         }
 

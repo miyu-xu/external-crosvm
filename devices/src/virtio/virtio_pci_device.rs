@@ -974,7 +974,11 @@ impl PciDevice for VirtioPciDevice {
                         queue_index
                     );
                     if let Some(evt) = self.queue_evts.get(queue_index) {
+                        #[cfg(windows)]
+                        self.device.whpx_reset_queue_batch(queue_index);
                         let _ = evt.event.signal();
+                        #[cfg(windows)]
+                        self.device.whpx_wait_queue_batch(queue_index);
                     }
                 }
                 MSIX_TABLE_BAR_OFFSET..=MSIX_TABLE_LAST => {

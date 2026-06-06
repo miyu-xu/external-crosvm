@@ -368,6 +368,21 @@ impl PackedQueue {
             .unwrap();
 
         self.use_index.add_index(desc_chain.count, self.size());
+        #[cfg(windows)]
+        self.sync_used_descriptor(desc_addr);
+    }
+
+    #[cfg(windows)]
+    fn sync_used_descriptor(&self, desc_addr: GuestAddress) {
+        use base::warn;
+
+        if let Err(e) = self.mem.sync_guest_range(desc_addr, 16) {
+            warn!(
+                "virtio: failed to sync packed descriptor at {:#x}: {:#}",
+                desc_addr.offset(),
+                e
+            );
+        }
     }
 
     /// Returns if the queue should have an interrupt sent based on its state.
@@ -415,6 +430,10 @@ impl PackedQueue {
         } else {
             false
         }
+    }
+
+    pub fn force_used_interrupt(&mut self) {
+        self.interrupt.signal_used_queue(self.vector);
     }
 
     /// Acknowledges that this set of features should be enabled on this queue.

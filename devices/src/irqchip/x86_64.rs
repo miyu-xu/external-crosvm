@@ -56,6 +56,12 @@ pub trait IrqChipX86_64: IrqChip {
     /// Get the lapic frequency in Hz
     fn lapic_frequency(&self) -> u32;
 
+    /// Pre-create IOAPIC outgoing MSI routes before guest firmware submits device I/O.
+    /// No-op except on WHPX split irqchip.
+    fn pre_create_ioapic_out_events(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Retrieves the state of the PIT.
     fn get_pit(&self) -> Result<PitState>;
 

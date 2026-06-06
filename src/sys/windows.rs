@@ -188,6 +188,7 @@ use product::start_service_ipc_listener;
 use product::RunControlArgs;
 use product::ServiceVmState;
 use product::Token;
+use resources::AddressRange;
 use resources::SystemAllocator;
 use run_vcpu::run_all_vcpus;
 use run_vcpu::VcpuRunMode;
@@ -313,7 +314,9 @@ fn create_vhost_user_block_device(
 }
 
 fn create_block_device(cfg: &Config, disk: &DiskOption, disk_device_tube: Tube) -> DeviceResult {
-    let features = virtio::base_features(cfg.protection_type);
+    let mut features = virtio::base_features(cfg.protection_type);
+    // EVENT_IDX interrupt suppression breaks OVMF virtio-blk polling on WHPX.
+    features &= !(1 << 29); // VIRTIO_RING_F_EVENT_IDX
     let dev = virtio::BlockAsync::new(
         features,
         disk.open()?,
@@ -2104,6 +2107,19 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         (None, 0)
     };
 
+    #[cfg(target_arch = "x86_64")]
+    let pcie_ecam = if cfg.pcie_ecam.is_some() {
+        cfg.pcie_ecam
+    } else if matches!(&vm_image, VmImage::Bios(_)) {
+        // OVMF/QEMU Q35 probes ECAM at 0xE0000000; crosvm default (near 4G) breaks PCI enum.
+        Some(
+            AddressRange::from_start_and_size(0xE000_0000, 256 * 1024 * 1024)
+                .expect("QEMU-compatible ECAM range"),
+        )
+    } else {
+        None
+    };
+
     Ok(VmComponents {
         memory_size: cfg
             .memory
@@ -2112,7 +2128,9 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
             .ok_or_else(|| anyhow!("requested memory size too large"))?,
         swiotlb,
         vcpu_count: cfg.vcpu_count.unwrap_or(1),
-        fw_cfg_enable: false,
+        fw_cfg_enable: cfg.enable_fw_cfg
+            || cfg.disks.iter().any(|d| d.bootindex.is_some())
+            || matches!(&vm_image, VmImage::Bios(_)),
         bootorder_fw_cfg_blob: Vec::new(),
         vcpu_affinity: cfg.vcpu_affinity.clone(),
         cpu_clusters: cfg.cpu_clusters.clone(),
@@ -2159,7 +2177,7 @@ fn setup_vm_components(cfg: &Config) -> Result<VmComponents> {
         #[cfg(target_arch = "x86_64")]
         pci_low_start: cfg.pci_low_start,
         #[cfg(target_arch = "x86_64")]
-        pcie_ecam: cfg.pcie_ecam,
+        pcie_ecam,
         #[cfg(target_arch = "x86_64")]
         smbios: cfg.smbios.clone(),
         dynamic_power_coefficient: cfg.dynamic_power_coefficient.clone(),
@@ -2429,6 +2447,23 @@ fn run_config_inner(
                     .expect("could not clone vm_evt_wrtube"),
             )?;
 
+            let vm_for_gpa_refresh = vm
+                .try_clone()
+                .exit_context(Exit::WhpxSetupError, "failed to clone vm for gpa refresh")?;
+            devices::virtio::whpx_ovmf::register_gpa_refresh(Box::new(move |gpa, len| {
+                use vm_memory::GuestAddress;
+                // Stop vCPUs before remapping so polling loops do not run on stale mappings.
+                vm_for_gpa_refresh.kick_all_virtual_processors();
+                if let Err(e) = vm_for_gpa_refresh.refresh_gpa_range(GuestAddress(gpa), len) {
+                    base::warn!(
+                        "whpx: failed to refresh GPA range {:#x} len={}: {}",
+                        gpa,
+                        len,
+                        e
+                    );
+                }
+            }));
+
             let mut irq_chip = match irq_chip {
                 IrqChipKind::Kernel => unimplemented!("Kernel irqchip mode not supported by WHPX"),
                 IrqChipKind::Split => {
@@ -2491,6 +2526,43 @@ fn run_config_inner(
             )
         }
     }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn build_bootorder_fw_cfg_blob(
+    pci_devices: &mut [(Box<dyn BusDeviceObj>, Option<Minijail>)],
+    sys_allocator: &mut SystemAllocator,
+) -> Result<Vec<u8>> {
+    use devices::virtio::VirtioDevice;
+
+    arch::assign_pci_addresses(pci_devices, sys_allocator)
+        .map_err(|e| anyhow!("failed to assign PCI addresses: {:?}", e))?;
+
+    let mut open_firmware_device_paths: Vec<(Vec<u8>, usize)> = pci_devices
+        .iter()
+        .filter_map(|(d, _)| d.as_pci_device())
+        .filter_map(|s| s.as_virtio_pci_device())
+        .filter_map(|vpc| {
+            let addr = vpc.pci_address()?;
+            Some((vpc.virtio_device(), addr))
+        })
+        .flat_map(|(dev, addr)| dev.bootorder_fw_cfg(addr.dev))
+        .collect();
+
+    open_firmware_device_paths.sort_by(|a, b| a.1.cmp(&b.1));
+
+    let mut bootorder_fw_cfg_blob =
+        open_firmware_device_paths
+            .into_iter()
+            .fold(Vec::new(), |a, b| {
+                a.into_iter()
+                    .chain("/pci@i0cf8/".as_bytes().iter().copied())
+                    .chain(b.0)
+                    .chain("\n".as_bytes().iter().copied())
+                    .collect()
+            });
+    bootorder_fw_cfg_blob.push(0);
+    Ok(bootorder_fw_cfg_blob)
 }
 
 #[cfg(any(feature = "haxm", feature = "gvm", feature = "whpx"))]
@@ -2662,7 +2734,7 @@ where
 
     let mut initial_audio_session_states: Vec<InitialAudioSessionState> = Vec::new();
 
-    let (pci_devices, vsock_control_tube) = create_devices(
+    let (mut pci_devices, vsock_control_tube) = create_devices(
         &mut cfg,
         vm.get_memory(),
         &vm_evt_wrtube,
@@ -2681,6 +2753,15 @@ where
         virtio_snd_state_device_tube,
         virtio_snd_device_mute_tube,
     )?;
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        let bootorder = build_bootorder_fw_cfg_blob(&mut pci_devices, &mut sys_allocator)?;
+        if bootorder.len() > 1 {
+            components.bootorder_fw_cfg_blob = bootorder;
+            components.fw_cfg_enable = true;
+        }
+    }
 
     let mut vcpu_ids = Vec::new();
 

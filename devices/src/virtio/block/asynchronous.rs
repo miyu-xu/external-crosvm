@@ -15,6 +15,8 @@ use std::result;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -360,6 +362,11 @@ async fn process_one_request(
     status_writer
         .write_all(&[status])
         .map_err(ExecuteError::WriteStatus)?;
+    #[cfg(windows)]
+    {
+        writer.sync_guest_writes();
+        status_writer.sync_guest_writes();
+    }
     Ok(available_bytes)
 }
 
@@ -384,7 +391,25 @@ async fn process_one_chain(
 
     let mut queue = queue.borrow_mut();
     queue.add_used(avail_desc, len as u32);
-    queue.trigger_interrupt();
+    let mut irq = queue.trigger_interrupt();
+    // OVMF virtio-blk on WHPX may not poll the used ring when EVENT_IDX suppresses the
+    // interrupt; force delivery so firmware GPT/partition reads can complete.
+    #[cfg(windows)]
+    if !irq {
+        queue.force_used_interrupt();
+        irq = true;
+    }
+    #[cfg(windows)]
+    if irq {
+        static COMPLETION_COUNT: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let n = COMPLETION_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n < 5 || n % 500 == 0 {
+            base::info!("virtio-block: completion #{} len={} irq=true", n, len);
+        }
+    }
+    #[cfg(not(windows))]
+    debug!("virtio-block: completed request len={} irq={}", len, irq);
 }
 
 // There is one async task running `handle_queue` per virtio queue in use.
@@ -397,8 +422,14 @@ async fn handle_queue(
     flush_timer: Rc<RefCell<FlushTimer>>,
     flush_timer_armed: Rc<RefCell<bool>>,
     mut stop_rx: oneshot::Receiver<()>,
+    #[cfg(windows)] batch_done: Option<Event>,
 ) -> Queue {
     let queue = RefCell::new(queue);
+    #[cfg(windows)]
+    let mut background_tasks: FuturesUnordered<
+        std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    > = FuturesUnordered::new();
+    #[cfg(not(windows))]
     let mut background_tasks = FuturesUnordered::new();
     let evt_future = evt.wait().fuse();
     pin_mut!(evt_future);
@@ -425,14 +456,40 @@ async fn handle_queue(
                 return queue.into_inner();
             }
         };
-        while let Some(descriptor_chain) = queue.borrow_mut().pop() {
-            background_tasks.push(process_one_chain(
-                &queue,
-                descriptor_chain,
-                &disk_state,
-                &flush_timer,
-                &flush_timer_armed,
-            ));
+        loop {
+            let descriptor_chain = {
+                let mut q = queue.borrow_mut();
+                q.pop()
+            };
+            let Some(descriptor_chain) = descriptor_chain else {
+                break;
+            };
+            #[cfg(windows)]
+            {
+                // Complete each request before returning to the guest (WHPX memory coherency).
+                process_one_chain(
+                    &queue,
+                    descriptor_chain,
+                    &disk_state,
+                    &flush_timer,
+                    &flush_timer_armed,
+                )
+                .await;
+            }
+            #[cfg(not(windows))]
+            {
+                background_tasks.push(process_one_chain(
+                    &queue,
+                    descriptor_chain,
+                    &disk_state,
+                    &flush_timer,
+                    &flush_timer_armed,
+                ));
+            }
+        }
+        #[cfg(windows)]
+        if let Some(ref done) = batch_done {
+            let _ = done.signal();
         }
     }
 }
@@ -545,6 +602,8 @@ enum WorkerCmd {
     StartQueue {
         index: usize,
         queue: Queue,
+        #[cfg(windows)]
+        batch_done: Event,
     },
     StopQueue {
         index: usize,
@@ -622,7 +681,7 @@ async fn run_worker(
             worker_cmd = worker_rx.next() => {
                 match worker_cmd {
                     None => anyhow::bail!("worker control channel unexpectedly closed"),
-                    Some(WorkerCmd::StartQueue{index, queue}) => {
+                    Some(WorkerCmd::StartQueue{index, queue, #[cfg(windows)] batch_done}) => {
                         if matches!(&*resample_future, futures::future::Either::Left(_)) {
                             resample_future.set(
                                 async_utils::handle_irq_resample(ex, queue.interrupt().clone())
@@ -644,6 +703,8 @@ async fn run_worker(
                             Rc::clone(&flush_timer),
                             Rc::clone(&flush_timer_armed),
                             rx,
+                            #[cfg(windows)]
+                            Some(batch_done),
                         ).remote_handle();
                         let old_stop_fn = queue_handler_stop_fns.insert(index, move || {
                             // Ask the handler to stop.
@@ -750,6 +811,8 @@ pub struct BlockAsync {
     activated_queues: BTreeSet<usize>,
     #[cfg(windows)]
     pub(super) io_concurrency: u32,
+    #[cfg(windows)]
+    queue_batch_done: Arc<Mutex<BTreeMap<usize, Event>>>,
     pci_address: Option<PciAddress>,
 }
 
@@ -836,8 +899,20 @@ impl BlockAsync {
             boot_index,
             #[cfg(windows)]
             io_concurrency,
+            #[cfg(windows)]
+            queue_batch_done: Arc::new(Mutex::new(BTreeMap::new())),
             pci_address: disk_option.pci_address,
         })
+    }
+
+    #[cfg(windows)]
+    fn queue_batch_done_event(&self, queue_index: usize) -> Option<Event> {
+        self.queue_batch_done
+            .lock()
+            .ok()?
+            .get(&queue_index)?
+            .try_clone()
+            .ok()
     }
 
     /// Returns the feature flags given the specified attributes.
@@ -1161,10 +1236,32 @@ impl BlockAsync {
         queue: Queue,
         _mem: GuestMemory,
     ) -> anyhow::Result<()> {
+        #[cfg(windows)]
+        let batch_done = {
+            let batch_done = Event::new().context("failed to create queue batch_done event")?;
+            self.queue_batch_done
+                .lock()
+                .map_err(|_| anyhow::anyhow!("queue_batch_done lock poisoned"))?
+                .insert(idx, batch_done.try_clone().context("clone batch_done")?);
+            batch_done
+        };
         let (_, worker_tx) = self.start_worker(idx)?;
-        worker_tx
-            .unbounded_send(WorkerCmd::StartQueue { index: idx, queue })
-            .expect("worker channel closed early");
+        #[cfg(windows)]
+        {
+            worker_tx
+                .unbounded_send(WorkerCmd::StartQueue {
+                    index: idx,
+                    queue,
+                    batch_done,
+                })
+                .expect("worker channel closed early");
+        }
+        #[cfg(not(windows))]
+        {
+            worker_tx
+                .unbounded_send(WorkerCmd::StartQueue { index: idx, queue })
+                .expect("worker channel closed early");
+        }
         self.activated_queues.insert(idx);
         Ok(())
     }
@@ -1244,6 +1341,41 @@ impl VirtioDevice for BlockAsync {
             self.start_queue(i, q, mem.clone())?;
         }
         Ok(())
+    }
+
+    #[cfg(windows)]
+    fn whpx_reset_queue_batch(&self, queue_index: usize) {
+        if let Some(evt) = self.queue_batch_done_event(queue_index) {
+            let _ = evt.reset();
+        }
+    }
+
+    #[cfg(windows)]
+    fn whpx_wait_queue_batch(&self, queue_index: usize) {
+        let Some(evt) = self.queue_batch_done_event(queue_index) else {
+            return;
+        };
+        match evt.wait_timeout(Duration::from_secs(10)) {
+            Ok(base::EventWaitResult::Signaled) => {
+                base::debug!(
+                    "virtio-block: queue {} batch completed (WHPX sync notify)",
+                    queue_index
+                );
+            }
+            Ok(base::EventWaitResult::TimedOut) => {
+                base::warn!(
+                    "virtio-block: queue {} batch wait timed out (WHPX sync notify)",
+                    queue_index
+                );
+            }
+            Err(e) => {
+                base::warn!(
+                    "virtio-block: queue {} batch wait failed: {}",
+                    queue_index,
+                    e
+                );
+            }
+        }
     }
 
     fn reset(&mut self) -> anyhow::Result<()> {

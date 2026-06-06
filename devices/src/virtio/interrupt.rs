@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(target_arch = "x86_64")]
+use base::debug;
+#[cfg(target_arch = "x86_64")]
 use base::error;
 use base::Event;
 #[cfg(target_arch = "x86_64")]
@@ -109,6 +111,10 @@ impl Interrupt {
                     let mut msix_config = msix_config.lock();
                     if msix_config.enabled() {
                         if vector != VIRTIO_MSI_NO_VECTOR {
+                            debug!(
+                                "virtio: MSI-X used/config signal vector={} mask={:#x}",
+                                vector, interrupt_status_mask
+                            );
                             msix_config.trigger(vector);
                         }
                         return;
@@ -184,7 +190,8 @@ impl Interrupt {
         Interrupt {
             inner: Arc::new(InterruptInner {
                 interrupt_status: AtomicUsize::new(0),
-                async_intr_status: false,
+                // WHPX/OVMF may miss the first INTx edge; always re-trigger used-ring IRQs.
+                async_intr_status: cfg!(windows),
                 transport: Transport::Pci {
                     pci: TransportPci {
                         irq_evt_lvl,
@@ -213,7 +220,7 @@ impl Interrupt {
         Interrupt {
             inner: Arc::new(InterruptInner {
                 interrupt_status: AtomicUsize::new(snapshot.interrupt_status),
-                async_intr_status: false,
+                async_intr_status: cfg!(windows),
                 transport: Transport::Pci {
                     pci: TransportPci {
                         irq_evt_lvl,

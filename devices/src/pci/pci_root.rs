@@ -161,7 +161,25 @@ pub struct PciRoot {
     pci_mmio_state: PciRootMmioState,
 }
 
-const PCI_DEVICE_ID_INTEL_82441: u16 = 0x1237;
+const PCI_DEVICE_ID_INTEL_Q35_MCH: u16 = 0x29c0;
+const PCI_DEVICE_ID_INTEL_ICH9_LPC: u16 = 0x2918;
+const ICH9_LPC_PMBASE_REG: usize = 0x40 / 4;
+const ICH9_LPC_ACPI_CNTL_REG: usize = 0x44 / 4;
+const ICH9_PMBASE_DEFAULT: u32 = 0x601; // 0x600 | RTE, matches crosvm ACPIPM at 0x600
+const ICH9_ACPI_CNTL_DEFAULT: u32 = 0x80; // ACPI_EN
+
+fn is_ich9_lpc(address: &PciAddress) -> bool {
+    address.bus == 0 && address.dev == 0x1f && address.func == 0
+}
+
+fn ich9_lpc_config_read(register: usize) -> u32 {
+    match register {
+        0 => (PCI_VENDOR_ID_INTEL as u32) | ((PCI_DEVICE_ID_INTEL_ICH9_LPC as u32) << 16),
+        ICH9_LPC_PMBASE_REG => ICH9_PMBASE_DEFAULT,
+        ICH9_LPC_ACPI_CNTL_REG => ICH9_ACPI_CNTL_DEFAULT,
+        _ => 0,
+    }
+}
 const PCIE_XBAR_BASE_ADDR: usize = 24;
 
 /// Used to serialize relevant information to PciRoot
@@ -210,7 +228,7 @@ impl PciRoot {
             root_configuration: PciRootConfiguration {
                 config: PciConfiguration::new(
                     PCI_VENDOR_ID_INTEL,
-                    PCI_DEVICE_ID_INTEL_82441,
+                    PCI_DEVICE_ID_INTEL_Q35_MCH,
                     PciClassCode::BridgeDevice,
                     &PciBridgeSubclass::HostBridge,
                     None,
@@ -359,6 +377,8 @@ impl PciRoot {
             } else {
                 self.root_configuration.config_register_read(register)
             }
+        } else if is_ich9_lpc(&address) {
+            ich9_lpc_config_read(register)
         } else {
             let mut data = self
                 .devices
@@ -390,6 +410,8 @@ impl PciRoot {
         if address.is_root() {
             self.root_configuration
                 .config_register_write(register, offset, data);
+        } else if is_ich9_lpc(&address) {
+            // OVMF programs PMBASE via config writes; reads return fixed defaults.
         } else if let Some(d) = self.devices.get(&address) {
             let res = d.lock().config_register_write(register, offset, data);
 
@@ -699,7 +721,7 @@ impl BusDevice for PciConfigIo {
     }
 
     fn device_id(&self) -> DeviceId {
-        PciId::new(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82441).into()
+        PciId::new(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_Q35_MCH).into()
     }
 
     fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
@@ -823,7 +845,7 @@ impl BusDevice for PciConfigMmio {
     }
 
     fn device_id(&self) -> DeviceId {
-        PciId::new(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82441).into()
+        PciId::new(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_Q35_MCH).into()
     }
 
     fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
@@ -922,7 +944,7 @@ impl BusDevice for PciVirtualConfigMmio {
     }
 
     fn device_id(&self) -> DeviceId {
-        PciId::new(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82441).into()
+        PciId::new(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_Q35_MCH).into()
     }
 
     fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {

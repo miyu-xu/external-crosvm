@@ -16,6 +16,8 @@ pub mod cmos;
 #[cfg(target_arch = "x86_64")]
 mod debugcon;
 mod fw_cfg;
+#[cfg(target_arch = "x86_64")]
+pub mod qemu_cpu_hotplug;
 mod i8042;
 mod irq_event;
 pub mod irqchip;
@@ -85,6 +87,7 @@ pub use self::fw_cfg::FwCfgItemType;
 pub use self::fw_cfg::FwCfgParameters;
 pub use self::fw_cfg::FW_CFG_BASE_PORT;
 pub use self::fw_cfg::FW_CFG_MAX_FILE_SLOTS;
+pub use self::fw_cfg::FW_CFG_NB_CPUS_SELECTOR;
 pub use self::fw_cfg::FW_CFG_WIDTH;
 pub use self::i8042::I8042Device;
 pub use self::irq_event::IrqEdgeEvent;

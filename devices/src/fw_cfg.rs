@@ -41,6 +41,8 @@ const FW_CFG_REVISION: [u8; 4] = [0, 0, 0, 1];
 const FW_CFG_SIGNATURE_SELECTOR: u16 = 0x0000;
 const FW_CFG_REVISION_SELECTOR: u16 = 0x0001;
 const FW_CFG_FILE_DIR_SELECTOR: u16 = 0x0019;
+/// QEMU well-known selector for the number of present vCPUs (OVMF `QemuFwCfgItemSmpCpuCount`).
+pub const FW_CFG_NB_CPUS_SELECTOR: u16 = 0x0005;
 // Code that uses fw_cfg expects to read a char[56] for filenames
 const FW_CFG_FILENAME_SIZE: usize = 56;
 
@@ -175,6 +177,25 @@ impl FwCfgDevice {
         device.add_bytes(FW_CFG_REVISION.to_vec(), FwCfgItemType::RevisionVector);
 
         Ok(device)
+    }
+
+    /// Sets a well-known generic fw_cfg item (selector 0x0000–0x001f).
+    pub fn set_generic_item(&mut self, selector: u16, data: Vec<u8>) {
+        let idx = selector as usize;
+        if idx >= FW_CFG_FILE_FIRST {
+            return;
+        }
+        let entries = &mut self.entries[0];
+        if entries.len() <= idx {
+            entries.resize_with(idx + 1, || FwCfgEntry {
+                allow_write: false,
+                data: vec![],
+            });
+        }
+        entries[idx] = FwCfgEntry {
+            allow_write: false,
+            data,
+        };
     }
 
     /// Adds a file to the device.

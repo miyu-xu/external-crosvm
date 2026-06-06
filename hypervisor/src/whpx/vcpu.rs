@@ -7,8 +7,11 @@ use std::arch::x86_64::CpuidResult;
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::mem::size_of;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
+use base::info;
+use base::warn;
 use base::Error;
 use base::Result;
 use libc::EINVAL;
@@ -17,6 +20,7 @@ use libc::ENOENT;
 use libc::ENXIO;
 use vm_memory::GuestAddress;
 use winapi::shared::winerror::E_UNEXPECTED;
+use winapi::shared::winerror::S_OK;
 use windows::Win32::Foundation::WHV_E_INSUFFICIENT_BUFFER;
 
 use super::types::*;
@@ -38,6 +42,38 @@ const WHPX_EXIT_DIRECTION_MMIO_READ: u8 = 0;
 const WHPX_EXIT_DIRECTION_MMIO_WRITE: u8 = 1;
 const WHPX_EXIT_DIRECTION_PIO_IN: u8 = 0;
 const WHPX_EXIT_DIRECTION_PIO_OUT: u8 = 1;
+
+/// Cap detailed WHPX IO/MMIO failure logs (set `CROSWVM_WHPX_IO_DEBUG=1` to enable).
+const WHPX_IO_DEBUG_MAX_LOGS: u32 = 128;
+static WHPX_IO_DEBUG_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+
+fn whpx_io_debug_enabled() -> bool {
+    std::env::var_os("CROSWVM_WHPX_IO_DEBUG").is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+fn format_emulator_status(status: &WHV_EMULATOR_STATUS) -> String {
+    let bits = unsafe { status.__bindgen_anon_1 };
+    format!(
+        "as_u32={} ok={} internal_fail={} io_cb_fail={} mmio_cb_fail={} translate_fail={}",
+        unsafe { status.AsUINT32 },
+        bits.EmulationSuccessful(),
+        bits.InternalEmulationFailure(),
+        bits.IoPortCallbackFailed(),
+        bits.MemoryCallbackFailed(),
+        bits.TranslateGvaPageCallbackFailed(),
+    )
+}
+
+fn log_whpx_io_failure(kind: &str, detail: &str) {
+    if !whpx_io_debug_enabled() {
+        return;
+    }
+    let n = WHPX_IO_DEBUG_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+    if n >= WHPX_IO_DEBUG_MAX_LOGS {
+        return;
+    }
+    warn!("whpx {} emulation failed: {}", kind, detail);
+}
 
 /// This is the whpx instruction emulator, useful for deconstructing
 /// io & memory port instructions. Whpx does not do this automatically.
@@ -359,85 +395,250 @@ impl WhpxVcpu {
         self.apic_frequency = Some(lapic_frequency);
     }
 
-    /// Handle reading the MSR with id `id`. If MSR `id` is not supported, inject a GP fault.
-    fn handle_msr_read(&mut self, id: u32) -> Result<()> {
-        // Verify that we're only being called in a situation where the last exit reason was
-        // ExitReasonX64MsrAccess
-        if self.last_exit_context.ExitReason
-            != WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64MsrAccess
-        {
-            return Err(Error::new(EINVAL));
-        }
-
-        let value = match id {
-            HV_X64_MSR_TSC_FREQUENCY => Some(self.tsc_frequency.unwrap_or(0)),
-            HV_X64_MSR_APIC_FREQUENCY => Some(self.apic_frequency.unwrap_or(0) as u64),
-            _ => None,
+    /// Reads WHvRegisterPendingInterruption from the live vCPU state (not last exit snapshot).
+    pub fn interruption_pending_live(&self) -> Result<bool> {
+        const REG_NAMES: [WHV_REGISTER_NAME; 1] =
+            [WHV_REGISTER_NAME_WHvRegisterPendingInterruption];
+        let mut value = WHV_REGISTER_VALUE::default();
+        check_whpx!(unsafe {
+            WHvGetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                self.index,
+                REG_NAMES.as_ptr(),
+                REG_NAMES.len() as u32,
+                &mut value as *mut WHV_REGISTER_VALUE,
+            )
+        })?;
+        let pending = unsafe {
+            value
+                .PendingInterruption
+                .__bindgen_anon_1
+                .InterruptionPending()
         };
+        Ok(pending != 0)
+    }
 
-        if let Some(value) = value {
-            // Get the next rip from the exit context
-            let rip = self.last_exit_context.VpContext.Rip
-                + self.last_exit_context.VpContext.InstructionLength() as u64;
+    /// Returns `(eflags_if, interrupt_shadow, interruption_pending)` from the last vCPU exit.
+    pub fn interrupt_delivery_state(&self) -> (bool, bool, bool) {
+        let pending = unsafe {
+            self.last_exit_context
+                .VpContext
+                .ExecutionState
+                .__bindgen_anon_1
+                .InterruptionPending()
+        };
+        let shadow = unsafe {
+            self.last_exit_context
+                .VpContext
+                .ExecutionState
+                .__bindgen_anon_1
+                .InterruptShadow()
+        };
+        const IF_MASK: u64 = 0x00000200;
+        let eflags_if =
+            (self.last_exit_context.VpContext.Rflags & IF_MASK) != 0;
+        (eflags_if, shadow != 0, pending != 0)
+    }
 
-            const REG_NAMES: [WHV_REGISTER_NAME; 3] = [
-                WHV_REGISTER_NAME_WHvX64RegisterRip,
-                WHV_REGISTER_NAME_WHvX64RegisterRax,
-                WHV_REGISTER_NAME_WHvX64RegisterRdx,
-            ];
-
-            let values = vec![
-                WHV_REGISTER_VALUE { Reg64: rip },
-                // RDMSR instruction puts lower 32 bits in EAX and upper 32 bits in EDX
-                WHV_REGISTER_VALUE {
-                    Reg64: (value & 0xffffffff),
-                },
-                WHV_REGISTER_VALUE {
-                    Reg64: (value >> 32),
-                },
-            ];
-
-            // safe because we have enough space for all the registers
-            check_whpx!(unsafe {
-                WHvSetVirtualProcessorRegisters(
-                    self.vm_partition.partition,
-                    self.index,
-                    &REG_NAMES as *const WHV_REGISTER_NAME,
-                    REG_NAMES.len() as u32,
-                    values.as_ptr() as *const WHV_REGISTER_VALUE,
-                )
-            })
-        } else {
-            self.inject_gp_fault()
+    /// Log guest RIP and exception details from the last WHPX vCPU exit (boot debugging).
+    pub fn log_last_exit(&self, tag: &str) {
+        let ctx = &self.last_exit_context;
+        let rip = ctx.VpContext.Rip;
+        match ctx.ExitReason {
+            WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonException => {
+                let exc = unsafe { ctx.__bindgen_anon_1.VpException };
+                info!(
+                    "whpx: {} Exception type={:#x} rip={:#x} err={:#x} param={:#x}",
+                    tag, exc.ExceptionType, rip, exc.ErrorCode, exc.ExceptionParameter
+                );
+            }
+            WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonUnrecoverableException => {
+                info!("whpx: {} UnrecoverableException rip={:#x}", tag, rip);
+            }
+            WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonUnsupportedFeature => {
+                let feat = unsafe { ctx.__bindgen_anon_1.UnsupportedFeature };
+                info!(
+                    "whpx: {} UnsupportedFeature code={:?} rip={:#x}",
+                    tag, feat.FeatureCode, rip
+                );
+            }
+            other => {
+                info!("whpx: {} exit_reason={} rip={:#x}", tag, other, rip);
+            }
         }
     }
 
-    /// Handle writing the MSR with id `id`. If MSR `id` is not supported, inject a GP fault.
-    fn handle_msr_write(&mut self, id: u32, _value: u64) -> Result<()> {
-        // Verify that we're only being called in a situation where the last exit reason was
-        // ExitReasonX64MsrAccess
+    /// Reload CR3 so the guest TLB picks up host-side guest RAM updates (virtio rings).
+    pub fn flush_tlb(&self) -> Result<()> {
+        let sregs = self.get_sregs()?;
+        self.set_sregs(&sregs)
+    }
+
+    fn advance_rip(&mut self) -> Result<()> {
+        let rip = self.last_exit_context.VpContext.Rip
+            + self.last_exit_context.VpContext.InstructionLength() as u64;
+        let reg_name = WHV_REGISTER_NAME_WHvX64RegisterRip;
+        let value = WHV_REGISTER_VALUE { Reg64: rip };
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                self.index,
+                &reg_name,
+                1,
+                &value as *const WHV_REGISTER_VALUE,
+            )
+        })
+    }
+
+    /// Complete a trapped LAPIC INIT/SIPI ICR write. OVMF's CpuMpPei issues these even on
+    /// uniprocessor guests; without advancing RIP the firmware hangs in MpInitLib.
+    fn handle_apic_init_sipi_trap(&mut self) -> Result<()> {
+        if self.last_exit_context.ExitReason
+            != WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64ApicInitSipiTrap
+        {
+            return Err(Error::new(EINVAL));
+        }
+
+        const APIC_DM_INIT: u64 = 5;
+        const APIC_DM_SIPI: u64 = 6;
+        const APIC_DEST_ALLBUT: u64 = 3;
+
+        // Safe: exit reason guarantees ApicInitSipi is populated.
+        let icr = unsafe { self.last_exit_context.__bindgen_anon_1.ApicInitSipi.ApicIcr };
+        let delivery_mode = (icr >> 8) & 0x7;
+        let dest_shorthand = (icr >> 18) & 0x3;
+
+        if delivery_mode == APIC_DM_INIT || delivery_mode == APIC_DM_SIPI {
+            let interrupt_type = if delivery_mode == APIC_DM_INIT {
+                WHV_INTERRUPT_TYPE_WHvX64InterruptTypeInit
+            } else {
+                WHV_INTERRUPT_TYPE_WHvX64InterruptTypeSipi
+            };
+            let vector = (icr & 0xFF) as u32;
+
+            // Physical destination only; shorthand broadcasts are no-ops on single-vCPU VMs.
+            if dest_shorthand == 0 {
+                let mut interrupt = WHV_INTERRUPT_CONTROL {
+                    Destination: ((icr >> 56) & 0xFF) as u32,
+                    Vector: vector,
+                    ..Default::default()
+                };
+                interrupt.set_Type(interrupt_type as u64);
+                interrupt.set_DestinationMode(
+                    WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical as u64,
+                );
+                // Ignore errors when the target AP does not exist (typical for --cpus 1).
+                let _ = check_whpx!(unsafe {
+                    WHvRequestInterrupt(
+                        self.vm_partition.partition,
+                        &interrupt as *const WHV_INTERRUPT_CONTROL,
+                        size_of::<WHV_INTERRUPT_CONTROL>() as u32,
+                    )
+                });
+            } else if dest_shorthand != APIC_DEST_ALLBUT {
+                // APIC_DEST_ALLINC: deliver to all present vCPUs. Best-effort for mp guests.
+                let processor_count = self.vm_partition.processor_count;
+                for i in 0..processor_count {
+                    if i == self.index {
+                        continue;
+                    }
+                    let mut interrupt = WHV_INTERRUPT_CONTROL {
+                        Destination: i,
+                        Vector: vector,
+                        ..Default::default()
+                    };
+                    interrupt.set_Type(interrupt_type as u64);
+                    interrupt.set_DestinationMode(
+                        WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical
+                            as u64,
+                    );
+                    let _ = check_whpx!(unsafe {
+                        WHvRequestInterrupt(
+                            self.vm_partition.partition,
+                            &interrupt as *const WHV_INTERRUPT_CONTROL,
+                            size_of::<WHV_INTERRUPT_CONTROL>() as u32,
+                        )
+                    });
+                }
+            }
+        }
+
+        self.advance_rip()
+    }
+
+    /// Handle reading the MSR with id `id`. For unsupported MSRs, return 0 (RAZ) instead
+    /// of injecting #GP — a #GP before the kernel's exception handler is set up can cause
+    /// a silent triple fault before earlycon output, making the guest appear hung.
+    fn handle_msr_read(&mut self, id: u32) -> Result<()> {
         if self.last_exit_context.ExitReason
             != WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64MsrAccess
         {
             return Err(Error::new(EINVAL));
         }
 
-        // Do nothing, we assume TSC is always invariant
-        let success = matches!(id, HV_X64_MSR_TSC_INVARIANT_CONTROL);
+        // WHPX natively handles 52 MSRs (those with WHvX64Register* virtual registers);
+        // they do not cause VM exits.  MSRs that reach this handler are ones WHPX cannot
+        // virtualize.  Return 0 (RAZ) for unknown MSRs: safer than #GP which can crash
+        // the guest before its exception handler or console is initialized.
+        let value = match id {
+            HV_X64_MSR_TSC_FREQUENCY => self.tsc_frequency.unwrap_or(0),
+            HV_X64_MSR_APIC_FREQUENCY => self.apic_frequency.unwrap_or(0) as u64,
+            _ => {
+                warn!("whpx: RDMSR 0x{:x} unsupported, returning 0", id);
+                0
+            }
+        };
 
-        if !success {
-            return self.inject_gp_fault();
+        let rip = self.last_exit_context.VpContext.Rip
+            + self.last_exit_context.VpContext.InstructionLength() as u64;
+
+        const REG_NAMES: [WHV_REGISTER_NAME; 3] = [
+            WHV_REGISTER_NAME_WHvX64RegisterRip,
+            WHV_REGISTER_NAME_WHvX64RegisterRax,
+            WHV_REGISTER_NAME_WHvX64RegisterRdx,
+        ];
+
+        let values = vec![
+            WHV_REGISTER_VALUE { Reg64: rip },
+            WHV_REGISTER_VALUE { Reg64: (value & 0xffffffff) },
+            WHV_REGISTER_VALUE { Reg64: (value >> 32) },
+        ];
+
+        check_whpx!(unsafe {
+            WHvSetVirtualProcessorRegisters(
+                self.vm_partition.partition,
+                self.index,
+                &REG_NAMES as *const WHV_REGISTER_NAME,
+                REG_NAMES.len() as u32,
+                values.as_ptr() as *const WHV_REGISTER_VALUE,
+            )
+        })
+    }
+
+    /// Handle writing the MSR with id `id`. For unsupported MSRs, silently ignore (WI)
+    /// instead of injecting #GP — same rationale as `handle_msr_read`.
+    fn handle_msr_write(&mut self, id: u32, value: u64) -> Result<()> {
+        if self.last_exit_context.ExitReason
+            != WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64MsrAccess
+        {
+            return Err(Error::new(EINVAL));
         }
 
-        // Get the next rip from the exit context
+        match id {
+            HV_X64_MSR_TSC_INVARIANT_CONTROL => {
+                // Do nothing — we assume TSC is always invariant.
+            }
+            _ => {
+                warn!("whpx: WRMSR 0x{:x} = 0x{:x} unsupported, ignoring", id, value);
+            }
+        }
+
         let rip = self.last_exit_context.VpContext.Rip
             + self.last_exit_context.VpContext.InstructionLength() as u64;
 
         const REG_NAMES: [WHV_REGISTER_NAME; 1] = [WHV_REGISTER_NAME_WHvX64RegisterRip];
-
         let values = vec![WHV_REGISTER_VALUE { Reg64: rip }];
 
-        // safe because we have enough space for all the registers
         check_whpx!(unsafe {
             WHvSetVirtualProcessorRegisters(
                 self.vm_partition.partition,
@@ -504,6 +705,74 @@ impl WhpxVcpu {
             )
         })
     }
+
+    /// Like [`Vcpu::handle_io`], but also supplies an MMIO handler for guest memory operands
+    /// in the emulated PIO instruction (e.g. `ins`). Without this, WHPX sets
+    /// `MemoryCallbackFailed` because `memory_cb` sees `handle_mmio: None`.
+    pub fn handle_io_with_mmio(
+        &self,
+        handle_io_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>,
+        handle_mmio_fn: &mut dyn FnMut(IoParams) -> Result<Option<[u8; 8]>>,
+    ) -> Result<()> {
+        let mut status: WHV_EMULATOR_STATUS = Default::default();
+        // SAFETY: Only called after an X64IoPortAccess VP exit; union field matches ExitReason.
+        let io_ctx = unsafe { &self.last_exit_context.__bindgen_anon_1.IoPortAccess };
+        let port = io_ctx.PortNumber;
+        let access = unsafe { io_ctx.AccessInfo.__bindgen_anon_1 };
+        let is_write = access.IsWrite();
+        let access_size = access.AccessSize();
+        let mut ctx = InstructionEmulatorContext {
+            vm_partition: self.vm_partition.clone(),
+            index: self.index,
+            handle_mmio: Some(handle_mmio_fn),
+            handle_io: Some(handle_io_fn),
+        };
+        let hr = unsafe {
+            WHvEmulatorTryIoEmulation(
+                self.instruction_emulator.handle,
+                &mut ctx as *mut _ as *mut c_void,
+                &self.last_exit_context.VpContext,
+                io_ctx,
+                &mut status,
+            )
+        };
+        if hr != S_OK {
+            log_whpx_io_failure(
+                "io",
+                &format!(
+                    "vcpu={} HRESULT=0x{:08x} port=0x{:x} dir={} size={} rip=0x{:x} {} insn_len={}",
+                    self.index,
+                    hr as u32,
+                    port,
+                    if is_write != 0 { "out" } else { "in" },
+                    access_size,
+                    self.last_exit_context.VpContext.Rip,
+                    format_emulator_status(&status),
+                    io_ctx.InstructionByteCount,
+                ),
+            );
+            return Err(Error::new(hr));
+        }
+        let success = unsafe { status.__bindgen_anon_1.EmulationSuccessful() > 0 };
+        if success {
+            Ok(())
+        } else {
+            log_whpx_io_failure(
+                "io",
+                &format!(
+                    "vcpu={} port=0x{:x} dir={} size={} rip=0x{:x} {} insn_len={}",
+                    self.index,
+                    port,
+                    if is_write != 0 { "out" } else { "in" },
+                    access_size,
+                    self.last_exit_context.VpContext.Rip,
+                    format_emulator_status(&status),
+                    io_ctx.InstructionByteCount,
+                ),
+            );
+            Err(Error::new(unsafe { status.AsUINT32 }))
+        }
+    }
 }
 
 impl Vcpu for WhpxVcpu {
@@ -564,6 +833,9 @@ impl Vcpu for WhpxVcpu {
         handle_fn: &mut dyn FnMut(IoParams) -> Result<Option<[u8; 8]>>,
     ) -> Result<()> {
         let mut status: WHV_EMULATOR_STATUS = Default::default();
+        // SAFETY: Only called after a MemoryAccess VP exit; union field matches ExitReason.
+        let mem_ctx = unsafe { &self.last_exit_context.__bindgen_anon_1.MemoryAccess };
+        let mem_access_type = unsafe { mem_ctx.AccessInfo.__bindgen_anon_1.AccessType() };
         let mut ctx = InstructionEmulatorContext {
             vm_partition: self.vm_partition.clone(),
             index: self.index,
@@ -571,33 +843,63 @@ impl Vcpu for WhpxVcpu {
             handle_io: None,
         };
         // safe as long as all callbacks occur before this fn returns.
-        check_whpx!(unsafe {
+        let hr = unsafe {
             WHvEmulatorTryMmioEmulation(
                 self.instruction_emulator.handle,
                 &mut ctx as *mut _ as *mut c_void,
                 &self.last_exit_context.VpContext,
-                &self.last_exit_context.__bindgen_anon_1.MemoryAccess,
+                mem_ctx,
                 &mut status,
             )
-        })?;
+        };
+        if hr != S_OK {
+            log_whpx_io_failure(
+                "mmio",
+                &format!(
+                    "vcpu={} HRESULT=0x{:08x} rip=0x{:x} gpa=0x{:x} {}",
+                    self.index,
+                    hr as u32,
+                    self.last_exit_context.VpContext.Rip,
+                    mem_ctx.Gpa,
+                    format_emulator_status(&status),
+                ),
+            );
+            return Err(Error::new(hr));
+        }
         // safe because we trust the kernel to fill in the union field properly.
         let success = unsafe { status.__bindgen_anon_1.EmulationSuccessful() > 0 };
         if success {
             Ok(())
         } else {
+            log_whpx_io_failure(
+                "mmio",
+                &format!(
+                    "vcpu={} rip=0x{:x} gpa=0x{:x} dir={} {}",
+                    self.index,
+                    self.last_exit_context.VpContext.Rip,
+                    mem_ctx.Gpa,
+                    mem_access_type,
+                    format_emulator_status(&status),
+                ),
+            );
             self.inject_gp_fault()?;
             // safe because we trust the kernel to fill in the union field properly.
             Err(Error::new(unsafe { status.AsUINT32 }))
         }
     }
 
-    /// This function should be called after `Vcpu::run` returns `VcpuExit::Io`.
-    ///
     /// Once called, it will determine whether an io in or io out was the reason for the io exit,
     /// call `handle_fn` with the respective IoOperation to perform the io in or io out,
     /// and set the return data in the vcpu so that the vcpu can resume running.
     fn handle_io(&self, handle_fn: &mut dyn FnMut(IoParams) -> Option<[u8; 8]>) -> Result<()> {
         let mut status: WHV_EMULATOR_STATUS = Default::default();
+        // SAFETY: Only called after an X64IoPortAccess VP exit; union field matches ExitReason.
+        let io_ctx = unsafe { &self.last_exit_context.__bindgen_anon_1.IoPortAccess };
+        let port = io_ctx.PortNumber;
+        // SAFETY: AccessInfo is a union; firmware IO exits use the bitfield layout.
+        let access = unsafe { io_ctx.AccessInfo.__bindgen_anon_1 };
+        let is_write = access.IsWrite();
+        let access_size = access.AccessSize();
         let mut ctx = InstructionEmulatorContext {
             vm_partition: self.vm_partition.clone(),
             index: self.index,
@@ -605,19 +907,50 @@ impl Vcpu for WhpxVcpu {
             handle_io: Some(handle_fn),
         };
         // safe as long as all callbacks occur before this fn returns.
-        check_whpx!(unsafe {
+        let hr = unsafe {
             WHvEmulatorTryIoEmulation(
                 self.instruction_emulator.handle,
                 &mut ctx as *mut _ as *mut c_void,
                 &self.last_exit_context.VpContext,
-                &self.last_exit_context.__bindgen_anon_1.IoPortAccess,
+                io_ctx,
                 &mut status,
             )
-        })?; // safe because we trust the kernel to fill in the union field properly.
+        };
+        if hr != S_OK {
+            log_whpx_io_failure(
+                "io",
+                &format!(
+                    "vcpu={} HRESULT=0x{:08x} port=0x{:x} dir={} size={} rip=0x{:x} {} insn_len={}",
+                    self.index,
+                    hr as u32,
+                    port,
+                    if is_write != 0 { "out" } else { "in" },
+                    access_size,
+                    self.last_exit_context.VpContext.Rip,
+                    format_emulator_status(&status),
+                    io_ctx.InstructionByteCount,
+                ),
+            );
+            return Err(Error::new(hr));
+        }
+        // safe because we trust the kernel to fill in the union field properly.
         let success = unsafe { status.__bindgen_anon_1.EmulationSuccessful() > 0 };
         if success {
             Ok(())
         } else {
+            log_whpx_io_failure(
+                "io",
+                &format!(
+                    "vcpu={} port=0x{:x} dir={} size={} rip=0x{:x} {} insn_len={}",
+                    self.index,
+                    port,
+                    if is_write != 0 { "out" } else { "in" },
+                    access_size,
+                    self.last_exit_context.VpContext.Rip,
+                    format_emulator_status(&status),
+                    io_ctx.InstructionByteCount,
+                ),
+            );
             // safe because we trust the kernel to fill in the union field properly.
             Err(Error::new(unsafe { status.AsUINT32 }))
         }
@@ -731,6 +1064,7 @@ impl Vcpu for WhpxVcpu {
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64ApicSmiTrap => Ok(VcpuExit::ApicSmiTrap),
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonHypercall => Ok(VcpuExit::Hypercall),
             WHV_RUN_VP_EXIT_REASON_WHvRunVpExitReasonX64ApicInitSipiTrap => {
+                self.handle_apic_init_sipi_trap()?;
                 Ok(VcpuExit::ApicInitSipiTrap)
             }
             // exit caused by host cancellation thorugh WHvCancelRunVirtualProcessor,
@@ -769,14 +1103,6 @@ impl VcpuX86_64 for WhpxVcpu {
 
     /// Checks if we can inject an interrupt into the VCPU.
     fn ready_for_interrupt(&self) -> bool {
-        // safe because InterruptionPending bit is always valid in ExecutionState struct
-        let pending = unsafe {
-            self.last_exit_context
-                .VpContext
-                .ExecutionState
-                .__bindgen_anon_1
-                .InterruptionPending()
-        };
         // safe because InterruptShadow bit is always valid in ExecutionState struct
         let shadow = unsafe {
             self.last_exit_context
@@ -789,9 +1115,23 @@ impl VcpuX86_64 for WhpxVcpu {
         let eflags = self.last_exit_context.VpContext.Rflags;
         const IF_MASK: u64 = 0x00000200;
 
+        // WHvRegisterPendingInterruption reflects injections made via WHvSetVirtualProcessorRegisters
+        // since the last exit; last_exit_context.ExecutionState can be stale until the next run.
+        let pending = match self.interruption_pending_live() {
+            Ok(pending) => pending,
+            Err(_) => unsafe {
+                self.last_exit_context
+                    .VpContext
+                    .ExecutionState
+                    .__bindgen_anon_1
+                    .InterruptionPending()
+                    != 0
+            },
+        };
+
         // can't inject an interrupt if InterruptShadow or InterruptPending bits are set, or if
         // the IF flag is clear
-        shadow == 0 && pending == 0 && (eflags & IF_MASK) != 0
+        shadow == 0 && !pending && (eflags & IF_MASK) != 0
     }
 
     /// Injects interrupt vector `irq` into the VCPU.

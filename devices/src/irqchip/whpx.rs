@@ -17,7 +17,9 @@ cfg_if::cfg_if! {
         use base::Clock;
     }
 }
+use base::debug;
 use base::error;
+use base::info;
 use base::Error;
 use base::Event;
 use base::Result;
@@ -27,6 +29,7 @@ use hypervisor::whpx::WhpxVm;
 use hypervisor::IoapicState;
 use hypervisor::IrqRoute;
 use hypervisor::IrqSource;
+use hypervisor::NUM_IOAPIC_PINS;
 use hypervisor::IrqSourceChip;
 use hypervisor::LapicState;
 use hypervisor::MPState;
@@ -87,6 +90,9 @@ pub struct WhpxSplitIrqChip {
     delayed_ioapic_irq_events: Arc<Mutex<DelayedIoApicIrqEvents>>,
     /// Array of Events that devices will use to assert ioapic pins.
     irq_events: Arc<Mutex<Vec<Option<IrqEvent>>>>,
+    /// MSI/APIC vector queued for direct `vcpu.interrupt()` when WHvRequestInterrupt alone
+    /// does not wake OVMF (WHPX early virtio-blk bring-up).
+    pending_apic_interrupt: Arc<Mutex<Option<u8>>>,
 }
 
 impl WhpxSplitIrqChip {
@@ -118,6 +124,7 @@ impl WhpxSplitIrqChip {
             ioapic_pins,
             delayed_ioapic_irq_events: Arc::new(Mutex::new(DelayedIoApicIrqEvents::new()?)),
             irq_events: Arc::new(Mutex::new(Vec::new())),
+            pending_apic_interrupt: Arc::new(Mutex::new(None)),
         };
 
         // This is equivalent to setting this in the blank Routes object above because
@@ -140,15 +147,96 @@ impl WhpxSplitIrqChip {
 
         let mut msi_data = MsiDataMessage::new();
         msi_data.set(0, 32, data as u64);
-        let data = InterruptData::from(&msi_data);
+        let intr = InterruptData::from(&msi_data);
 
-        self.vm.request_interrupt(
-            data.vector,
+        debug!(
+            "whpx: send_msi addr={:#010x} data={:#010x} vector={} dest_id={} dest_mode={:?}",
+            addr, data, intr.vector, dest.dest_id, dest.mode
+        );
+        debug!(
+            "whpx: send_msi vector={:#x} dest_id={}",
+            intr.vector, dest.dest_id
+        );
+        // Use WHvRequestInterrupt for ALL destinations (including dest_id==0).
+        // Previously we routed dest_id==0 through pending_apic_interrupt + vcpu.interrupt()
+        // because WHvRequestInterrupt was reported as unreliable. That unreliability was
+        // actually caused by the kick_all → Canceled → inject_deferred storm: when the vCPU
+        // was kicked while polling with IF=0, inject_interrupts saw IF=0 and deferred.
+        // Without the kick (WHvRequestInterrupt does not need one), the vCPU continues
+        // running and processes the interrupt when its window opens.
+        match self.vm.request_interrupt(
+            intr.vector,
             dest.dest_id,
             dest.mode,
-            data.trigger,
-            data.delivery,
-        )
+            intr.trigger,
+            intr.delivery,
+        ) {
+            Ok(()) => {
+                debug!(
+                    "whpx: WHvRequestInterrupt ok vector={:#x} dest_id={}",
+                    intr.vector, dest.dest_id
+                );
+            }
+            Err(e) => {
+                // Fallback: WHvRequestInterrupt may fail if the partition state does not
+                // allow it. Queue through inject_interrupts as last resort.
+                error!(
+                    "whpx: WHvRequestInterrupt failed vector={:#x} dest_id={}: {}, using pending_apic fallback",
+                    intr.vector, dest.dest_id, e
+                );
+                if dest.dest_id == 0 {
+                    *self.pending_apic_interrupt.lock() = Some(intr.vector);
+                }
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    /// Last-resort APIC delivery when IOAPIC out_events are not wired yet (early OVMF virtio-blk).
+    fn inject_ioapic_pin_emergency(&self, pin: usize) -> Result<()> {
+        if let Ok(ioapic) = self.ioapic.try_lock() {
+            if let Some((vector, dest_id, dest_mode, trigger, delivery)) = ioapic
+                .redirect_interrupt_for_pin(pin)
+                .or_else(|| ioapic.redirect_interrupt_for_pin_unchecked(pin))
+            {
+                info!(
+                    "whpx: IOAPIC pin={} emergency APIC vector={:#x} dest_id={}",
+                    pin, vector, dest_id
+                );
+                drop(ioapic);
+                if dest_id == 0 {
+                    *self.pending_apic_interrupt.lock() = Some(vector);
+                    // Do NOT kick: consumed by inject_interrupts on next exit (see send_msi).
+                } else {
+                    self.vm.request_interrupt(
+                        vector,
+                        dest_id,
+                        dest_mode,
+                        trigger,
+                        delivery,
+                    )?;
+                    self.vm.kick_all_virtual_processors();
+                }
+                return Ok(());
+            }
+
+            let (masked, vector, has_out) = ioapic.pin_delivery_state(pin);
+            debug!(
+                "whpx: IOAPIC pin={} emergency fallback masked={} vector={} out_event={}",
+                pin, masked, vector, has_out
+            );
+        }
+
+        // Typical ACPI legacy IRQ pin N -> vector 0x20+N when firmware has not programmed IOAPIC.
+        let vector = 0x20u8.saturating_add(pin as u8);
+        info!(
+            "whpx: IOAPIC pin={} synthetic APIC vector={:#x} dest_id=0",
+            pin, vector
+        );
+        *self.pending_apic_interrupt.lock() = Some(vector);
+        // Do NOT kick: consumed by inject_interrupts on next exit (see send_msi).
+        Ok(())
     }
 
     /// Return true if there is a pending interrupt for the specified vcpu. For WhpxSplitIrqChip
@@ -243,12 +331,13 @@ impl IrqChip for WhpxSplitIrqChip {
         irq_event: &IrqLevelEvent,
         source: IrqEventSource,
     ) -> Result<Option<IrqEventIndex>> {
-        self.register_irq_event(
+        let index = self.register_irq_event(
             irq,
             irq_event.get_trigger(),
             Some(irq_event.get_resample()),
             source,
-        )
+        )?;
+        Ok(index)
     }
 
     fn unregister_level_irq_event(&mut self, irq: u32, irq_event: &IrqLevelEvent) -> Result<()> {
@@ -322,6 +411,18 @@ impl IrqChip for WhpxSplitIrqChip {
         };
         evt.event.wait()?;
 
+        debug!(
+            "whpx: service_irq_event index={} gsi={}",
+            event_index, evt.gsi
+        );
+
+        debug!(
+            "whpx: service_irq_event index={} gsi={} routes={}",
+            event_index,
+            evt.gsi,
+            self.routes.lock()[evt.gsi as usize].len()
+        );
+
         for route in self.routes.lock()[evt.gsi as usize].iter() {
             match *route {
                 IrqSource::Irqchip {
@@ -332,6 +433,7 @@ impl IrqChip for WhpxSplitIrqChip {
                     chip: IrqSourceChip::PicSecondary,
                     pin,
                 } => {
+                    debug!("whpx: route gsi={} -> PIC pin={}", evt.gsi, pin);
                     let mut pic = self.pic.lock();
                     if evt.resample_event.is_some() {
                         pic.service_irq(pin as u8, true);
@@ -344,12 +446,108 @@ impl IrqChip for WhpxSplitIrqChip {
                     chip: IrqSourceChip::Ioapic,
                     pin,
                 } => {
+                    debug!("whpx: route gsi={} -> IOAPIC pin={}", evt.gsi, pin);
                     if let Ok(mut ioapic) = self.ioapic.try_lock() {
-                        if evt.resample_event.is_some() {
-                            ioapic.service_irq(pin as usize, true);
+                        let injected = if evt.resample_event.is_some() {
+                            ioapic.service_irq(pin as usize, true)
                         } else {
-                            ioapic.service_irq(pin as usize, true);
+                            let asserted = ioapic.service_irq(pin as usize, true);
                             ioapic.service_irq(pin as usize, false);
+                            asserted
+                        };
+                        info!(
+                            "whpx: IOAPIC pin={} injected={} resample={}",
+                            pin,
+                            injected,
+                            evt.resample_event.is_some()
+                        );
+                        if !injected {
+                            info!(
+                                "whpx: IOAPIC pin={} delivery failed; trying fallbacks",
+                                pin
+                            );
+                            if let Some((addr, data)) = ioapic.msi_for_pin(pin as usize) {
+                                let vector = (data & 0xFF) as u8;
+                                info!(
+                                    "whpx: IOAPIC pin={} direct MSI fallback addr={:#010x} data={:#010x}",
+                                    pin, addr, data
+                                );
+                                drop(ioapic);
+                                self.send_msi(addr, data)?;
+                                // Clear Remote IRR on the IOAPIC pin: the MSI path delivers
+                                // the interrupt via the APIC directly, and the guest EOI
+                                // goes to the LAPIC (not IOAPIC). Without clearing Remote IRR
+                                // here, level-triggered pin coalescing blocks all subsequent
+                                // INTx deliveries, starving the firmware of disk interrupts.
+                                if let Ok(mut ioapic2) = self.ioapic.try_lock() {
+                                    ioapic2.end_of_interrupt(vector);
+                                }
+                            } else if let Some((vector, dest_id, dest_mode, trigger, delivery)) =
+                                ioapic.redirect_interrupt_for_pin(pin as usize)
+                            {
+                                info!(
+                                    "whpx: IOAPIC pin={} direct APIC fallback vector={:#x} dest_id={}",
+                                    pin, vector, dest_id
+                                );
+                                drop(ioapic);
+                                if dest_id == 0 {
+                                    *self.pending_apic_interrupt.lock() = Some(vector);
+                                    // Do NOT kick: pending_apic_interrupt is consumed by
+                                    // inject_interrupts on the next natural vCPU exit.
+                                } else {
+                                    self.vm.request_interrupt(
+                                        vector,
+                                        dest_id,
+                                        dest_mode,
+                                        trigger,
+                                        delivery,
+                                    )?;
+                                    self.vm.kick_all_virtual_processors();
+                                }
+                                // Clear Remote IRR (same rationale as MSI fallback above).
+                                if let Ok(mut ioapic2) = self.ioapic.try_lock() {
+                                    ioapic2.end_of_interrupt(vector);
+                                }
+                            } else if let Some((vector, dest_id, dest_mode, trigger, delivery)) =
+                                ioapic.redirect_interrupt_for_pin_unchecked(pin as usize)
+                            {
+                                // Post-ExitBootServices bootloaders often mask IOAPIC pins while
+                                // reprogramming APIC state; virtio-blk INTx on pin 12 (vector
+                                // 0x2c) must still be delivered for SYSLINUX to load the kernel.
+                                info!(
+                                    "whpx: IOAPIC pin={} masked-pin APIC fallback vector={:#x} dest_id={}",
+                                    pin, vector, dest_id
+                                );
+                                drop(ioapic);
+                                if dest_id == 0 {
+                                    *self.pending_apic_interrupt.lock() = Some(vector);
+                                    // Do NOT kick: pending_apic_interrupt is consumed by
+                                    // inject_interrupts on the next natural vCPU exit.
+                                } else {
+                                    self.vm.request_interrupt(
+                                        vector,
+                                        dest_id,
+                                        dest_mode,
+                                        trigger,
+                                        delivery,
+                                    )?;
+                                    self.vm.kick_all_virtual_processors();
+                                }
+                                // Clear Remote IRR (same rationale as MSI fallback above).
+                                if let Ok(mut ioapic2) = self.ioapic.try_lock() {
+                                    ioapic2.end_of_interrupt(vector);
+                                }
+                            } else {
+                                drop(ioapic);
+                                if let Err(e) = self.inject_ioapic_pin_emergency(pin as usize) {
+                                    error!(
+                                        "whpx: IOAPIC pin={} emergency delivery failed: {}",
+                                        pin, e
+                                    );
+                                }
+                            }
+                        } else {
+                            self.vm.kick_all_virtual_processors();
                         }
                     } else {
                         let mut delayed_events = self.delayed_ioapic_irq_events.lock();
@@ -357,7 +555,10 @@ impl IrqChip for WhpxSplitIrqChip {
                         delayed_events.trigger.signal()?;
                     }
                 }
-                IrqSource::Msi { address, data } => self.send_msi(address as u32, data)?,
+                IrqSource::Msi { address, data } => {
+                    debug!("whpx: route gsi={} -> MSI", evt.gsi);
+                    self.send_msi(address as u32, data)?;
+                }
                 _ => {
                     error!("Unexpected route source {:?}", route);
                     return Err(Error::new(libc::EINVAL));
@@ -365,6 +566,7 @@ impl IrqChip for WhpxSplitIrqChip {
             }
         }
 
+        // inject_interrupts consumes pending_apic_interrupt on the next vCPU exit.
         Ok(())
     }
 
@@ -381,17 +583,68 @@ impl IrqChip for WhpxSplitIrqChip {
             .downcast_ref()
             .expect("WhpxSplitIrqChip::add_vcpu called with non-WhpxVcpu");
         let vcpu_id = vcpu.id();
-        if !self.interrupt_requested(vcpu_id) || !vcpu.ready_for_interrupt() {
-            return Ok(());
+        let mut vcpu_ready = vcpu.ready_for_interrupt();
+
+        // Queued MSI/APIC (virtio-blk completions) first: WHPX delivers reliably via
+        // PendingInterruption. WHPX allows only one PendingInterruption at a time, so never
+        // inject APIC and PIC in the same round.
+        let mut apic_needs_window = false;
+        if vcpu_id == 0 && vcpu_ready {
+            let vector = *self.pending_apic_interrupt.lock();
+            if let Some(vector) = vector {
+                match vcpu.interrupt(vector) {
+                    Ok(()) => {
+                        info!("whpx: direct APIC vcpu.interrupt vector={:#x}", vector);
+                        *self.pending_apic_interrupt.lock() = None;
+                        vcpu_ready = false;
+                    }
+                    Err(e) if e.errno() == libc::EINVAL => {
+                        let (if_flag, shadow, pending) = vcpu.interrupt_delivery_state();
+                        debug!(
+                            "whpx: defer APIC inject vector={:#x} IF={} shadow={} pending={}: {}",
+                            vector, if_flag, shadow, pending, e
+                        );
+                        apic_needs_window = true;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        } else if vcpu_id == 0 && self.pending_apic_interrupt.lock().is_some() {
+            let (if_flag, shadow, pending) = vcpu.interrupt_delivery_state();
+            debug!(
+                "whpx: defer APIC inject IF={} shadow={} pending={}",
+                if_flag, shadow, pending
+            );
+            apic_needs_window = true;
         }
 
-        if let Some(vector) = self.get_external_interrupt(vcpu_id)? {
-            vcpu.interrupt(vector)?;
+        // Legacy PIC second (PIT/RTC after ExitBootServices).
+        let mut pic_needs_window = false;
+        if vcpu_id == 0 && vcpu_ready && self.interrupt_requested(vcpu_id) {
+            if let Some(vector) = self.get_external_interrupt(vcpu_id)? {
+                match vcpu.interrupt(vector) {
+                    Ok(()) => {
+                        info!("whpx: PIC vcpu.interrupt vector={:#x}", vector);
+                        vcpu_ready = false;
+                    }
+                    Err(e) if e.errno() == libc::EINVAL => {
+                        debug!(
+                            "whpx: PIC inject deferred vector={:#x}: {}",
+                            vector, e
+                        );
+                        pic_needs_window = true;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            pic_needs_window = pic_needs_window || self.interrupt_requested(vcpu_id);
         }
 
-        // The second interrupt request should be handled immediately, so ask vCPU to exit as soon
-        // as possible.
-        if self.interrupt_requested(vcpu_id) {
+        if apic_needs_window
+            || pic_needs_window
+            || (vcpu_id == 0 && self.pending_apic_interrupt.lock().is_some())
+            || (vcpu_id == 0 && self.interrupt_requested(vcpu_id))
+        {
             vcpu.set_interrupt_window_requested(true);
         }
         Ok(())
@@ -439,6 +692,7 @@ impl IrqChip for WhpxSplitIrqChip {
             ioapic_pins: self.ioapic_pins,
             delayed_ioapic_irq_events: self.delayed_ioapic_irq_events.clone(),
             irq_events: self.irq_events.clone(),
+            pending_apic_interrupt: self.pending_apic_interrupt.clone(),
         })
     }
 
@@ -629,6 +883,18 @@ impl IrqChipX86_64 for WhpxSplitIrqChip {
         let mut deser: WhpxSplitIrqChipSnapshot =
             serde_json::from_value(data).context("failed to deserialize WhpxSplitIrqChip")?;
         self.set_irq_routes(deser.routes.as_slice())?;
+        Ok(())
+    }
+
+    fn pre_create_ioapic_out_events(&mut self) -> Result<()> {
+        let mut ioapic = self.ioapic.lock();
+        for pin in 0..self.ioapic_pins {
+            ioapic.pre_create_out_event_for_pin(pin)?;
+        }
+        info!(
+            "whpx: pre-created IOAPIC out_events for {} pins",
+            self.ioapic_pins
+        );
         Ok(())
     }
 }

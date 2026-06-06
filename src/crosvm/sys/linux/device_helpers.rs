@@ -1088,7 +1088,7 @@ impl VirtioDeviceBuilder for &VsockConfig {
     ) -> anyhow::Result<Box<dyn VirtioDevice>> {
         let features = virtio::base_features(protection_type);
 
-        let dev = virtio::Vsock::new(self.cid, None, features)
+        let dev = virtio::vhost::Vsock::new(features, self)
             .context("failed to set up virtual socket device")?;
 
         Ok(Box::new(dev))

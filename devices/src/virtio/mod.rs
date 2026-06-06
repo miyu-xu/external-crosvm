@@ -38,6 +38,8 @@ pub mod scsi;
 pub mod snd;
 pub mod vhost;
 pub mod vhost_user_frontend;
+#[cfg(windows)]
+pub mod whpx_ovmf;
 pub mod vsock;
 
 #[cfg(feature = "balloon")]

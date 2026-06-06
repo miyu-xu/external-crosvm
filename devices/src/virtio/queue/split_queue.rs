@@ -10,6 +10,8 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use base::error;
+#[cfg(windows)]
+use base::warn;
 use base::Event;
 use data_model::Le32;
 use serde::Deserialize;
@@ -352,6 +354,36 @@ impl SplitQueue {
 
         self.next_used += Wrapping(1);
         self.set_used_index(self.next_used);
+        #[cfg(windows)]
+        self.sync_used_ring();
+    }
+
+    #[cfg(windows)]
+    fn sync_used_ring(&self) {
+        use base::debug;
+        use data_model::Le16;
+
+        let ring_bytes = 4usize.saturating_add(self.size as usize * 8);
+        if let Err(e) = self.mem.sync_guest_range(self.used_ring, ring_bytes) {
+            warn!(
+                "virtio: failed to sync used ring at {:#x}: {:#}",
+                self.used_ring.offset(),
+                e
+            );
+        }
+        crate::virtio::whpx_ovmf::refresh_gpa_range(self.used_ring.offset(), ring_bytes);
+        crate::virtio::whpx_ovmf::request_vcpu_tlb_flush();
+        fence(Ordering::SeqCst);
+        let used_idx_addr = self.used_ring.unchecked_add(2);
+        if let Ok(idx) = self.mem.read_obj_from_addr_volatile::<Le16>(used_idx_addr) {
+            debug!(
+                "virtio: used ring gpa={:#x} used.idx={} next_used={}",
+                self.used_ring.offset(),
+                u16::from(idx),
+                self.next_used.0
+            );
+        }
+        crate::virtio::whpx_ovmf::set_used_idx_gpa(self.used_ring.offset().saturating_add(2));
     }
 
     /// Returns if the queue should have an interrupt sent based on its state.
@@ -493,6 +525,12 @@ impl SplitQueue {
         } else {
             false
         }
+    }
+
+    /// Signal a used-ring interrupt even when EVENT_IDX / NO_INTERRUPT would suppress it.
+    pub fn force_used_interrupt(&mut self) {
+        self.last_used = self.next_used;
+        self.interrupt.signal_used_queue(self.vector);
     }
 
     pub fn snapshot(&self) -> anyhow::Result<serde_json::Value> {

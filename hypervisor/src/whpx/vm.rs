@@ -92,7 +92,9 @@ impl WhpxVm {
         apic_emulation: bool,
         vm_evt_wrtube: Option<SendTube>,
     ) -> WhpxResult<WhpxVm> {
-        let partition = SafePartition::new()?;
+        let mut partition = SafePartition::new()?;
+        partition.processor_count = cpu_count as u32;
+        let partition = Arc::new(partition);
         // setup partition defaults.
         let mut property: WHV_PARTITION_PROPERTY = Default::default();
         property.ProcessorCount = cpu_count as u32;
@@ -236,7 +238,7 @@ impl WhpxVm {
 
         Ok(WhpxVm {
             whpx: whpx.clone(),
-            vm_partition: Arc::new(partition),
+            vm_partition: partition,
             guest_mem,
             mem_regions: Arc::new(Mutex::new(BTreeMap::new())),
             mem_slot_gaps: Arc::new(Mutex::new(BinaryHeap::new())),
@@ -334,6 +336,64 @@ impl WhpxVm {
                 std::mem::size_of::<WHV_INTERRUPT_CONTROL>() as u32,
             )
         })
+    }
+
+    /// Cancel WHvRunVirtualProcessor on all vCPUs so pending interrupts are delivered promptly.
+    pub fn kick_all_virtual_processors(&self) {
+        for i in 0..self.vm_partition.processor_count {
+            // SAFETY: we own the partition and `i` is a valid processor index.
+            unsafe {
+                WHvCancelRunVirtualProcessor(self.vm_partition.partition, i, 0);
+            }
+        }
+    }
+
+    /// Unmap and remap a GPA subrange so WHPX vCPUs observe recent host-side guest RAM writes.
+    ///
+    /// FlushViewOfFile alone is not always sufficient for virtio ring updates on WHPX; remapping
+    /// forces the hypervisor to reload the backing host pages.
+    pub fn refresh_gpa_range(&self, guest_addr: GuestAddress, len: usize) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+
+        let ps = pagesize();
+        let gpa = guest_addr.offset();
+        let sync_start = gpa & !(ps as u64 - 1);
+        let end = gpa
+            .checked_add(len as u64)
+            .ok_or(Error::new(EOVERFLOW))?;
+        let sync_end = (end + ps as u64 - 1) & !(ps as u64 - 1);
+        let sync_len = sync_end - sync_start;
+
+        for region in self.guest_mem.regions() {
+            let slot_start = region.guest_addr.offset();
+            let slot_end = slot_start + region.size as u64;
+            if sync_start >= slot_start && sync_end <= slot_end {
+                let offset_in_slot = (sync_start - slot_start) as usize;
+                let host_ptr = (region.host_addr + offset_in_slot) as *mut u8;
+                // Remap in place (no WHvUnmapGpaRange): unmap+remap can leave stale guest TLB
+                // entries while OVMF polls the used ring, so the guest never sees used.idx update.
+                // SAFETY: WHPX validates GPA and host pointer for WHvMapGpaRange.
+                unsafe {
+                    set_user_memory_region(
+                        &self.vm_partition,
+                        false,
+                        false,
+                        sync_start,
+                        sync_len,
+                        host_ptr,
+                    )?;
+                }
+                base::debug!(
+                    "whpx: refreshed GPA range {:#x} len={}",
+                    sync_start, sync_len
+                );
+                return Ok(());
+            }
+        }
+
+        Err(Error::new(ENOENT))
     }
 
     /// In order to fully unmap a memory range such that the host can reclaim the memory,
