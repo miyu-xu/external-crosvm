@@ -208,14 +208,6 @@ impl InstructionEmulatorCallbacks for SafeInstructionEmulator {
         let memory_access_info = unsafe { &mut *memory_access };
         let address = memory_access_info.GpaAddress;
         let size = memory_access_info.AccessSize as usize;
-        // Log all TPM MMIO to see actual AccessSize from WHPX emulator
-        if address >= 0xFED40000 && address < 0xFED45000 {
-            base::info!(
-                "whpx_mmio: addr=0x{:x} size={} {}",
-                address, size,
-                if memory_access_info.Direction == 0 { "READ" } else { "WRITE" }
-            );
-        }
         match memory_access_info.Direction {
             WHPX_EXIT_DIRECTION_MMIO_READ => {
                 ctx.handle_mmio

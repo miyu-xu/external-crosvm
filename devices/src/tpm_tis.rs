@@ -126,7 +126,6 @@ impl TpmBackend for MinimalTpm {
         }
 
         let cc = u32::from_be_bytes([command[6], command[7], command[8], command[9]]);
-        base::info!("tpm_tis: execute_command len={} cc=0x{:08x} first_10={:02x?}", command.len(), cc, &command[..10.min(command.len())]);
 
         match cc {
             TPM12_CC_GET_CAPABILITY => {
@@ -176,7 +175,6 @@ impl TpmBackend for MinimalTpm {
                 let cap = u32::from_be_bytes([command[10], command[11], command[12], command[13]]);
                 let prop = u32::from_be_bytes([command[14], command[15], command[16], command[17]]);
                 let _count = u32::from_be_bytes([command[18], command[19], command[20], command[21]]);
-                base::info!("tpm_tis: TPM2_GetCapability cap=0x{:x} prop=0x{:x}", cap, prop);
 
                 match cap {
                     TPM_CAP_TPM_PROPERTIES => match prop {
@@ -213,8 +211,11 @@ impl TpmBackend for MinimalTpm {
                             )
                         }
                         TPM_PT_TOTAL_COMMANDS => {
-                            // Return a reasonable number of supported commands
-                            make_tpm_capability_response(prop, &100u32.to_be_bytes())
+                            // Return small number to limit probe loop iterations.
+                            // The kernel uses this to iterate over all supported
+                            // commands — returning a large number creates many
+                            // transmit cycles.
+                            make_tpm_capability_response(prop, &4u32.to_be_bytes())
                         }
                         // Unknown fixed property — return 0 (most TPM properties
                         // default to 0). This is better than an error for the probe.
@@ -347,7 +348,6 @@ impl TpmTisDevice {
     /// Write `data` bytes to the FIFO command buffer.
     fn write_fifo(&mut self, data: &[u8]) {
         self.cmd_buf.extend_from_slice(data);
-        base::info!("tpm_tis: write_fifo: now {} bytes", self.cmd_buf.len());
     }
 
     /// Execute the accumulated command via backend.
@@ -372,7 +372,6 @@ impl TpmTisDevice {
             let resp = self.backend.execute_command(cmd);
             if self.debug {
                 let cc = if cmd.len() >= 10 { u32::from_be_bytes([cmd[6], cmd[7], cmd[8], cmd[9]]) } else { 0 };
-                base::info!("tpm_tis: sub-cmd at {} len={} cc=0x{:x} resp={}", pos, cmd_size, cc, resp.len());
             }
             best_resp = Some(resp);
             pos += cmd_size;
@@ -398,13 +397,11 @@ impl TpmTisDevice {
             // between tpm_tis_ready() and tpm_tis_send_data(). Only clear
             // if we have a completed response pending; preserve the command
             // buffer if we're in the middle of command reception.
-            base::info!("tpm_tis: cmdReady dataAvail={} cmd_len={}", (self.sts & STS_DATA_AVAIL) != 0, self.cmd_buf.len());
             if self.sts & STS_DATA_AVAIL != 0 {
                 // Response ready — clear both command and response
                 self.cmd_buf.clear();
                 self.resp_buf.clear();
                 self.resp_pos = 0;
-                base::info!("tpm_tis: cmdReady CLEARED buffers");
             }
             // Always set commandReady and burstCount for command reception
             self.sts = STS_VALID | STS_COMMAND_READY | (BURST_COUNT << 8);
@@ -413,13 +410,11 @@ impl TpmTisDevice {
             // Execute the command (if any) or provide a ready response.
             // The kernel may write STS_GO without FIFO data during probe;
             // we provide a valid TPM2 response so the kernel can proceed.
-            base::info!("tpm_tis: STS_GO expecting_cmd={} cmd_len={}", self.expecting_cmd, self.cmd_buf.len());
             // Execute even without expecting_cmd or with accumulated commands.
             // The kernel may send multiple command cycles during retry;
             // each STS_GO should trigger execution.
             if !self.cmd_buf.is_empty() {
                 self.execute();
-                base::info!("tpm_tis: executed, resp_len={}", self.resp_buf.len());
             }
             self.expecting_cmd = false;
         } else if val & STS_RESP_RETRY != 0 {
@@ -590,12 +585,17 @@ impl BusDevice for TpmTisDevice {
     }
 
     fn read(&mut self, info: BusAccessInfo, data: &mut [u8]) {
-        self.read_reg(info.offset, data)
+        self.read_reg(info.offset, data);
+        if self.debug {
+            let lo = info.offset % 0x1000;
+            if lo == 0x18 || lo == 0x24 {
+                let v = if data.len() >= 1 { u64::from(data[0]) } else { 0 };
+            }
+        }
     }
 
     fn write(&mut self, info: BusAccessInfo, data: &[u8]) {
         if self.debug {
-            base::info!("tpm_tis: write offset=0x{:x} size={}", info.offset, data.len());
         }
         self.write_reg(info.offset, data)
     }

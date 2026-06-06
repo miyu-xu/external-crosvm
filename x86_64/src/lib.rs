@@ -861,7 +861,7 @@ impl arch::LinuxArch for X8664arch {
             .map_err(Error::SetTssAddr)?;
 
         // Use IRQ info in ACPI if provided by the user.
-        let mut mptable = true;
+        let mut mptable = cfg!(debug_assertions);
         let mut sci_irq = X86_64_SCI_IRQ;
 
         // punch pcie config mmio from pci low mmio, so that it couldn't be
@@ -1337,7 +1337,7 @@ impl arch::LinuxArch for X8664arch {
                 num_var_mtrrs, vcpu_supported_var_mtrrs,
             );
             // Filter out the MTRR entries from the MSR list.
-            true
+            cfg!(debug_assertions)
         } else {
             false
         };
@@ -1839,7 +1839,7 @@ impl X8664arch {
                 ) {
                     return Err(Error::CreateFwCfgDevice(err));
                 }
-                // this condition will only be true if the user specified at least one bootindex
+                // this condition will only be cfg!(debug_assertions) if the user specified at least one bootindex
                 // option on the command line. If none were specified, bootorder_fw_cfg_blob will
                 // only have a null byte (null terminator)
                 if bootorder_fw_cfg_blob.len() > 1 {
@@ -2126,7 +2126,7 @@ impl X8664arch {
         // ChromeOS requires a detectable TPM to avoid security shutdown.
         let tpm_mmio = Arc::new(Mutex::new(TpmTisDevice::new(
             devices::tpm_tis::TPM_TIS_MMIO_BASE,
-            true, // debug
+            cfg!(debug_assertions), // debug
             Box::new(devices::tpm_tis::MinimalTpm::new()),
         )));
         mmio_bus
@@ -2181,7 +2181,7 @@ impl X8664arch {
                         "_CRS".into(),
                         &aml::ResourceTemplate::new(vec![
                             &aml::IO::new(*port, *port, 0, 0x8),
-                            &aml::Interrupt::new(true, true, false, false, *irq),
+                            &aml::Interrupt::new(cfg!(debug_assertions), true, false, false, *irq),
                         ]),
                     ),
                 ],
@@ -2197,13 +2197,13 @@ impl X8664arch {
             let entry: Box<dyn Aml> = match (u32::try_from(r.start), u32::try_from(r.end)) {
                 (Ok(start), Ok(end)) => Box::new(aml::AddressSpace::new_memory(
                     aml::AddressSpaceCachable::NotCacheable,
-                    true,
+                    cfg!(debug_assertions),
                     start,
                     end,
                 )),
                 _ => Box::new(aml::AddressSpace::new_memory(
                     aml::AddressSpaceCachable::NotCacheable,
-                    true,
+                    cfg!(debug_assertions),
                     r.start,
                     r.end,
                 )),
@@ -2258,7 +2258,7 @@ impl X8664arch {
                     &aml::Name::new(
                         "_CRS".into(),
                         &aml::ResourceTemplate::new(vec![&aml::Memory32Fixed::new(
-                            true, start, len,
+                            cfg!(debug_assertions), start, len,
                         )]),
                     ),
                 ],
