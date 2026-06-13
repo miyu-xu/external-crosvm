@@ -464,7 +464,7 @@ fn create_composite(cmd: cmdline::CreateCompositeCommand) -> std::result::Result
             let size = open_disk_file(DiskFileParams {
                 path: PathBuf::from(&path),
                 is_read_only: !writable,
-                is_sparse_file: true,
+                is_sparse_file: writable,
                 is_overlapped: false,
                 is_direct: false,
                 lock: true,

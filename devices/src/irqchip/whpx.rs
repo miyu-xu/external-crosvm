@@ -157,30 +157,37 @@ impl WhpxSplitIrqChip {
             "whpx: send_msi vector={:#x} dest_id={}",
             intr.vector, dest.dest_id
         );
-        // Use WHvRequestInterrupt. Queue via pending_apic_interrupt as fallback
-        // for ALL destinations when WHvRequestInterrupt fails.
-        // Previously only dest_id==0 was handled, causing MSI delivery failures
-        // for virtio devices (GPU, blk) that use non-zero destination IDs.
-        let dest_id = dest.dest_id;
+        // Use WHvRequestInterrupt for ALL destinations (including dest_id==0).
+        // Previously we routed dest_id==0 through pending_apic_interrupt + vcpu.interrupt()
+        // because WHvRequestInterrupt was reported as unreliable. That unreliability was
+        // actually caused by the kick_all → Canceled → inject_deferred storm: when the vCPU
+        // was kicked while polling with IF=0, inject_interrupts saw IF=0 and deferred.
+        // Without the kick (WHvRequestInterrupt does not need one), the vCPU continues
+        // running and processes the interrupt when its window opens.
         match self.vm.request_interrupt(
-            intr.vector, dest_id, dest.mode, intr.trigger, intr.delivery,
+            intr.vector,
+            dest.dest_id,
+            dest.mode,
+            intr.trigger,
+            intr.delivery,
         ) {
             Ok(()) => {
-                debug!("whpx: WHvRequestInterrupt ok vector={:#x} dest_id={}", intr.vector, dest_id);
+                debug!(
+                    "whpx: WHvRequestInterrupt ok vector={:#x} dest_id={}",
+                    intr.vector, dest.dest_id
+                );
             }
             Err(e) => {
-                info!(
-                    "whpx: WHvRequestInterrupt failed vector={:#x} dest_id={}, using pending_apic fallback",
-                    intr.vector, dest_id
+                // Fallback: WHvRequestInterrupt may fail if the partition state does not
+                // allow it. Queue through inject_interrupts as last resort.
+                error!(
+                    "whpx: WHvRequestInterrupt failed vector={:#x} dest_id={}: {}, using pending_apic fallback",
+                    intr.vector, dest.dest_id, e
                 );
-                // Store vector for inject_interrupts to pick up on next vCPU exit.
-                // Works for any dest_id; inject_interrupts routes to the right vCPU.
-                let mut pending = self.pending_apic_interrupt.lock();
-                if pending.is_none() {
-                    *pending = Some(intr.vector);
+                if dest.dest_id == 0 {
+                    *self.pending_apic_interrupt.lock() = Some(intr.vector);
                 }
-                // Kick all vCPUs to force an exit so inject_interrupts can deliver.
-                self.vm.kick_all_virtual_processors();
+                return Ok(());
             }
         }
         Ok(())
@@ -788,7 +795,7 @@ impl IrqChip for WhpxSplitIrqChip {
             // MSR write failures if we enable it.
             IrqChipCap::TscDeadlineTimer => false,
             // TODO(b/180966070): Figure out how to query x2apic support.
-            IrqChipCap::X2Apic => true,
+            IrqChipCap::X2Apic => false,
             IrqChipCap::MpStateGetSet => false,
         }
     }

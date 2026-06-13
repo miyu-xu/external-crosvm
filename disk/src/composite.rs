@@ -616,6 +616,7 @@ fn write_beginning(
         disk_guid,
         partition_entries_crc32,
         secondary_table_offset,
+        disk_size,
         false,
     )?;
     file.write_all(&[0; HEADER_PADDING_LENGTH])
@@ -643,21 +644,26 @@ fn write_end(
     // Write partition entries, including unused ones.
     file.write_all(partitions).map_err(Error::WriteHeader)?;
 
-    // Write the GPT header, and pad out to the end of the sector.
+    // Padding between partition entries and the backup GPT header.
+    // The backup header must be the last sector of the disk.
+    let footer_size = disk_size - secondary_table_offset;
+    let header_offset_in_footer = footer_size - SECTOR_SIZE;  // last sector
+    let entries_size = (GPT_NUM_PARTITIONS as u64) * (GPT_PARTITION_ENTRY_SIZE as u64);
+    let padding_after_entries = header_offset_in_footer - entries_size;
+    file
+        .write_all(&vec![0; padding_after_entries as usize])
+        .map_err(Error::WriteHeader)?;
+
+    // Write the backup GPT header at the last sector of the footer.
     write_gpt_header(
         file,
         disk_guid,
         partition_entries_crc32,
         secondary_table_offset,
+        disk_size,
         true,
     )?;
     file.write_all(&[0; HEADER_PADDING_LENGTH])
-        .map_err(Error::WriteHeader)?;
-
-    // Pad out to the aligned disk size.
-    let used_disk_size = secondary_table_offset + GPT_END_SIZE;
-    let padding = disk_size - used_disk_size;
-    file.write_all(&vec![0; padding as usize])
         .map_err(Error::WriteHeader)?;
 
     Ok(())

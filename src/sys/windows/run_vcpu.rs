@@ -222,6 +222,8 @@ impl VcpuRunThread {
     fn whpx_configure_vcpu(vcpu: &mut dyn VcpuArch, irq_chip: &mut dyn IrqChipArch) {
         // only apply to actual WhpxVcpu instances
         if let Some(whpx_vcpu) = vcpu.downcast_mut::<WhpxVcpu>() {
+            // WhpxVcpu instances need to know the TSC and Lapic frequencies to handle Hyper-V MSR
+            // reads and writes.
             let tsc_freq = devices::tsc::tsc_frequency()
                 .map_err(|e| {
                     error!(
@@ -232,12 +234,6 @@ impl VcpuRunThread {
                 })
                 .ok();
             whpx_vcpu.set_frequencies(tsc_freq, irq_chip.lapic_frequency());
-            let id = (whpx_vcpu as &dyn VcpuArch).id() as u32;
-            let _ = whpx_vcpu.set_apic_id(id);
-            // QEMU whpx_cpu_synchronize_post_reset: push complete register state + APIC_BASE.
-            if let Err(e) = whpx_vcpu.qemu_push_reset_state() {
-                error!("whpx: qemu_push_reset_state failed: {}", e);
-            }
         }
     }
 
@@ -796,7 +792,11 @@ where
                 let _trace_event = trace_event!(crosvm, "vcpu::run");
                 if let Some(ref monitoring_metadata) = context.monitoring_metadata {
                     monitoring_metadata.last_run_time.store(
-                        (monitoring_metadata.start_instant.elapsed().as_millis())
+                        // Safe conversion because millis will always be < u32::MAX
+                        monitoring_metadata
+                            .start_instant
+                            .elapsed()
+                            .as_millis()
                             .try_into()
                             .unwrap(),
                         Ordering::SeqCst,

@@ -358,13 +358,7 @@ impl MsixConfig {
         self.read_msix_table((index * 16 + 8).into(), data.as_mut());
         let msi_data: u32 = u32::from_le_bytes(data);
 
-        base::info!(
-            "msix add_msi_route dev={} idx={} gsi={} addr=0x{:016x} data=0x{:08x}",
-            self.device_name, index, gsi, msi_address, msi_data
-        );
-
         if msi_address == 0 {
-            base::info!("msix add_msi_route: addr=0, skipping (not configured yet)");
             return Ok(());
         }
 
@@ -430,18 +424,6 @@ impl MsixConfig {
             gsi: irq_num,
         });
 
-        // WHPX: guest kernel arch_setup_msi_irqs may fail to write MSI address/data
-        // to the MSI-X table. Pre-configure a valid x2APIC MSI address so the route
-        // is set up even without guest writing the table.
-        if self.table_entries[index].msg_addr_lo == 0 {
-            self.table_entries[index].msg_addr_lo = 0xFEE00000u32;
-            self.table_entries[index].msg_addr_hi = 0;
-            self.table_entries[index].msg_data = irq_num & 0xFFFF;
-            base::info!(
-                "msix: pre-configured MSI addr for idx={} gsi={} dev={}",
-                index, irq_num, self.device_name
-            );
-        }
         self.add_msi_route(index as u16, irq_num)?;
         Ok(())
     }

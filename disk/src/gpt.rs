@@ -138,10 +138,11 @@ pub fn write_gpt_header(
     disk_guid: Uuid,
     partition_entries_crc32: u32,
     secondary_table_offset: u64,
+    disk_size: u64,
     secondary: bool,
 ) -> Result<(), Error> {
     let primary_header_lba = 1;
-    let secondary_header_lba = (secondary_table_offset + GPT_END_SIZE) / SECTOR_SIZE - 1;
+    let secondary_header_lba = disk_size / SECTOR_SIZE - 1;
     let mut gpt_header = GptHeader {
         signature: *b"EFI PART",
         revision: [0, 0, 1, 0],
