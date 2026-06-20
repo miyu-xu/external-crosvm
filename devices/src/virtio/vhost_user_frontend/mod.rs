@@ -279,7 +279,10 @@ impl VhostUserFrontend {
         queue: &Queue,
         irqfd: &Event,
     ) -> Result<()> {
-        eprintln!("VHOST-FRONTEND: activate_vring device={:?} queue={}", self.device_type, queue_index);
+        eprintln!(
+            "VHOST-FRONTEND: activate_vring device={:?} queue={}",
+            self.device_type, queue_index
+        );
         self.backend_client
             .set_vring_num(queue_index, queue.size())
             .map_err(Error::SetVringNum)?;
@@ -465,7 +468,11 @@ impl VirtioDevice for VhostUserFrontend {
         interrupt: Interrupt,
         queues: BTreeMap<usize, Queue>,
     ) -> anyhow::Result<()> {
-        eprintln!("VHOST-FRONTEND: activate device={:?} num_queues={}", self.device_type, queues.len());
+        eprintln!(
+            "VHOST-FRONTEND: activate device={:?} num_queues={}",
+            self.device_type,
+            queues.len()
+        );
         self.set_mem_table(&mem)?;
 
         let msix_config_opt = interrupt

@@ -34,10 +34,7 @@ impl NoopVirtualDisplayManager {
     /// Returns the rectangle to show the virtual display in the host window coordinate.
     /// Uses the full window client rect so gfxstream has proper rendering bounds.
     pub fn get_virtual_display_projection_box(&self) -> Box2D<i32, HostWindowSpace> {
-        Box2D::from_origin_and_size(
-            Point2D::new(0, 0),
-            self.host_viewport_size,
-        )
+        Box2D::from_origin_and_size(Point2D::new(0, 0), self.host_viewport_size)
     }
 
     pub fn update_host_guest_transforms(&mut self, host_viewport_size: &HostWindowSize) {

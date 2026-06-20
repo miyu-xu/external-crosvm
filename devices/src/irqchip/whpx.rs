@@ -29,7 +29,6 @@ use hypervisor::whpx::WhpxVm;
 use hypervisor::IoapicState;
 use hypervisor::IrqRoute;
 use hypervisor::IrqSource;
-use hypervisor::NUM_IOAPIC_PINS;
 use hypervisor::IrqSourceChip;
 use hypervisor::LapicState;
 use hypervisor::MPState;
@@ -41,6 +40,7 @@ use hypervisor::PitState;
 use hypervisor::Vcpu;
 use hypervisor::VcpuX86_64;
 use hypervisor::Vm;
+use hypervisor::NUM_IOAPIC_PINS;
 use resources::SystemAllocator;
 
 use crate::irqchip::DelayedIoApicIrqEvents;
@@ -209,13 +209,8 @@ impl WhpxSplitIrqChip {
                     *self.pending_apic_interrupt.lock() = Some(vector);
                     // Do NOT kick: consumed by inject_interrupts on next exit (see send_msi).
                 } else {
-                    self.vm.request_interrupt(
-                        vector,
-                        dest_id,
-                        dest_mode,
-                        trigger,
-                        delivery,
-                    )?;
+                    self.vm
+                        .request_interrupt(vector, dest_id, dest_mode, trigger, delivery)?;
                     self.vm.kick_all_virtual_processors();
                 }
                 return Ok(());
@@ -462,10 +457,7 @@ impl IrqChip for WhpxSplitIrqChip {
                             evt.resample_event.is_some()
                         );
                         if !injected {
-                            info!(
-                                "whpx: IOAPIC pin={} delivery failed; trying fallbacks",
-                                pin
-                            );
+                            info!("whpx: IOAPIC pin={} delivery failed; trying fallbacks", pin);
                             if let Some((addr, data)) = ioapic.msi_for_pin(pin as usize) {
                                 let vector = (data & 0xFF) as u8;
                                 info!(
@@ -496,11 +488,7 @@ impl IrqChip for WhpxSplitIrqChip {
                                     // inject_interrupts on the next natural vCPU exit.
                                 } else {
                                     self.vm.request_interrupt(
-                                        vector,
-                                        dest_id,
-                                        dest_mode,
-                                        trigger,
-                                        delivery,
+                                        vector, dest_id, dest_mode, trigger, delivery,
                                     )?;
                                     self.vm.kick_all_virtual_processors();
                                 }
@@ -525,11 +513,7 @@ impl IrqChip for WhpxSplitIrqChip {
                                     // inject_interrupts on the next natural vCPU exit.
                                 } else {
                                     self.vm.request_interrupt(
-                                        vector,
-                                        dest_id,
-                                        dest_mode,
-                                        trigger,
-                                        delivery,
+                                        vector, dest_id, dest_mode, trigger, delivery,
                                     )?;
                                     self.vm.kick_all_virtual_processors();
                                 }
@@ -628,10 +612,7 @@ impl IrqChip for WhpxSplitIrqChip {
                         vcpu_ready = false;
                     }
                     Err(e) if e.errno() == libc::EINVAL => {
-                        debug!(
-                            "whpx: PIC inject deferred vector={:#x}: {}",
-                            vector, e
-                        );
+                        debug!("whpx: PIC inject deferred vector={:#x}: {}", vector, e);
                         pic_needs_window = true;
                     }
                     Err(e) => return Err(e),
@@ -794,7 +775,9 @@ impl IrqChip for WhpxSplitIrqChip {
             // It appears as though WHPX does not have tsc deadline support because we get guest
             // MSR write failures if we enable it.
             IrqChipCap::TscDeadlineTimer => false,
-            // TODO(b/180966070): Figure out how to query x2apic support.
+            // Keep x2APIC hidden for the direct-kernel Windows/WHPX path:
+            // exposing it can make Linux enter x2APIC setup before WHPX has a
+            // stable APIC-ID model for AP bring-up.
             IrqChipCap::X2Apic => false,
             IrqChipCap::MpStateGetSet => false,
         }

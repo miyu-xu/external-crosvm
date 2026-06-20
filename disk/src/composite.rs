@@ -647,11 +647,10 @@ fn write_end(
     // Padding between partition entries and the backup GPT header.
     // The backup header must be the last sector of the disk.
     let footer_size = disk_size - secondary_table_offset;
-    let header_offset_in_footer = footer_size - SECTOR_SIZE;  // last sector
+    let header_offset_in_footer = footer_size - SECTOR_SIZE; // last sector
     let entries_size = (GPT_NUM_PARTITIONS as u64) * (GPT_PARTITION_ENTRY_SIZE as u64);
     let padding_after_entries = header_offset_in_footer - entries_size;
-    file
-        .write_all(&vec![0; padding_after_entries as usize])
+    file.write_all(&vec![0; padding_after_entries as usize])
         .map_err(Error::WriteHeader)?;
 
     // Write the backup GPT header at the last sector of the footer.

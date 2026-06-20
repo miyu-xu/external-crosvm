@@ -494,8 +494,7 @@ impl WhpxVcpu {
                 .InterruptShadow()
         };
         const IF_MASK: u64 = 0x00000200;
-        let eflags_if =
-            (self.last_exit_context.VpContext.Rflags & IF_MASK) != 0;
+        let eflags_if = (self.last_exit_context.VpContext.Rflags & IF_MASK) != 0;
         (eflags_if, shadow != 0, pending != 0)
     }
 
@@ -578,7 +577,11 @@ impl WhpxVcpu {
             delivery_mode,
             dest_shorthand,
             vector,
-            if self.index == 0 { "(BSP)" } else { "(AP — ignoring)" }
+            if self.index == 0 {
+                "(BSP)"
+            } else {
+                "(AP — ignoring)"
+            }
         );
 
         // Only the BSP may deliver INIT/SIPI. APs that reach CpuMpPei and
@@ -604,7 +607,11 @@ impl WhpxVcpu {
         let destinations: Vec<u32> = if dest_shorthand == 0 {
             // Physical destination mode — use the destination field.
             let dest = ((icr >> 56) & 0xFF) as u32;
-            if dest < processor_count { vec![dest] } else { vec![] }
+            if dest < processor_count {
+                vec![dest]
+            } else {
+                vec![]
+            }
         } else {
             // Broadcast shorthand: all vCPUs except the sender.
             (0..processor_count).filter(|&i| i != self.index).collect()
@@ -633,8 +640,7 @@ impl WhpxVcpu {
             };
             interrupt.set_Type(interrupt_type as u64);
             interrupt.set_DestinationMode(
-                WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical
-                    as u64,
+                WHV_INTERRUPT_DESTINATION_MODE_WHvX64InterruptDestinationModePhysical as u64,
             );
             let _ = check_whpx!(unsafe {
                 WHvRequestInterrupt(
@@ -650,7 +656,10 @@ impl WhpxVcpu {
                 *st = MPState::InitReceived;
             } else {
                 let mut st = target.0.lock().unwrap();
-                warn!("SIPI: vcpu {} vec=0x{:x} (was {:?})", target_idx, vector, *st);
+                warn!(
+                    "SIPI: vcpu {} vec=0x{:x} (was {:?})",
+                    target_idx, vector, *st
+                );
                 if *st == MPState::InitReceived || *st == MPState::Uninitialized {
                     if let Err(e) = self.apply_sipi_vector(target_idx, vector) {
                         warn!("SIPI reg write fail: vcpu {}: {}", target_idx, e);
@@ -686,8 +695,11 @@ impl WhpxVcpu {
         let cs_val = WHV_REGISTER_VALUE { Segment: cs_reg };
         check_whpx!(unsafe {
             WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition, target_idx,
-                &cs_name, 1, &cs_val as *const WHV_REGISTER_VALUE,
+                self.vm_partition.partition,
+                target_idx,
+                &cs_name,
+                1,
+                &cs_val as *const WHV_REGISTER_VALUE,
             )
         })?;
 
@@ -702,8 +714,10 @@ impl WhpxVcpu {
         ];
         check_whpx!(unsafe {
             WHvSetVirtualProcessorRegisters(
-                self.vm_partition.partition, target_idx,
-                reg_names.as_ptr(), reg_names.len() as u32,
+                self.vm_partition.partition,
+                target_idx,
+                reg_names.as_ptr(),
+                reg_names.len() as u32,
                 values.as_ptr(),
             )
         })
@@ -743,8 +757,12 @@ impl WhpxVcpu {
 
         let values = vec![
             WHV_REGISTER_VALUE { Reg64: rip },
-            WHV_REGISTER_VALUE { Reg64: (value & 0xffffffff) },
-            WHV_REGISTER_VALUE { Reg64: (value >> 32) },
+            WHV_REGISTER_VALUE {
+                Reg64: (value & 0xffffffff),
+            },
+            WHV_REGISTER_VALUE {
+                Reg64: (value >> 32),
+            },
         ];
 
         check_whpx!(unsafe {
@@ -772,7 +790,10 @@ impl WhpxVcpu {
                 // Do nothing — we assume TSC is always invariant.
             }
             _ => {
-                warn!("whpx: WRMSR 0x{:x} = 0x{:x} unsupported, ignoring", id, value);
+                warn!(
+                    "whpx: WRMSR 0x{:x} = 0x{:x} unsupported, ignoring",
+                    id, value
+                );
             }
         }
 
@@ -1103,11 +1124,6 @@ impl Vcpu for WhpxVcpu {
 
     #[allow(non_upper_case_globals)]
     fn run(&mut self) -> Result<VcpuExit> {
-        // AP vCPUs: wait until the BSP delivers INIT+SIPI and transitions
-        // this vCPU to Runnable. This prevents APs from executing the
-        // firmware reset vector and causing SMP boot loops.
-        self.wait_until_runnable();
-
         // safe because we own this whpx virtual processor index, and assume the vm partition is
         // still valid
         let exit_context_ptr = Arc::as_ptr(&self.last_exit_context);

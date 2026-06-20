@@ -6,9 +6,9 @@
 
 use argh::FromArgs;
 
+use crate::virtio::vhost::user::device::gpu::GpuBackend;
 use crate::virtio::GpuParameters;
 use crate::virtio::Interrupt;
-use crate::virtio::vhost::user::device::gpu::GpuBackend;
 
 #[derive(FromArgs)]
 /// GPU device (stub on macOS)

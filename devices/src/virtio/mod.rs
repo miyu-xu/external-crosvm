@@ -38,9 +38,9 @@ pub mod scsi;
 pub mod snd;
 pub mod vhost;
 pub mod vhost_user_frontend;
+pub mod vsock;
 #[cfg(windows)]
 pub mod whpx_ovmf;
-pub mod vsock;
 
 #[cfg(feature = "balloon")]
 pub use self::balloon::Balloon;

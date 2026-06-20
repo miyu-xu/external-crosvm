@@ -93,11 +93,7 @@ use super::Writer;
 use crate::PciAddress;
 
 #[cfg(feature = "gfxstream")]
-fn upsert_renderer_feature(
-    renderer_features: &mut Vec<String>,
-    feature_name: &str,
-    enabled: bool,
-) {
+fn upsert_renderer_feature(renderer_features: &mut Vec<String>, feature_name: &str, enabled: bool) {
     let feature_prefix = format!("{feature_name}:");
     renderer_features.retain(|feature| !feature.starts_with(&feature_prefix));
     renderer_features.push(format!(
@@ -253,7 +249,14 @@ impl QueueReader for LocalQueueReader {
     }
 
     fn signal_used(&self) {
-        self.queue.borrow_mut().trigger_interrupt();
+        let mut queue = self.queue.borrow_mut();
+        #[cfg(windows)]
+        if !queue.trigger_interrupt() {
+            queue.force_used_interrupt();
+            return;
+        }
+        #[cfg(not(windows))]
+        queue.trigger_interrupt();
     }
 }
 
@@ -280,7 +283,14 @@ impl QueueReader for SharedQueueReader {
     }
 
     fn signal_used(&self) {
-        self.queue.lock().trigger_interrupt();
+        let mut queue = self.queue.lock();
+        #[cfg(windows)]
+        if !queue.trigger_interrupt() {
+            queue.force_used_interrupt();
+            return;
+        }
+        #[cfg(not(windows))]
+        queue.trigger_interrupt();
     }
 }
 
@@ -297,8 +307,10 @@ fn build(
     udmabuf: bool,
     #[cfg(windows)] gpu_display_wait_descriptor_ctrl_wr: SendTube,
 ) -> Option<VirtioGpu> {
+    eprintln!("GPU-FRONTEND-INIT: build enter");
     let mut display_opt = None;
     for display_backend in display_backends {
+        eprintln!("GPU-FRONTEND-INIT: display_backend.build before");
         match display_backend.build(
             #[cfg(windows)]
             wndproc_thread,
@@ -308,6 +320,7 @@ fn build(
                 .expect("failed to clone wait context ctrl channel"),
         ) {
             Ok(c) => {
+                eprintln!("GPU-FRONTEND-INIT: display_backend.build ok");
                 display_opt = Some(c);
                 break;
             }
@@ -323,7 +336,8 @@ fn build(
         }
     };
 
-    VirtioGpu::new(
+    eprintln!("GPU-FRONTEND-INIT: VirtioGpu::new before");
+    let virtio_gpu = VirtioGpu::new(
         display,
         display_params,
         display_event,
@@ -332,7 +346,12 @@ fn build(
         external_blob,
         fixed_blob_mapping,
         udmabuf,
-    )
+    );
+    eprintln!(
+        "GPU-FRONTEND-INIT: VirtioGpu::new after some={}",
+        virtio_gpu.is_some()
+    );
+    virtio_gpu
 }
 
 /// Resources used by the fence handler.
@@ -815,7 +834,11 @@ impl Frontend {
             // Prepare the response now, even if it is going to wait until
             // fence is complete.
             match gpu_response.encode(flags, fence_id, ctx_id, ring_idx, writer) {
-                Ok(l) => len = l,
+                Ok(l) => {
+                    len = l;
+                    #[cfg(windows)]
+                    writer.sync_guest_writes();
+                }
                 Err(e) => debug!("ctrl queue response encode error: {}", e),
             }
 
@@ -1384,16 +1407,20 @@ impl Gpu {
         fence_handler: RutabagaFenceHandler,
         mapper: Arc<Mutex<Option<Box<dyn SharedMemoryMapper>>>>,
     ) -> Option<Frontend> {
+        eprintln!("GPU-FRONTEND-INIT: initialize_frontend enter");
         let rutabaga_server_descriptor = self.rutabaga_server_descriptor.as_ref().map(|d| {
             to_rutabaga_descriptor(d.try_clone().expect("failed to clone server descriptor"))
         });
+        eprintln!("GPU-FRONTEND-INIT: rutabaga_builder.build before");
         let rutabaga = self
             .rutabaga_builder
             .clone()
             .build(fence_handler, rutabaga_server_descriptor)
             .map_err(|e| error!("failed to build rutabaga {}", e))
             .ok()?;
+        eprintln!("GPU-FRONTEND-INIT: rutabaga_builder.build after");
 
+        eprintln!("GPU-FRONTEND-INIT: virtio gpu build before");
         let mut virtio_gpu = build(
             &self.display_backends,
             self.display_params.clone(),
@@ -1410,14 +1437,18 @@ impl Gpu {
                 .try_clone()
                 .expect("failed to clone wait context control channel"),
         )?;
+        eprintln!("GPU-FRONTEND-INIT: virtio gpu build after");
 
+        eprintln!("GPU-FRONTEND-INIT: import_event_devices before");
         for event_device in self.event_devices.take().expect("missing event_devices") {
             virtio_gpu
                 .import_event_device(event_device)
                 // We lost the `EventDevice`, so fail hard.
                 .expect("failed to import event device");
         }
+        eprintln!("GPU-FRONTEND-INIT: import_event_devices after");
 
+        eprintln!("GPU-FRONTEND-INIT: initialize_frontend exit");
         Some(Frontend::new(virtio_gpu, fence_state))
     }
 

@@ -24,7 +24,7 @@ use vm_control::ServiceSendToGpu;
 use win_util::win32_wide_string;
 use winapi::shared::minwindef::LRESULT;
 use winapi::shared::windef::{HDC, HWND};
-use winapi::um::wingdi::{SetDIBitsToDevice, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, BI_RGB};
+use winapi::um::wingdi::{SetDIBitsToDevice, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS};
 use winapi::um::winuser::DefWindowProcW;
 use winapi::um::winuser::GetDC;
 use winapi::um::winuser::GetForegroundWindow;
@@ -415,7 +415,13 @@ impl WindowMessageDispatcher {
                 width,
                 height,
             } => {
-                eprintln!("GPU-WNDPROC: handling FlipFramebuffer surface={} w={} h={} len={}", surface_id, width, height, pixels.len());
+                eprintln!(
+                    "GPU-WNDPROC: handling FlipFramebuffer surface={} w={} h={} len={}",
+                    surface_id,
+                    width,
+                    height,
+                    pixels.len()
+                );
                 self.flip_framebuffer(surface_id, pixels, width, height);
             }
         }
@@ -533,13 +539,7 @@ impl WindowMessageDispatcher {
     }
 
     /// Handle FlipFramebuffer: copy pixel data to the window for 2D rendering.
-    fn flip_framebuffer(
-        &mut self,
-        surface_id: u32,
-        pixels: Vec<u8>,
-        width: u32,
-        height: u32,
-    ) {
+    fn flip_framebuffer(&mut self, surface_id: u32, pixels: Vec<u8>, width: u32, height: u32) {
         eprintln!("GPU-WNDPROC: flip_framebuffer entry surface={}", surface_id);
         // Find the window associated with this surface
         let hwnd = match self
@@ -550,12 +550,18 @@ impl WindowMessageDispatcher {
             Some((hwnd, _)) => *hwnd,
             None => {
                 error!("FlipFramebuffer: no window for surface {}", surface_id);
-                eprintln!("GPU-WNDPROC: flip_framebuffer FAILED - no window for surface {}", surface_id);
+                eprintln!(
+                    "GPU-WNDPROC: flip_framebuffer FAILED - no window for surface {}",
+                    surface_id
+                );
                 return;
             }
         };
 
-        eprintln!("GPU-WNDPROC: flip_framebuffer found hwnd={:?}, calling SetDIBitsToDevice", hwnd);
+        eprintln!(
+            "GPU-WNDPROC: flip_framebuffer found hwnd={:?}, calling SetDIBitsToDevice",
+            hwnd
+        );
 
         // Use GDI SetDIBitsToDevice to draw the pixel data
         unsafe {
@@ -575,10 +581,12 @@ impl WindowMessageDispatcher {
 
             let result = SetDIBitsToDevice(
                 hdc,
-                0, 0,
+                0,
+                0,
                 width,
                 height,
-                0, 0,
+                0,
+                0,
                 0,
                 height,
                 pixels.as_ptr() as *const _,

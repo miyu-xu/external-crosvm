@@ -63,7 +63,7 @@ const STS_EXPECT: u32 = 1 << 3; // RO: TPM expects more data
 const STS_SELF_TEST_DONE: u32 = 1 << 2; // RO: self-test complete
 const STS_VALID: u32 = 1 << 7; // RO: dataAvail + Expect are valid
 const STS_RESP_RETRY: u32 = 1 << 1; // WO: re-read response
-// burstCount in bits 23:8
+                                    // burstCount in bits 23:8
 
 /// TPM 2.0 command codes we handle.
 const TPM2_CC_STARTUP: u32 = 0x0000_0144;
@@ -184,25 +184,38 @@ impl MinimalTpm {
                 let count = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
                 let mut pos = 4usize;
                 for _ in 0..count {
-                    if pos + 4 > buf.len() { break; }
-                    let index = u32::from_le_bytes([buf[pos], buf[pos+1], buf[pos+2], buf[pos+3]]);
+                    if pos + 4 > buf.len() {
+                        break;
+                    }
+                    let index =
+                        u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
                     pos += 4;
-                    if pos + 2 > buf.len() { break; }
-                    let data_size = u16::from_le_bytes([buf[pos], buf[pos+1]]) as usize;
+                    if pos + 2 > buf.len() {
+                        break;
+                    }
+                    let data_size = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
                     pos += 2;
-                    if pos + 4 > buf.len() { break; }
-                    let attributes = u32::from_le_bytes([buf[pos], buf[pos+1], buf[pos+2], buf[pos+3]]);
+                    if pos + 4 > buf.len() {
+                        break;
+                    }
+                    let attributes =
+                        u32::from_le_bytes([buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]]);
                     pos += 4;
-                    if pos + data_size > buf.len() { break; }
+                    if pos + data_size > buf.len() {
+                        break;
+                    }
                     let data = buf[pos..pos + data_size].to_vec();
                     pos += data_size;
                     let public_info = Self::build_nv_public(index, data_size as u16, attributes);
-                    self.nv_spaces.insert(index, NvSpace {
-                        data,
-                        public_info,
-                        written: true,
-                        write_locked: false,
-                    });
+                    self.nv_spaces.insert(
+                        index,
+                        NvSpace {
+                            data,
+                            public_info,
+                            written: true,
+                            write_locked: false,
+                        },
+                    );
                     info!("TPM: loaded NV index 0x{:08x} size={}", index, data_size);
                 }
             }
@@ -220,7 +233,12 @@ impl MinimalTpm {
                 buf.extend_from_slice(&(space.data.len() as u16).to_le_bytes());
                 // Reconstruct attributes from public_info
                 let attrs = if space.public_info.len() >= 10 {
-                    u32::from_be_bytes([space.public_info[6], space.public_info[7], space.public_info[8], space.public_info[9]])
+                    u32::from_be_bytes([
+                        space.public_info[6],
+                        space.public_info[7],
+                        space.public_info[8],
+                        space.public_info[9],
+                    ])
                 } else {
                     Self::NV_ATTR_DEFAULT
                 };
@@ -245,11 +263,11 @@ impl MinimalTpm {
     ///     dataSize: UINT16 (2 bytes)
     fn build_nv_public(index: u32, data_size: u16, attributes: u32) -> Vec<u8> {
         let mut out = Vec::with_capacity(14);
-        out.extend_from_slice(&index.to_be_bytes());          // nvIndex
-        out.extend_from_slice(&0x000Bu16.to_be_bytes());      // nameAlg = SHA256
-        out.extend_from_slice(&attributes.to_be_bytes());     // attributes
-        out.extend_from_slice(&0x0000u16.to_be_bytes());      // authPolicy size = 0
-        out.extend_from_slice(&data_size.to_be_bytes());      // dataSize
+        out.extend_from_slice(&index.to_be_bytes()); // nvIndex
+        out.extend_from_slice(&0x000Bu16.to_be_bytes()); // nameAlg = SHA256
+        out.extend_from_slice(&attributes.to_be_bytes()); // attributes
+        out.extend_from_slice(&0x0000u16.to_be_bytes()); // authPolicy size = 0
+        out.extend_from_slice(&data_size.to_be_bytes()); // dataSize
         out
     }
 
@@ -257,7 +275,8 @@ impl MinimalTpm {
     const NV_ATTR_OWNERWRITE: u32 = 0x0000_0200;
     const NV_ATTR_OWNERREAD: u32 = 0x0004_0000;
     const NV_ATTR_ORDERLY: u32 = 0x8000_0000;
-    const NV_ATTR_DEFAULT: u32 = Self::NV_ATTR_OWNERWRITE | Self::NV_ATTR_OWNERREAD | Self::NV_ATTR_ORDERLY;
+    const NV_ATTR_DEFAULT: u32 =
+        Self::NV_ATTR_OWNERWRITE | Self::NV_ATTR_OWNERREAD | Self::NV_ATTR_ORDERLY;
 
     /// Create a TPMS_NV_PUBLIC for a generic NV space of the given size.
     fn nv_public_for(&self, index: u32, size: u16) -> Vec<u8> {
@@ -269,9 +288,16 @@ impl MinimalTpm {
     fn parse_nv_handle(command: &[u8]) -> u32 {
         // Scan backwards from byte 14 for an NV handle (0x01xxxxxx or low 0x00xxxxxx above 0x100000)
         for off in (14..command.len().saturating_sub(3)).rev() {
-            let candidate = u32::from_be_bytes([command[off], command[off+1], command[off+2], command[off+3]]);
+            let candidate = u32::from_be_bytes([
+                command[off],
+                command[off + 1],
+                command[off + 2],
+                command[off + 3],
+            ]);
             let handle_type = (candidate >> 24) as u8;
-            if handle_type == 0x01 || (handle_type == 0x00 && candidate > 0x0010_0000 && candidate < 0x0100_0000) {
+            if handle_type == 0x01
+                || (handle_type == 0x00 && candidate > 0x0010_0000 && candidate < 0x0100_0000)
+            {
                 return candidate & 0x00FF_FFFF; // Normalize: strip handle type prefix
             }
         }
@@ -308,10 +334,10 @@ impl TpmBackend for MinimalTpm {
         match cc {
             TPM12_CC_GET_CAPABILITY => {
                 let timeouts: [u32; 4] = [
-                    750_000,    // TIS_TIMEOUT_A (us)
-                    2_000_000,  // TIS_TIMEOUT_B (us)
-                    2_000_000,  // TIS_TIMEOUT_C (us)
-                    2_000_000,  // TIS_TIMEOUT_D (us)
+                    750_000,   // TIS_TIMEOUT_A (us)
+                    2_000_000, // TIS_TIMEOUT_B (us)
+                    2_000_000, // TIS_TIMEOUT_C (us)
+                    2_000_000, // TIS_TIMEOUT_D (us)
                 ];
                 let mut data = Vec::with_capacity(16);
                 for t in &timeouts {
@@ -352,7 +378,8 @@ impl TpmBackend for MinimalTpm {
                 }
                 let cap = u32::from_be_bytes([command[10], command[11], command[12], command[13]]);
                 let prop = u32::from_be_bytes([command[14], command[15], command[16], command[17]]);
-                let _count = u32::from_be_bytes([command[18], command[19], command[20], command[21]]);
+                let _count =
+                    u32::from_be_bytes([command[18], command[19], command[20], command[21]]);
 
                 match cap {
                     TPM_CAP_TPM_PROPERTIES => match prop {
@@ -361,9 +388,7 @@ impl TpmBackend for MinimalTpm {
                             let val: [u8; 4] = 0x322E3000u32.to_be_bytes(); // "2.0\0"
                             make_tpm_capability_response(prop, &val)
                         }
-                        TPM_PT_LEVEL => {
-                            make_tpm_capability_response(prop, &0u32.to_be_bytes())
-                        }
+                        TPM_PT_LEVEL => make_tpm_capability_response(prop, &0u32.to_be_bytes()),
                         TPM_PT_REVISION => {
                             make_tpm_capability_response(prop, &TPM_PT_REVISION.to_be_bytes())
                         }
@@ -376,18 +401,14 @@ impl TpmBackend for MinimalTpm {
                         TPM_PT_MANUFACTURER => {
                             make_tpm_capability_response(prop, &TPM_PT_MANUFACTURER.to_be_bytes())
                         }
-                        TPM_PT_VENDOR_STRING_1 => {
-                            make_tpm_capability_response(
-                                prop,
-                                &TPM_PT_VENDOR_STRING_1.to_be_bytes(),
-                            )
-                        }
-                        TPM_PT_FIRMWARE_VERSION_1 => {
-                            make_tpm_capability_response(
-                                prop,
-                                &TPM_PT_FIRMWARE_VERSION_1.to_be_bytes(),
-                            )
-                        }
+                        TPM_PT_VENDOR_STRING_1 => make_tpm_capability_response(
+                            prop,
+                            &TPM_PT_VENDOR_STRING_1.to_be_bytes(),
+                        ),
+                        TPM_PT_FIRMWARE_VERSION_1 => make_tpm_capability_response(
+                            prop,
+                            &TPM_PT_FIRMWARE_VERSION_1.to_be_bytes(),
+                        ),
                         TPM_PT_TOTAL_COMMANDS => {
                             // Return 0 — tells kernel there are no command
                             // attributes to enumerate. Prevents kernel from
@@ -407,7 +428,8 @@ impl TpmBackend for MinimalTpm {
             TPM2_CC_NV_READ_PUBLIC => {
                 // NV index is the auth handle at bytes 10-13 of the command header.
                 let nv_index = if command.len() >= 14 {
-                    u32::from_be_bytes([command[10], command[11], command[12], command[13]]) & 0x00FF_FFFF
+                    u32::from_be_bytes([command[10], command[11], command[12], command[13]])
+                        & 0x00FF_FFFF
                 } else {
                     0
                 };
@@ -425,7 +447,8 @@ impl TpmBackend for MinimalTpm {
             TPM2_CC_NV_READ => {
                 // NV index is the auth handle (bytes 10-13) for password-auth sessions.
                 let nv_index = if command.len() >= 14 {
-                    u32::from_be_bytes([command[10], command[11], command[12], command[13]]) & 0x00FF_FFFF
+                    u32::from_be_bytes([command[10], command[11], command[12], command[13]])
+                        & 0x00FF_FFFF
                 } else {
                     0
                 };
@@ -436,8 +459,14 @@ impl TpmBackend for MinimalTpm {
                         found = *idx;
                         break;
                     }
-                    if found != 0 { found } else { nv_index }
-                } else { nv_index };
+                    if found != 0 {
+                        found
+                    } else {
+                        nv_index
+                    }
+                } else {
+                    nv_index
+                };
                 match self.nv_spaces.get(&nv_index) {
                     Some(space) => {
                         // Return data (even if space hasn't been written yet).
@@ -457,7 +486,8 @@ impl TpmBackend for MinimalTpm {
             TPM2_CC_NV_WRITE => {
                 // NV index: try auth handle first (bytes 10-13), fallback to last defined space.
                 let nv_index = if command.len() >= 14 {
-                    u32::from_be_bytes([command[10], command[11], command[12], command[13]]) & 0x00FF_FFFF
+                    u32::from_be_bytes([command[10], command[11], command[12], command[13]])
+                        & 0x00FF_FFFF
                 } else {
                     0
                 };
@@ -467,8 +497,14 @@ impl TpmBackend for MinimalTpm {
                         found = *idx;
                         break;
                     }
-                    if found != 0 { found } else { nv_index }
-                } else { nv_index };
+                    if found != 0 {
+                        found
+                    } else {
+                        nv_index
+                    }
+                } else {
+                    nv_index
+                };
                 // Extract the data portion. NV_Write command:
                 // tag(2)+size(4)+cc(4)+authHandle(4)+authBlock(~25)+nvIndex(4)+offset(2)+data
                 let data_start = Self::find_nv_data_start(command);
@@ -503,26 +539,35 @@ impl TpmBackend for MinimalTpm {
 
                 if command.len() >= 30 {
                     // Scan backwards for NV handle patterns
-                    for off in (14..command.len()-4).rev() {
+                    for off in (14..command.len() - 4).rev() {
                         let candidate = u32::from_be_bytes([
-                            command[off], command[off+1], command[off+2], command[off+3]
+                            command[off],
+                            command[off + 1],
+                            command[off + 2],
+                            command[off + 3],
                         ]);
                         let handle_type = (candidate >> 24) as u8;
-                        if handle_type == 0x01 || (handle_type == 0x00 && candidate > 0x0010_0000 && candidate < 0x0100_0000) {
+                        if handle_type == 0x01
+                            || (handle_type == 0x00
+                                && candidate > 0x0010_0000
+                                && candidate < 0x0100_0000)
+                        {
                             nv_index = candidate & 0x00FF_FFFF;
                             // Try to extract data size and attributes
                             if off + 12 <= command.len() {
                                 attributes = u32::from_be_bytes([
-                                    command[off+6], command[off+7], command[off+8], command[off+9]
+                                    command[off + 6],
+                                    command[off + 7],
+                                    command[off + 8],
+                                    command[off + 9],
                                 ]);
-                                let auth_policy_sz = u16::from_be_bytes([
-                                    command[off+10], command[off+11]
-                                ]) as usize;
+                                let auth_policy_sz =
+                                    u16::from_be_bytes([command[off + 10], command[off + 11]])
+                                        as usize;
                                 let ds_off = off + 12 + auth_policy_sz;
                                 if ds_off + 2 <= command.len() {
-                                    data_size = u16::from_be_bytes([
-                                        command[ds_off], command[ds_off+1]
-                                    ]);
+                                    data_size =
+                                        u16::from_be_bytes([command[ds_off], command[ds_off + 1]]);
                                 }
                             }
                             break;
@@ -536,13 +581,17 @@ impl TpmBackend for MinimalTpm {
                     // Pre-create common ChromeOS indices
                     for &idx in &[8388613u32, 8388612u32] {
                         if !self.nv_spaces.contains_key(&idx) {
-                            let public_info = Self::build_nv_public(idx, 128, Self::NV_ATTR_DEFAULT);
-                            self.nv_spaces.insert(idx, NvSpace {
-                                data: vec![0u8; 128],
-                                public_info,
-                                written: false,
-                                write_locked: false,
-                            });
+                            let public_info =
+                                Self::build_nv_public(idx, 128, Self::NV_ATTR_DEFAULT);
+                            self.nv_spaces.insert(
+                                idx,
+                                NvSpace {
+                                    data: vec![0u8; 128],
+                                    public_info,
+                                    written: false,
+                                    write_locked: false,
+                                },
+                            );
                             info!("TPM: pre-created NV index 0x{:08x}", idx);
                         }
                     }
@@ -561,12 +610,15 @@ impl TpmBackend for MinimalTpm {
                 }
 
                 let public_info = Self::build_nv_public(nv_index, data_size, attributes);
-                self.nv_spaces.insert(nv_index, NvSpace {
-                    data: vec![0u8; data_size as usize],
-                    public_info,
-                    written: false,
-                    write_locked: false,
-                });
+                self.nv_spaces.insert(
+                    nv_index,
+                    NvSpace {
+                        data: vec![0u8; data_size as usize],
+                        public_info,
+                        written: false,
+                        write_locked: false,
+                    },
+                );
                 info!("TPM: NV_DefineSpace 0x{:08x} size={}", nv_index, data_size);
                 make_tpm_response(&[])
             }
@@ -601,7 +653,7 @@ impl TpmBackend for MinimalTpm {
                 // Minimal TPM2B_PUBLIC: size(2) + TPMA_OBJECT + algorithm info
                 // Just return empty public key area
                 resp.extend_from_slice(&0x0000u16.to_be_bytes()); // empty public
-                // creationData (empty)
+                                                                  // creationData (empty)
                 resp.extend_from_slice(&0x0000u16.to_be_bytes());
                 // creationHash (SHA256 dummy)
                 resp.extend_from_slice(&0x0020u16.to_be_bytes()); // size = 32
@@ -633,12 +685,12 @@ impl TpmBackend for MinimalTpm {
                 // pcrSelection: count(4) + bank(2) + sizeOfSelect(1) + pcrSelect[]
                 let mut resp = Vec::new();
                 resp.extend_from_slice(&1u32.to_be_bytes()); // pcrUpdateCounter
-                // pcrSelection for SHA256 bank:
+                                                             // pcrSelection for SHA256 bank:
                 resp.extend_from_slice(&1u32.to_be_bytes()); // count = 1
                 resp.extend_from_slice(&0x000Bu16.to_be_bytes()); // SHA256 bank
                 resp.push(3u8); // sizeOfSelect (3 bytes = 24 PCRs)
                 resp.extend_from_slice(&[0u8; 3]); // no PCRs selected
-                // pcrValues: count(4) = 0
+                                                   // pcrValues: count(4) = 0
                 resp.extend_from_slice(&0u32.to_be_bytes()); // 0 values
                 make_tpm_response(&resp)
             }
@@ -657,9 +709,7 @@ impl TpmBackend for MinimalTpm {
                 // HMAC operation — return empty success
                 make_tpm_response(&[])
             }
-            TPM2_CC_SEQUENCE_UPDATE => {
-                make_tpm_response(&[])
-            }
+            TPM2_CC_SEQUENCE_UPDATE => make_tpm_response(&[]),
             TPM2_CC_SEQUENCE_COMPLETE => {
                 // Return dummy HMAC result (32 bytes of zeros)
                 let mut resp = Vec::new();
@@ -675,9 +725,7 @@ impl TpmBackend for MinimalTpm {
                 self.save_nvram();
                 make_tpm_response(&[])
             }
-            TPM2_CC_CLEAR | TPM2_CC_CLEAR_CONTROL | TPM2_CC_STIR_RANDOM => {
-                make_tpm_response(&[])
-            }
+            TPM2_CC_CLEAR | TPM2_CC_CLEAR_CONTROL | TPM2_CC_STIR_RANDOM => make_tpm_response(&[]),
 
             // Default: return success for any command.
             // ChromeOS sends many TPM commands for various purposes;
@@ -788,7 +836,9 @@ impl TpmTisDevice {
 
     /// Read `len` bytes from the FIFO response buffer.
     fn read_fifo(&mut self, data: &mut [u8]) {
-        let n = data.len().min(self.resp_buf.len().saturating_sub(self.resp_pos));
+        let n = data
+            .len()
+            .min(self.resp_buf.len().saturating_sub(self.resp_pos));
         if n > 0 {
             data[..n].copy_from_slice(&self.resp_buf[self.resp_pos..self.resp_pos + n]);
             self.resp_pos += n;
@@ -819,7 +869,12 @@ impl TpmTisDevice {
 
         let mut pos = 0;
         while pos + 6 < cmd_buf.len() {
-            let cmd_size = u32::from_be_bytes([cmd_buf[pos+2], cmd_buf[pos+3], cmd_buf[pos+4], cmd_buf[pos+5]]) as usize;
+            let cmd_size = u32::from_be_bytes([
+                cmd_buf[pos + 2],
+                cmd_buf[pos + 3],
+                cmd_buf[pos + 4],
+                cmd_buf[pos + 5],
+            ]) as usize;
             if cmd_size < 10 || pos + cmd_size > cmd_buf.len() {
                 // Partial command at end — keep for next cycle
                 if pos < cmd_buf.len() {
@@ -830,7 +885,11 @@ impl TpmTisDevice {
             let cmd = &cmd_buf[pos..pos + cmd_size];
             let resp = self.backend.execute_command(cmd);
             if self.debug {
-                let cc = if cmd.len() >= 10 { u32::from_be_bytes([cmd[6], cmd[7], cmd[8], cmd[9]]) } else { 0 };
+                let cc = if cmd.len() >= 10 {
+                    u32::from_be_bytes([cmd[6], cmd[7], cmd[8], cmd[9]])
+                } else {
+                    0
+                };
             }
             best_resp = Some(resp);
             pos += cmd_size;
@@ -943,7 +1002,9 @@ impl TpmTisDevice {
         let val: u32 = match base_offset {
             REG_ACCESS => {
                 let v = self.access as u32;
-                if local_offset == REG_ACCESS { self.access &= !ACCESS_REQUEST_USE; }
+                if local_offset == REG_ACCESS {
+                    self.access &= !ACCESS_REQUEST_USE;
+                }
                 v
             }
             REG_INT_ENABLE => 0,
@@ -1020,7 +1081,8 @@ impl TpmTisDevice {
             REG_DATA_FIFO => {
                 self.write_fifo(&data[..data.len().min(1)]);
                 // Set EXPECT during command reception, clear any stale DATA_AVAIL
-                self.sts = (self.sts & !STS_DATA_AVAIL) | (BURST_COUNT << 8) | STS_VALID | STS_EXPECT;
+                self.sts =
+                    (self.sts & !STS_DATA_AVAIL) | (BURST_COUNT << 8) | STS_VALID | STS_EXPECT;
             }
             REG_INT_ENABLE | _REG_INT_VECTOR => {
                 // silently accept
@@ -1048,14 +1110,17 @@ impl BusDevice for TpmTisDevice {
         if self.debug {
             let lo = info.offset % 0x1000;
             if lo == 0x18 || lo == 0x24 {
-                let v = if data.len() >= 1 { u64::from(data[0]) } else { 0 };
+                let v = if data.len() >= 1 {
+                    u64::from(data[0])
+                } else {
+                    0
+                };
             }
         }
     }
 
     fn write(&mut self, info: BusAccessInfo, data: &[u8]) {
-        if self.debug {
-        }
+        if self.debug {}
         self.write_reg(info.offset, data)
     }
 }

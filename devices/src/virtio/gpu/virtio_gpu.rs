@@ -14,12 +14,12 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::Context;
-use base::{error, info};
 use base::FromRawDescriptor;
 use base::IntoRawDescriptor;
 use base::Protection;
 use base::SafeDescriptor;
 use base::VolatileSlice;
+use base::{error, info};
 use gpu_display::*;
 use hypervisor::MemCacheType;
 use libc::c_void;
@@ -360,7 +360,11 @@ impl VirtioGpuScanout {
         if let Some(import_id) =
             VirtioGpuScanout::import_resource_to_display(display, surface_id, resource, rutabaga)
         {
-            base::info!("GpuFlush: flip_to surface={} import={}", surface_id, import_id);
+            base::info!(
+                "GpuFlush: flip_to surface={} import={}",
+                surface_id,
+                import_id
+            );
             display
                 .borrow_mut()
                 .flip_to(surface_id, import_id, None, None, None)
@@ -372,7 +376,10 @@ impl VirtioGpuScanout {
         }
 
         // Import failed, fall back to a copy.
-        base::info!("GpuFlush: import failed, trying framebuffer copy for surface={}", surface_id);
+        base::info!(
+            "GpuFlush: import failed, trying framebuffer copy for surface={}",
+            surface_id
+        );
         let mut display = display.borrow_mut();
 
         // Prevent overwriting a buffer that is currently being used by the compositor.
@@ -555,15 +562,19 @@ impl VirtioGpu {
             .collect::<Map<_, _>>();
         let cursor_scanout = VirtioGpuScanout::new_cursor();
 
-        // Auto-create surface for primary scanout (scanout 0) so the
-        // display window is visible immediately, without waiting for
-        // the guest userspace compositor to issue SET_SCANOUT.
-        // This ensures a GPU window appears even if ChromeOS UI services
-        // have trouble starting (e.g., missing TPM/Cr50 dependencies).
         let display_rc = Rc::new(RefCell::new(display));
-        if let Some(scanout) = scanouts.get_mut(&0u32) {
-            if let Err(e) = scanout.create_surface(&display_rc, None) {
-                base::warn!("auto-create surface for scanout 0 failed: {:?}", e);
+        #[cfg(windows)]
+        let auto_create_surface = std::env::var_os("CROSVM_WHPX_AUTOCREATE_SURFACE").is_some();
+        #[cfg(not(windows))]
+        let auto_create_surface = true;
+        if auto_create_surface {
+            // ChromeOS WHPX debugging can force a visible surface before the guest compositor
+            // issues SET_SCANOUT. Keep it opt-in on Windows because it can block Android's early
+            // gfxstream queue startup before capset queries are serviced.
+            if let Some(scanout) = scanouts.get_mut(&0u32) {
+                if let Err(e) = scanout.create_surface(&display_rc, None) {
+                    base::warn!("auto-create surface for scanout 0 failed: {:?}", e);
+                }
             }
         }
 
@@ -745,7 +756,7 @@ impl VirtioGpu {
 
         #[cfg(windows)]
         match self.rutabaga.resource_flush(resource_id) {
-            Ok(_) => {}, // Still need scanout flush for display output
+            Ok(_) => {} // Still need scanout flush for display output
             Err(RutabagaError::Unsupported) => {}
             Err(e) => return Err(ErrRutabaga(e)),
         }
@@ -1241,7 +1252,10 @@ impl VirtioGpu {
         scanout_data: Option<VirtioScanoutBlobData>,
         resource_id: u32,
     ) -> VirtioGpuResult {
-        eprintln!("GPU-FRONTEND: update_scanout_resource type={:?} scanout_id={} resource_id={}", scanout_type, scanout_id, resource_id);
+        eprintln!(
+            "GPU-FRONTEND: update_scanout_resource type={:?} scanout_id={} resource_id={}",
+            scanout_type, scanout_id, resource_id
+        );
         let scanout: &mut VirtioGpuScanout;
         let mut scanout_parent_surface_id = None;
 

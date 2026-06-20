@@ -95,24 +95,26 @@ impl VmnetTap {
         let (notify_fd, _) = pipe().map_err(|e| Error::CreateTap(e))?;
 
         let mac_cstr = mac_addr.map(|m| {
-            let s = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                m.octets()[0], m.octets()[1], m.octets()[2],
-                m.octets()[3], m.octets()[4], m.octets()[5]);
+            let s = format!(
+                "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                m.octets()[0],
+                m.octets()[1],
+                m.octets()[2],
+                m.octets()[3],
+                m.octets()[4],
+                m.octets()[5]
+            );
             CString::new(s).unwrap()
         });
-        let mac_ptr = mac_cstr.as_ref().map(|c| c.as_ptr()).unwrap_or(std::ptr::null());
+        let mac_ptr = mac_cstr
+            .as_ref()
+            .map(|c| c.as_ptr())
+            .unwrap_or(std::ptr::null());
 
         let mut error_code = 0i32;
         // SAFETY: FFI call to C shim; passes valid parameters.
-        let iface = unsafe {
-            vmnet_shim_start(
-                mode,
-                mac_ptr,
-                mtu,
-                notify_fd.as_raw_fd(),
-                &mut error_code,
-            )
-        };
+        let iface =
+            unsafe { vmnet_shim_start(mode, mac_ptr, mtu, notify_fd.as_raw_fd(), &mut error_code) };
 
         if iface.is_null() {
             return Err(Error::CreateTap(base::Error::new(libc::EIO)));
@@ -158,7 +160,11 @@ impl Write for VmnetTap {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         // SAFETY: FFI call to C shim; buf is readable and valid.
         let ret = unsafe {
-            vmnet_shim_write(self.iface, buf.as_ptr() as *const std::ffi::c_void, buf.len())
+            vmnet_shim_write(
+                self.iface,
+                buf.as_ptr() as *const std::ffi::c_void,
+                buf.len(),
+            )
         };
         if ret == VMNET_SUCCESS {
             Ok(buf.len())
@@ -246,7 +252,9 @@ impl TapTCommon for VmnetTap {
         }
         // SAFETY: ptr is a valid NUL-terminated string from C.
         let cstr = unsafe { CStr::from_ptr(ptr) };
-        let s = cstr.to_str().map_err(|_| Error::IoctlError(base::Error::new(libc::EINVAL)))?;
+        let s = cstr
+            .to_str()
+            .map_err(|_| Error::IoctlError(base::Error::new(libc::EINVAL)))?;
         s.parse::<MacAddress>()
             .map_err(|_| Error::IoctlError(base::Error::new(libc::EINVAL)))
     }

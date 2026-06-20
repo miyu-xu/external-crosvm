@@ -680,13 +680,23 @@ impl VirtioPciDevice {
             })
             .collect::<anyhow::Result<BTreeMap<usize, Queue>>>()?;
 
-        info!("VHOST-PCI: calling device.activate for {}", self.debug_label());
+        info!(
+            "VHOST-PCI: calling device.activate for {}",
+            self.debug_label()
+        );
         if let Err(e) = self.device.activate(self.mem.clone(), interrupt, queues) {
             error!("{} activate failed: {:#}", self.debug_label(), e);
-            info!("VHOST-PCI: device.activate FAILED for {}: {:#}", self.debug_label(), e);
+            info!(
+                "VHOST-PCI: device.activate FAILED for {}: {:#}",
+                self.debug_label(),
+                e
+            );
             self.common_config.driver_status |= VIRTIO_CONFIG_S_NEEDS_RESET as u8;
         } else {
-            info!("VHOST-PCI: device.activate SUCCESS for {}", self.debug_label());
+            info!(
+                "VHOST-PCI: device.activate SUCCESS for {}",
+                self.debug_label()
+            );
             self.device_activated = true;
         }
 
@@ -938,7 +948,6 @@ impl PciDevice for VirtioPciDevice {
         } else {
             self.device.read_bar(bar_index, offset, data);
         }
-
     }
 
     fn write_bar(&mut self, bar_index: usize, offset: u64, data: &[u8]) {
@@ -946,8 +955,16 @@ impl PciDevice for VirtioPciDevice {
         static WB_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = WB_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if n < 30 {
-            info!("WRITE-BAR #{}: {} bar={} offset=0x{:x} size={} data={:02x?} activated={}",
-                n, self.debug_label(), bar_index, offset, data.len(), data, self.device_activated);
+            info!(
+                "WRITE-BAR #{}: {} bar={} offset=0x{:x} size={} data={:02x?} activated={}",
+                n,
+                self.debug_label(),
+                bar_index,
+                offset,
+                data.len(),
+                data,
+                self.device_activated
+            );
         }
         let was_suspended = self.is_device_suspended();
 
@@ -1021,10 +1038,17 @@ impl PciDevice for VirtioPciDevice {
         }
 
         if !self.device_activated && self.is_driver_ready() {
-            info!("VHOST-PCI: device {} is ready, calling activate", self.debug_label());
+            info!(
+                "VHOST-PCI: device {} is ready, calling activate",
+                self.debug_label()
+            );
             if let Err(e) = self.activate() {
                 error!("failed to activate device: {:#}", e);
-                info!("VHOST-PCI: activate FAILED for {}: {:#}", self.debug_label(), e);
+                info!(
+                    "VHOST-PCI: activate FAILED for {}: {:#}",
+                    self.debug_label(),
+                    e
+                );
             } else {
                 info!("VHOST-PCI: activate SUCCESS for {}", self.debug_label());
             }

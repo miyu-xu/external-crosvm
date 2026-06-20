@@ -886,7 +886,10 @@ impl Worker {
             );
         }
         if let Err(e) = self.connection_event.signal() {
-            error!("vsock: port {}: failed to signal rx rescan after guest write: {}", port, e);
+            error!(
+                "vsock: port {}: failed to signal rx rescan after guest write: {}",
+                port, e
+            );
         }
         Ok(())
     }

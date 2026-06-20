@@ -200,11 +200,10 @@ impl WhpxVm {
             return Err(WhpxError::LocalApicEmulationNotSupported);
         }
 
-        // Setup apic emulation mode
+        // Setup APIC emulation mode. Android direct-kernel boot currently uses
+        // xAPIC; the OVMF/ChromeOS x2APIC path is not safe for this kernel path.
         let mut property: WHV_PARTITION_PROPERTY = Default::default();
         property.LocalApicEmulationMode = if apic_emulation {
-            // TODO(b/180966070): figure out if x2apic emulation mode is available on the host and
-            // enable it if it is.
             WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeXApic
         } else {
             WHV_X64_LOCAL_APIC_EMULATION_MODE_WHvX64LocalApicEmulationModeNone
@@ -392,9 +391,7 @@ impl WhpxVm {
         let ps = pagesize();
         let gpa = guest_addr.offset();
         let sync_start = gpa & !(ps as u64 - 1);
-        let end = gpa
-            .checked_add(len as u64)
-            .ok_or(Error::new(EOVERFLOW))?;
+        let end = gpa.checked_add(len as u64).ok_or(Error::new(EOVERFLOW))?;
         let sync_end = (end + ps as u64 - 1) & !(ps as u64 - 1);
         let sync_len = sync_end - sync_start;
 
@@ -419,7 +416,8 @@ impl WhpxVm {
                 }
                 base::debug!(
                     "whpx: refreshed GPA range {:#x} len={}",
-                    sync_start, sync_len
+                    sync_start,
+                    sync_len
                 );
                 return Ok(());
             }

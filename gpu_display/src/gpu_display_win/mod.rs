@@ -50,7 +50,6 @@ pub use window_procedure_thread::WindowProcedureThreadBuilder;
 use crate::gpu_display_win::window::BasicWindow;
 #[cfg(feature = "vulkan_display")]
 use crate::vulkan::VulkanDisplay;
-use base::VolatileSlice;
 use crate::DisplayExternalResourceImport;
 use crate::DisplayT;
 use crate::EventDevice;
@@ -64,6 +63,7 @@ use crate::SemaphoreTimepoint;
 use crate::SurfaceType;
 use crate::SysDisplayT;
 use crate::VulkanCreateParams;
+use base::VolatileSlice;
 
 pub(crate) type ObjectId = NonZeroU32;
 
@@ -286,7 +286,10 @@ impl DisplayT for DisplayWin {
         display_params: &DisplayParameters,
         surface_type: SurfaceType,
     ) -> GpuDisplayResult<Box<dyn GpuDisplaySurface>> {
-        info!("create_surface: id={} scanout={:?} type={:?}", surface_id, scanout_id, surface_type);
+        info!(
+            "create_surface: id={} scanout={:?} type={:?}",
+            surface_id, scanout_id, surface_type
+        );
         if parent_surface_id.is_some() {
             return Err(GpuDisplayError::Unsupported);
         }
@@ -330,18 +333,29 @@ impl DisplayT for DisplayWin {
         let fb_size = (fb_stride * fb_height) as usize;
 
         // TEST: immediately fill the window with a red color to verify display pipeline
-        let test_pixels: Vec<u8> = (0..fb_size).map(|i| {
-            if i % 4 == 2 { 0xFF } else if i % 4 == 0 { 0x80 } else { 0 } // BGRA: blue tint
-        }).collect();
-        let _ = self.wndproc_thread.post_display_command(
-            DisplaySendToWndProc::FlipFramebuffer {
+        let test_pixels: Vec<u8> = (0..fb_size)
+            .map(|i| {
+                if i % 4 == 2 {
+                    0xFF
+                } else if i % 4 == 0 {
+                    0x80
+                } else {
+                    0
+                } // BGRA: blue tint
+            })
+            .collect();
+        let _ = self
+            .wndproc_thread
+            .post_display_command(DisplaySendToWndProc::FlipFramebuffer {
                 surface_id,
                 pixels: test_pixels,
                 width: fb_width,
                 height: fb_height,
-            },
+            });
+        info!(
+            "SurfaceWin: posted initial FlipFramebuffer for surface {}",
+            surface_id
         );
-        info!("SurfaceWin: posted initial FlipFramebuffer for surface {}", surface_id);
 
         Ok(Box::new(SurfaceWin {
             surface_id,
@@ -490,14 +504,12 @@ impl GpuDisplaySurface for SurfaceWin {
             let fb_size = (self.framebuffer_stride * self.framebuffer_height) as usize;
             self.framebuffer_data = vec![0u8; fb_size];
 
-            let _ = wndproc_thread.post_display_command(
-                DisplaySendToWndProc::FlipFramebuffer {
-                    surface_id: self.surface_id,
-                    pixels: fb_data,
-                    width: self.framebuffer_width,
-                    height: self.framebuffer_height,
-                },
-            );
+            let _ = wndproc_thread.post_display_command(DisplaySendToWndProc::FlipFramebuffer {
+                surface_id: self.surface_id,
+                pixels: fb_data,
+                width: self.framebuffer_width,
+                height: self.framebuffer_height,
+            });
         }
     }
 

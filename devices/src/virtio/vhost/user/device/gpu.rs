@@ -55,7 +55,14 @@ impl gpu::QueueReader for SharedReader {
     }
 
     fn signal_used(&self) {
-        self.queue.lock().trigger_interrupt();
+        let mut queue = self.queue.lock();
+        #[cfg(windows)]
+        if !queue.trigger_interrupt() {
+            queue.force_used_interrupt();
+            return;
+        }
+        #[cfg(not(windows))]
+        queue.trigger_interrupt();
     }
 }
 
@@ -85,7 +92,10 @@ async fn run_ctrl_queue(
             reader.signal_used();
         }
     }
-    eprintln!("GPU-BACKEND: run_ctrl_queue exiting after {} kicks", kick_count);
+    eprintln!(
+        "GPU-BACKEND: run_ctrl_queue exiting after {} kicks",
+        kick_count
+    );
 }
 
 struct GpuBackend {
@@ -139,6 +149,7 @@ impl VhostUserDevice for GpuBackend {
     }
 
     fn start_queue(&mut self, idx: usize, queue: Queue, mem: GuestMemory) -> anyhow::Result<()> {
+        eprintln!("GPU-BACKEND: start_queue idx={}", idx);
         if self.queue_workers[idx].is_some() {
             warn!("Starting new queue handler without stopping old handler");
             self.stop_queue(idx)?;
@@ -196,9 +207,12 @@ impl VhostUserDevice for GpuBackend {
                 };
 
                 // Start handling platform-specific workers.
+                eprintln!("GPU-BACKEND: start_platform_workers before idx=0");
                 self.start_platform_workers(doorbell)?;
+                eprintln!("GPU-BACKEND: start_platform_workers after idx=0");
 
                 // Start handling the control queue.
+                eprintln!("GPU-BACKEND: spawning run_ctrl_queue");
                 self.ex
                     .spawn_local(run_ctrl_queue(reader, mem, kick_evt, state))
             }
@@ -212,6 +226,7 @@ impl VhostUserDevice for GpuBackend {
         };
 
         self.queue_workers[idx] = Some(WorkerState { queue_task, queue });
+        eprintln!("GPU-BACKEND: start_queue done idx={}", idx);
         Ok(())
     }
 

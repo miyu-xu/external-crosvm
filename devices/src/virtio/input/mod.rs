@@ -16,6 +16,7 @@ use anyhow::bail;
 use anyhow::Context;
 use base::custom_serde::deserialize_seq_to_arr;
 use base::custom_serde::serialize_arr;
+use base::debug;
 use base::error;
 use base::warn;
 use base::AsRawDescriptor;
@@ -508,7 +509,16 @@ impl<T: EventSource> Worker<T> {
                         }
                     }
                     Token::InputEventsAvailable => match self.event_source.receive_events() {
-                        Err(e) => error!("error receiving events: {}", e),
+                        Err(e) => {
+                            #[cfg(windows)]
+                            {
+                                debug!("input event source for '{}' closed: {}", self.name, e);
+                                let _ = wait_ctx.delete(&self.event_source);
+                                continue;
+                            }
+                            #[cfg(not(windows))]
+                            error!("error receiving events: {}", e);
+                        }
                         Ok(_cnt) => eventq_needs_interrupt |= self.send_events(),
                     },
                     Token::InterruptResample => {

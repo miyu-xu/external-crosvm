@@ -412,9 +412,7 @@ pub enum VmMemorySource {
 fn to_rutabaga_desciptor(s: SafeDescriptor) -> RutabagaDescriptor {
     // SAFETY:
     // Safe because we own the SafeDescriptor at this point.
-    unsafe {
-        RutabagaDescriptor::from_raw_descriptor(s.into_raw_descriptor() as _)
-    }
+    unsafe { RutabagaDescriptor::from_raw_descriptor(s.into_raw_descriptor() as _) }
 }
 
 struct RutabagaMemoryRegion {

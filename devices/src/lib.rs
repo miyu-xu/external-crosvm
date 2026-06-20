@@ -12,12 +12,11 @@ pub mod bat;
 mod bus;
 #[cfg(feature = "stats")]
 mod bus_stats;
+pub mod chromeos_acpi;
 pub mod cmos;
 #[cfg(target_arch = "x86_64")]
 mod debugcon;
 mod fw_cfg;
-#[cfg(target_arch = "x86_64")]
-pub mod qemu_cpu_hotplug;
 mod i8042;
 mod irq_event;
 pub mod irqchip;
@@ -25,12 +24,13 @@ mod pci;
 mod pflash;
 pub mod pl030;
 pub mod pmc_virt;
-pub mod chromeos_acpi;
-pub mod tpm_tis;
+#[cfg(target_arch = "x86_64")]
+pub mod qemu_cpu_hotplug;
 mod serial;
 pub mod serial_device;
 mod suspendable;
 mod sys;
+pub mod tpm_tis;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 mod virtcpufreq;
 pub mod virtio;

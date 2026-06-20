@@ -54,8 +54,7 @@ impl Aml for ChromeOsAcpiDevice {
                 &aml::Name::new(
                     "MLST".into(),
                     &aml::Package::new(vec![
-                        &"CHSW", &"HWID", &"FWID", &"FRID",
-                        &"BINF", &"VBNV", &"FMAP", &"VDAT",
+                        &"CHSW", &"HWID", &"FWID", &"FRID", &"BINF", &"VBNV", &"FMAP", &"VDAT",
                     ]),
                 ),
                 // ChromeOS Switch: bit 5=dev_mode(0=off), bit 9=wp(1=enabled)
@@ -67,15 +66,9 @@ impl Aml for ChromeOsAcpiDevice {
                 // Firmware Read ID
                 &aml::Name::new("FRID".into(), &"crosvm_frid.0.0"),
                 // Boot Info: [EC_fw, main_fw] — 1=RW, 1=Normal
-                &aml::Name::new(
-                    "BINF".into(),
-                    &aml::Package::new(vec![&1u32, &1u32]),
-                ),
+                &aml::Name::new("BINF".into(), &aml::Package::new(vec![&1u32, &1u32])),
                 // Vboot NVRAM: [offset, size]
-                &aml::Name::new(
-                    "VBNV".into(),
-                    &aml::Package::new(vec![&0u32, &16u32]),
-                ),
+                &aml::Name::new("VBNV".into(), &aml::Package::new(vec![&0u32, &16u32])),
                 // Flashmap base address
                 &aml::Name::new("FMAP".into(), &aml::ZERO),
                 // Verified boot data (empty)
@@ -85,10 +78,10 @@ impl Aml for ChromeOsAcpiDevice {
                 &aml::Name::new(
                     "GPIO".into(),
                     &aml::Package::new(vec![
-                        &0u32, &0u32, &0u32, &0u32,  // GPIO.0
-                        &0u32, &0u32, &0u32, &0u32,  // GPIO.1
-                        &0u32, &0u32, &0u32, &0u32,  // GPIO.2
-                        &0u32, &0u32, &0u32, &0u32,  // GPIO.3
+                        &0u32, &0u32, &0u32, &0u32, // GPIO.0
+                        &0u32, &0u32, &0u32, &0u32, // GPIO.1
+                        &0u32, &0u32, &0u32, &0u32, // GPIO.2
+                        &0u32, &0u32, &0u32, &0u32, // GPIO.3
                     ]),
                 ),
                 // MECK — Management Engine Checksum (placeholder)

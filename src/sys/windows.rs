@@ -317,13 +317,17 @@ fn create_block_device(cfg: &Config, disk: &DiskOption, disk_device_tube: Tube) 
     let mut features = virtio::base_features(cfg.protection_type);
     // EVENT_IDX interrupt suppression breaks OVMF virtio-blk polling on WHPX.
     features &= !(1 << 29); // VIRTIO_RING_F_EVENT_IDX
+    let num_queues = std::env::var("CROSVM_WHPX_BLOCK_QUEUES")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .or(Some(1));
     let dev = virtio::BlockAsync::new(
         features,
         disk.open()?,
         disk,
         Some(disk_device_tube),
         None,
-        None,
+        num_queues,
     )
     .exit_context(Exit::BlockDeviceNew, "failed to create block device")?;
 
@@ -635,9 +639,12 @@ fn create_virtio_devices(
             .as_ref()
             .and_then(|cfg| cfg.wndproc_thread_builder.as_ref())
             .is_some();
-        base::info!("WndProc: has_builder={} has_backend={}", has_builder, cfg.gpu_backend_config.is_some());
-        cfg
-            .window_procedure_thread_split_config
+        base::info!(
+            "WndProc: has_builder={} has_backend={}",
+            has_builder,
+            cfg.gpu_backend_config.is_some()
+        );
+        cfg.window_procedure_thread_split_config
             .as_mut()
             .and_then(|cfg| cfg.wndproc_thread_builder.take())
             .map(WindowProcedureThreadBuilder::start_thread)
@@ -763,7 +770,9 @@ fn create_virtio_gpu_device(
                 Ok(Ok(())) => eprintln!("GPU-WORKER: run_gpu_device_worker returned Ok"),
                 Ok(Err(e)) => eprintln!("GPU-WORKER: run_gpu_device_worker ERROR: {:#}", e),
                 Err(panic) => {
-                    let msg = panic.downcast_ref::<String>().map(|s| s.as_str())
+                    let msg = panic
+                        .downcast_ref::<String>()
+                        .map(|s| s.as_str())
                         .or_else(|| panic.downcast_ref::<&str>().copied())
                         .unwrap_or("<unknown panic>");
                     eprintln!("GPU-WORKER: PANICKED: {}", msg);

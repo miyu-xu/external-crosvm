@@ -455,6 +455,11 @@ impl<T: VhostUserDevice> vmm_vhost::Backend for DeviceRequestHandler<T> {
         contexts: &[VhostUserMemoryRegion],
         files: Vec<File>,
     ) -> VhostResult<()> {
+        eprintln!(
+            "VHOST-BACKEND: set_mem_table regions={} files={}",
+            contexts.len(),
+            files.len()
+        );
         let (guest_mem, vmm_maps) = VhostUserRegularOps::set_mem_table(contexts, files)?;
         self.mem = Some(guest_mem);
         self.vmm_maps = Some(vmm_maps);
@@ -462,10 +467,12 @@ impl<T: VhostUserDevice> vmm_vhost::Backend for DeviceRequestHandler<T> {
     }
 
     fn get_queue_num(&mut self) -> VhostResult<u64> {
+        eprintln!("VHOST-BACKEND: get_queue_num -> {}", self.vrings.len());
         Ok(self.vrings.len() as u64)
     }
 
     fn set_vring_num(&mut self, index: u32, num: u32) -> VhostResult<()> {
+        eprintln!("VHOST-BACKEND: set_vring_num index={} num={}", index, num);
         if index as usize >= self.vrings.len() || num == 0 || num > Queue::MAX_SIZE.into() {
             return Err(VhostError::InvalidParam);
         }
@@ -483,6 +490,10 @@ impl<T: VhostUserDevice> vmm_vhost::Backend for DeviceRequestHandler<T> {
         available: u64,
         _log: u64,
     ) -> VhostResult<()> {
+        eprintln!(
+            "VHOST-BACKEND: set_vring_addr index={} desc=0x{:x} avail=0x{:x} used=0x{:x}",
+            index, descriptor, available, used
+        );
         if index as usize >= self.vrings.len() {
             return Err(VhostError::InvalidParam);
         }
@@ -501,6 +512,10 @@ impl<T: VhostUserDevice> vmm_vhost::Backend for DeviceRequestHandler<T> {
     }
 
     fn set_vring_base(&mut self, index: u32, base: u32) -> VhostResult<()> {
+        eprintln!(
+            "VHOST-BACKEND: set_vring_base index={} base={}",
+            index, base
+        );
         if index as usize >= self.vrings.len() || base >= Queue::MAX_SIZE.into() {
             return Err(VhostError::InvalidParam);
         }
@@ -551,6 +566,11 @@ impl<T: VhostUserDevice> vmm_vhost::Backend for DeviceRequestHandler<T> {
     }
 
     fn set_vring_kick(&mut self, index: u8, file: Option<File>) -> VhostResult<()> {
+        eprintln!(
+            "VHOST-BACKEND: set_vring_kick index={} file_present={}",
+            index,
+            file.is_some()
+        );
         if index as usize >= self.vrings.len() {
             return Err(VhostError::InvalidParam);
         }
@@ -575,6 +595,7 @@ impl<T: VhostUserDevice> vmm_vhost::Backend for DeviceRequestHandler<T> {
 
         let doorbell = vring.doorbell.clone().ok_or(VhostError::InvalidOperation)?;
 
+        eprintln!("VHOST-BACKEND: activating vring index={}", index);
         let queue = match vring.queue.activate(&mem, kick_evt, doorbell) {
             Ok(queue) => queue,
             Err(e) => {
@@ -583,10 +604,12 @@ impl<T: VhostUserDevice> vmm_vhost::Backend for DeviceRequestHandler<T> {
             }
         };
 
+        eprintln!("VHOST-BACKEND: calling backend.start_queue index={}", index);
         if let Err(e) = self.backend.start_queue(index as usize, queue, mem) {
             error!("Failed to start queue {}: {}", index, e);
             return Err(VhostError::BackendInternalError);
         }
+        eprintln!("VHOST-BACKEND: backend.start_queue ok index={}", index);
 
         trace!("started queue {index}");
 
@@ -594,6 +617,11 @@ impl<T: VhostUserDevice> vmm_vhost::Backend for DeviceRequestHandler<T> {
     }
 
     fn set_vring_call(&mut self, index: u8, file: Option<File>) -> VhostResult<()> {
+        eprintln!(
+            "VHOST-BACKEND: set_vring_call index={} file_present={}",
+            index,
+            file.is_some()
+        );
         if index as usize >= self.vrings.len() {
             return Err(VhostError::InvalidParam);
         }
@@ -621,6 +649,10 @@ impl<T: VhostUserDevice> vmm_vhost::Backend for DeviceRequestHandler<T> {
     }
 
     fn set_vring_enable(&mut self, index: u32, enable: bool) -> VhostResult<()> {
+        eprintln!(
+            "VHOST-BACKEND: set_vring_enable index={} enable={}",
+            index, enable
+        );
         if index as usize >= self.vrings.len() {
             return Err(VhostError::InvalidParam);
         }

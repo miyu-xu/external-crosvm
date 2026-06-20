@@ -78,6 +78,8 @@ use chrono::Utc;
 pub use cpuid::adjust_cpuid;
 pub use cpuid::CpuIdContext;
 use devices::acpi::PM_WAKEUP_GPIO;
+use devices::chromeos_acpi::ChromeOsAcpiDevice;
+use devices::tpm_tis::TpmTisDevice;
 use devices::Bus;
 use devices::BusDevice;
 use devices::BusDeviceObj;
@@ -103,8 +105,6 @@ use devices::Serial;
 use devices::SerialHardware;
 use devices::SerialParameters;
 use devices::VirtualPmc;
-use devices::chromeos_acpi::ChromeOsAcpiDevice;
-use devices::tpm_tis::TpmTisDevice;
 use devices::FW_CFG_BASE_PORT;
 use devices::FW_CFG_MAX_FILE_SLOTS;
 use devices::FW_CFG_WIDTH;
@@ -2258,7 +2258,9 @@ impl X8664arch {
                     &aml::Name::new(
                         "_CRS".into(),
                         &aml::ResourceTemplate::new(vec![&aml::Memory32Fixed::new(
-                            cfg!(debug_assertions), start, len,
+                            cfg!(debug_assertions),
+                            start,
+                            len,
                         )]),
                     ),
                 ],

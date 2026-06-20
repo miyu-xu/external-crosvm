@@ -131,11 +131,7 @@ const VIRTIOBLK_POLL_ADDR_HI: u64 = 0xbf09fa3c;
 const VIRTIOBLK_USED_RING_LO: u64 = 0xbec35000;
 const VIRTIOBLK_USED_RING_HI: u64 = 0xbec35010;
 
-fn log_virtio_poll_read(
-    address: u64,
-    data: &[u8],
-    intr_state: Option<(bool, bool, bool)>,
-) {
+fn log_virtio_poll_read(address: u64, data: &[u8], intr_state: Option<(bool, bool, bool)>) {
     if address != VIRTIOBLK_POLL_ADDR_LO
         && address != VIRTIOBLK_POLL_ADDR_HI
         && (address < VIRTIOBLK_USED_RING_LO || address > VIRTIOBLK_USED_RING_HI)
@@ -157,13 +153,22 @@ fn log_virtio_poll_read(
         Some((if_flag, shadow, pending)) => {
             info!(
                 "virtio-poll: addr={:#x} val={:#x} size={} IF={} shadow={} pending={} (#{})",
-                address, val, data.len(), if_flag, shadow, pending, n
+                address,
+                val,
+                data.len(),
+                if_flag,
+                shadow,
+                pending,
+                n
             );
         }
         None => {
             info!(
                 "virtio-poll: addr={:#x} val={:#x} size={} (#{})",
-                address, val, data.len(), n
+                address,
+                val,
+                data.len(),
+                n
             );
         }
     }
@@ -828,7 +833,11 @@ where
                 Ok(VcpuExit::Io) => {
                     let _trace_event = trace_event!(crosvm, "VcpuExit::Io");
                     let io_result = {
-                        let mut io_handler = |IoParams { address, mut size, operation }| {
+                        let mut io_handler = |IoParams {
+                                                  address,
+                                                  mut size,
+                                                  operation,
+                                              }| {
                             trace_pio_access(address, size, &operation);
                             match operation {
                                 IoOperation::Read => {
@@ -855,7 +864,11 @@ where
                                 }
                             }
                         };
-                        let mut mmio_handler = |IoParams { address, mut size, operation }| {
+                        let mut mmio_handler = |IoParams {
+                                                    address,
+                                                    mut size,
+                                                    operation,
+                                                }| {
                             match operation {
                                 IoOperation::Read => {
                                     let mut data = [0u8; 8];
@@ -898,10 +911,12 @@ where
                                                 data,
                                                 vm_memory::GuestAddress(address),
                                             )
-                                            .unwrap_or_else(|e| error!(
-                                                "guest memory write failed at {:x}: {}",
-                                                address, e
-                                            ));
+                                            .unwrap_or_else(|e| {
+                                                error!(
+                                                    "guest memory write failed at {:x}: {}",
+                                                    address, e
+                                                )
+                                            });
                                     }
                                     Ok(None)
                                 }
@@ -925,7 +940,8 @@ where
                 }
                 Ok(VcpuExit::Mmio) => {
                     let _trace_event = trace_event!(crosvm, "VcpuExit::Mmio");
-                    static MMIO_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                    static MMIO_COUNT: std::sync::atomic::AtomicU32 =
+                        std::sync::atomic::AtomicU32::new(0);
                     let n = MMIO_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if n < 5 || n % 500 == 0 {
                         info!("MMIO-EXIT #{}", n);
@@ -1172,10 +1188,7 @@ where
             let vcpu_arch: &mut dyn VcpuArch = &mut vcpu;
             if let Some(whpx_vcpu) = vcpu_arch.downcast_mut::<WhpxVcpu>() {
                 if let Err(e) = whpx_vcpu.flush_tlb() {
-                    warn!(
-                        "whpx: vCPU {} TLB flush failed: {}",
-                        context.cpu_id, e
-                    );
+                    warn!("whpx: vCPU {} TLB flush failed: {}", context.cpu_id, e);
                 }
             }
         }
