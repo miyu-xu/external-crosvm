@@ -102,6 +102,14 @@ fn upsert_renderer_feature(renderer_features: &mut Vec<String>, feature_name: &s
     ));
 }
 
+#[cfg(feature = "gfxstream")]
+fn renderer_feature_enabled(renderer_features: &[String], feature_name: &str) -> bool {
+    let enabled_feature = format!("{feature_name}:enabled");
+    renderer_features
+        .iter()
+        .any(|feature| feature == &enabled_feature)
+}
+
 #[cfg(not(feature = "gfxstream"))]
 fn get_renderer_features(gpu_parameters: &GpuParameters) -> Option<String> {
     gpu_parameters.renderer_features.clone()
@@ -122,14 +130,25 @@ fn get_renderer_features(gpu_parameters: &GpuParameters) -> Option<String> {
         .unwrap_or_default();
 
     if gpu_parameters.angle {
+        let allocate_host_memory =
+            renderer_feature_enabled(&renderer_features, "VulkanAllocateHostMemory");
+
         upsert_renderer_feature(&mut renderer_features, "AngleIndirect", true);
         upsert_renderer_feature(
             &mut renderer_features,
             "GuestVulkanOnly",
             !gpu_parameters.renderer_use_gles,
         );
-        upsert_renderer_feature(&mut renderer_features, "ExternalBlob", false);
-        upsert_renderer_feature(&mut renderer_features, "VulkanAllocateHostMemory", false);
+        upsert_renderer_feature(
+            &mut renderer_features,
+            "ExternalBlob",
+            gpu_parameters.external_blob,
+        );
+        upsert_renderer_feature(
+            &mut renderer_features,
+            "VulkanAllocateHostMemory",
+            allocate_host_memory,
+        );
     }
 
     if renderer_features.is_empty() {

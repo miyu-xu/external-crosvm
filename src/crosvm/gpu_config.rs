@@ -62,10 +62,6 @@ pub(crate) fn fixup_gpu_options(
             if gpu_params.use_vulkan == Some(false) {
                 return Err("`angle=true` requires `vulkan=true`".to_string());
             }
-            if gpu_params.external_blob {
-                return Err("`angle=true` requires `external-blob=false`".to_string());
-            }
-
             gpu_params.use_vulkan = Some(true);
         }
 
@@ -358,7 +354,9 @@ mod tests {
         assert!(!gpu_params.renderer_use_gles);
 
         assert!(parse_gpu_options("backend=gfxstream,angle=true,glx=true").is_err());
-        assert!(parse_gpu_options("backend=gfxstream,angle=true,external-blob=true").is_err());
+        let gpu_params =
+            parse_gpu_options("backend=gfxstream,angle=true,external-blob=true").unwrap();
+        assert_eq!(gpu_params.external_blob, true);
     }
 
     #[cfg(feature = "gfxstream")]

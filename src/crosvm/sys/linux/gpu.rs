@@ -117,7 +117,8 @@ pub fn create_gpu_device(
     //   - is_sandboxed implies that blob mapping will be done out-of-process by the crosvm
     //     hypervisor process.
     //   - fixed_blob_mapping is not yet compatible with VmMemorySource::ExternalMapping
-    gpu_params.external_blob = is_sandboxed || gpu_params.fixed_blob_mapping;
+    gpu_params.external_blob =
+        gpu_params.external_blob || is_sandboxed || gpu_params.fixed_blob_mapping;
 
     // Implicit launch is not allowed when sandboxed. A socket fd from a separate sandboxed
     // render_server process must be provided instead.

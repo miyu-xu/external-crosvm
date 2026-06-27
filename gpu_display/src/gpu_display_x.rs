@@ -12,6 +12,7 @@
 mod xlib;
 
 use std::cmp::max;
+use std::env;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::CString;
@@ -49,6 +50,20 @@ use crate::SurfaceType;
 use crate::SysDisplayT;
 
 const BUFFER_COUNT: usize = 2;
+
+#[cfg(feature = "gfxstream")]
+#[link(name = "gfxstream_backend")]
+extern "C" {
+    fn gfxstream_backend_setup_window(
+        native_window_handle: *const c_void,
+        window_x: i32,
+        window_y: i32,
+        window_width: i32,
+        window_height: i32,
+        fb_width: i32,
+        fb_height: i32,
+    );
+}
 
 /// A wrapper for XFree that takes any type.
 /// SAFETY: It is caller's responsibility to ensure that `t` is valid for the entire duration of the
@@ -319,6 +334,7 @@ struct XSurface {
     buffers: [Option<Buffer>; BUFFER_COUNT],
     buffer_next: usize,
     buffer_completion_type: u32,
+    gfxstream_subwindow: bool,
 
     // Fields for handling window close requests
     delete_window_atom: c_ulong,
@@ -326,6 +342,42 @@ struct XSurface {
 }
 
 impl XSurface {
+    fn should_use_gfxstream_subwindow() -> bool {
+        match env::var("CROSVM_X11_GFXSTREAM_SUBWINDOW") {
+            Ok(value) => !matches!(value.as_str(), "" | "0" | "false" | "False" | "FALSE"),
+            Err(_) => false,
+        }
+    }
+
+    fn setup_gfxstream_subwindow(&mut self) {
+        if !Self::should_use_gfxstream_subwindow() {
+            return;
+        }
+
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "gfxstream")] {
+                // gfxstream's Linux FBNativeWindowType is an X11 Window ID passed through
+                // uintptr_t.
+                unsafe {
+                    gfxstream_backend_setup_window(
+                        self.window as usize as *const c_void,
+                        0,
+                        0,
+                        self.width as i32,
+                        self.height as i32,
+                        self.width as i32,
+                        self.height as i32,
+                    )
+                };
+                self.gfxstream_subwindow = true;
+            } else {
+                base::warn!(
+                    "CROSVM_X11_GFXSTREAM_SUBWINDOW requested, but gpu_display was built without gfxstream"
+                );
+            }
+        }
+    }
+
     /// Returns index of the current (on-screen) buffer, or 0 if there are no buffers.
     fn current_buffer(&self) -> usize {
         match self.buffer_next.checked_sub(1) {
@@ -336,6 +388,10 @@ impl XSurface {
 
     /// Draws the indicated buffer onto the screen.
     fn draw_buffer(&mut self, buffer_index: usize) {
+        if self.gfxstream_subwindow {
+            return;
+        }
+
         let buffer = match self.buffers.get_mut(buffer_index) {
             Some(Some(b)) => b,
             _ => {
@@ -785,10 +841,11 @@ impl DisplayT for DisplayX {
             xlib::XClearWindow(self.display.as_ptr(), window);
             xlib::XMapRaised(self.display.as_ptr(), window);
 
-            // Flush everything so that the window is visible immediately.
-            self.display.flush();
+            // Flush everything so that the window is visible before gfxstream creates a child
+            // native subwindow for direct host presentation.
+            self.display.sync();
 
-            Ok(Box::new(XSurface {
+            let mut surface = XSurface {
                 display: self.display.clone(),
                 visual: self.visual,
                 depth,
@@ -799,9 +856,13 @@ impl DisplayT for DisplayX {
                 buffers: Default::default(),
                 buffer_next: 0,
                 buffer_completion_type,
+                gfxstream_subwindow: false,
                 delete_window_atom,
                 close_requested: false,
-            }))
+            };
+            surface.setup_gfxstream_subwindow();
+
+            Ok(Box::new(surface))
         }
     }
 }
