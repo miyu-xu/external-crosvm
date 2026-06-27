@@ -330,10 +330,8 @@ fn build(
     udmabuf: bool,
     #[cfg(windows)] gpu_display_wait_descriptor_ctrl_wr: SendTube,
 ) -> Option<VirtioGpu> {
-    eprintln!("GPU-FRONTEND-INIT: build enter");
     let mut display_opt = None;
     for display_backend in display_backends {
-        eprintln!("GPU-FRONTEND-INIT: display_backend.build before");
         match display_backend.build(
             #[cfg(windows)]
             wndproc_thread,
@@ -343,7 +341,6 @@ fn build(
                 .expect("failed to clone wait context ctrl channel"),
         ) {
             Ok(c) => {
-                eprintln!("GPU-FRONTEND-INIT: display_backend.build ok");
                 display_opt = Some(c);
                 break;
             }
@@ -359,8 +356,7 @@ fn build(
         }
     };
 
-    eprintln!("GPU-FRONTEND-INIT: VirtioGpu::new before");
-    let virtio_gpu = VirtioGpu::new(
+    VirtioGpu::new(
         display,
         display_params,
         display_event,
@@ -369,12 +365,7 @@ fn build(
         external_blob,
         fixed_blob_mapping,
         udmabuf,
-    );
-    eprintln!(
-        "GPU-FRONTEND-INIT: VirtioGpu::new after some={}",
-        virtio_gpu.is_some()
-    );
-    virtio_gpu
+    )
 }
 
 /// Resources used by the fence handler.
@@ -1430,20 +1421,16 @@ impl Gpu {
         fence_handler: RutabagaFenceHandler,
         mapper: Arc<Mutex<Option<Box<dyn SharedMemoryMapper>>>>,
     ) -> Option<Frontend> {
-        eprintln!("GPU-FRONTEND-INIT: initialize_frontend enter");
         let rutabaga_server_descriptor = self.rutabaga_server_descriptor.as_ref().map(|d| {
             to_rutabaga_descriptor(d.try_clone().expect("failed to clone server descriptor"))
         });
-        eprintln!("GPU-FRONTEND-INIT: rutabaga_builder.build before");
         let rutabaga = self
             .rutabaga_builder
             .clone()
             .build(fence_handler, rutabaga_server_descriptor)
             .map_err(|e| error!("failed to build rutabaga {}", e))
             .ok()?;
-        eprintln!("GPU-FRONTEND-INIT: rutabaga_builder.build after");
 
-        eprintln!("GPU-FRONTEND-INIT: virtio gpu build before");
         let mut virtio_gpu = build(
             &self.display_backends,
             self.display_params.clone(),
@@ -1460,18 +1447,14 @@ impl Gpu {
                 .try_clone()
                 .expect("failed to clone wait context control channel"),
         )?;
-        eprintln!("GPU-FRONTEND-INIT: virtio gpu build after");
 
-        eprintln!("GPU-FRONTEND-INIT: import_event_devices before");
         for event_device in self.event_devices.take().expect("missing event_devices") {
             virtio_gpu
                 .import_event_device(event_device)
                 // We lost the `EventDevice`, so fail hard.
                 .expect("failed to import event device");
         }
-        eprintln!("GPU-FRONTEND-INIT: import_event_devices after");
 
-        eprintln!("GPU-FRONTEND-INIT: initialize_frontend exit");
         Some(Frontend::new(virtio_gpu, fence_state))
     }
 

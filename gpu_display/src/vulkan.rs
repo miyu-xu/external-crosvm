@@ -59,7 +59,7 @@ use vulkano::VulkanObject;
 use self::sys::platform::create_post_image_external_memory_handle_types;
 use self::sys::platform::create_post_image_memory_import_info;
 use self::sys::platform::import_semaphore_from_descriptor;
-use self::sys::platform::NativeWindowType;
+pub(crate) use self::sys::platform::NativeWindowType;
 use self::sys::ApplicationState;
 use self::sys::ApplicationStateBuilder;
 pub(crate) use self::sys::PlatformWindowEventLoop;
@@ -87,7 +87,7 @@ pub enum UserEvent {
         image: ExternalImage,
         last_layout_transition: (ImageLayout, ImageLayout),
         acquire_timepoint: Option<Timepoint>,
-        release_timepoint: Timepoint,
+        release_timepoint: Option<Timepoint>,
         image_return: Sender<ExternalImage>,
         promise: Promise,
     },
@@ -434,7 +434,7 @@ impl<T: WindowEventLoop<VulkanState>> VulkanDisplayImpl<T> {
         image_id: ImageId,
         last_layout_transition: (i32, i32),
         acquire_semaphore: Option<SemaphoreTimepoint>,
-        release_semaphore: SemaphoreTimepoint,
+        release_semaphore: Option<SemaphoreTimepoint>,
     ) -> Result<Waitable> {
         let image = if let Some(receiver) = self.used_image_receivers.remove(&image_id) {
             receiver
@@ -460,19 +460,19 @@ impl<T: WindowEventLoop<VulkanState>> VulkanDisplayImpl<T> {
                 None
             };
 
-        let release_timepoint = {
-            let semaphore = self
-                .imported_semaphores
-                .get(&release_semaphore.import_id)
-                .ok_or(anyhow!(
-                    "Semaphore id {} has not been imported",
-                    release_semaphore.import_id
-                ))?;
-            Timepoint {
-                semaphore: semaphore.clone(),
-                value: release_semaphore.value,
-            }
-        };
+        let release_timepoint =
+            if let Some(SemaphoreTimepoint { import_id, value }) = release_semaphore {
+                let semaphore = self
+                    .imported_semaphores
+                    .get(&import_id)
+                    .ok_or(anyhow!("Semaphore id {} has not been imported", import_id))?;
+                Some(Timepoint {
+                    semaphore: semaphore.clone(),
+                    value,
+                })
+            } else {
+                None
+            };
 
         let last_layout_transition: (ImageLayout, ImageLayout) = (
             ash::vk::ImageLayout::from_raw(last_layout_transition.0)

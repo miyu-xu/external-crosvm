@@ -359,6 +359,10 @@ pub enum DisplayExternalResourceImport<'a> {
     VulkanImage {
         descriptor: &'a dyn AsRawDescriptor,
         metadata: VulkanDisplayImageImportMetadata,
+        #[cfg(feature = "vulkan_display")]
+        device_uuid: [u8; VK_UUID_BYTES],
+        #[cfg(feature = "vulkan_display")]
+        driver_uuid: [u8; VK_UUID_BYTES],
     },
     VulkanTimelineSemaphore {
         descriptor: &'a dyn AsRawDescriptor,

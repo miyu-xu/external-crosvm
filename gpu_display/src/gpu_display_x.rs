@@ -12,6 +12,8 @@
 mod xlib;
 
 use std::cmp::max;
+#[cfg(feature = "vulkan_display")]
+use std::collections::HashMap;
 use std::env;
 use std::ffi::c_void;
 use std::ffi::CStr;
@@ -23,10 +25,18 @@ use std::ptr::null;
 use std::ptr::null_mut;
 use std::ptr::NonNull;
 use std::rc::Rc;
+#[cfg(feature = "vulkan_display")]
+use std::sync::Arc;
 
+#[cfg(feature = "vulkan_display")]
+use anyhow::bail;
+#[cfg(feature = "vulkan_display")]
+use anyhow::Context;
 use base::AsRawDescriptor;
 use base::RawDescriptor;
 use base::VolatileSlice;
+#[cfg(feature = "vulkan_display")]
+use euclid::size2;
 use libc::shmat;
 use libc::shmctl;
 use libc::shmdt;
@@ -35,21 +45,83 @@ use libc::IPC_CREAT;
 use libc::IPC_PRIVATE;
 use libc::IPC_RMID;
 use linux_input_sys::virtio_input_event;
+#[cfg(feature = "vulkan_display")]
+use sync::Mutex;
 use vm_control::gpu::DisplayParameters;
+#[cfg(feature = "vulkan_display")]
+use vulkano::VulkanLibrary;
 
 use crate::keycode_converter::KeycodeTranslator;
 use crate::keycode_converter::KeycodeTypes;
+use crate::DisplayExternalResourceImport;
 use crate::DisplayT;
 use crate::EventDeviceKind;
+use crate::FlipToExtraInfo;
 use crate::GpuDisplayError;
 use crate::GpuDisplayEvents;
 use crate::GpuDisplayFramebuffer;
 use crate::GpuDisplayResult;
 use crate::GpuDisplaySurface;
+use crate::SemaphoreTimepoint;
 use crate::SurfaceType;
 use crate::SysDisplayT;
+#[cfg(feature = "vulkan_display")]
+use crate::vulkan::NativeWindowType;
+#[cfg(feature = "vulkan_display")]
+use crate::vulkan::VulkanDisplay;
 
 const BUFFER_COUNT: usize = 2;
+
+#[cfg(feature = "vulkan_display")]
+enum VulkanDisplayWrapper {
+    Uninitialized {
+        display: usize,
+        window: u64,
+        width: u32,
+        height: u32,
+    },
+    Initialized(VulkanDisplay),
+}
+
+#[cfg(feature = "vulkan_display")]
+impl VulkanDisplayWrapper {
+    fn get_or_init(
+        &mut self,
+        vulkan_library: Arc<VulkanLibrary>,
+        device_uuid: [u8; 16],
+        driver_uuid: [u8; 16],
+    ) -> anyhow::Result<&mut VulkanDisplay> {
+        if let VulkanDisplayWrapper::Uninitialized {
+            display,
+            window,
+            width,
+            height,
+        } = *self
+        {
+            // SAFETY: The DisplayX-owned X Display and Window outlive the VulkanDisplay stored
+            // inside this wrapper.
+            let vulkan_display = unsafe {
+                VulkanDisplay::new(
+                    vulkan_library,
+                    NativeWindowType {
+                        display: display as *mut c_void,
+                        window,
+                    },
+                    &size2(width as i32, height as i32),
+                    device_uuid,
+                    driver_uuid,
+                )
+                .context("create Linux X11 VulkanDisplay")?
+            };
+            *self = VulkanDisplayWrapper::Initialized(vulkan_display);
+        }
+
+        match self {
+            VulkanDisplayWrapper::Initialized(vulkan_display) => Ok(vulkan_display),
+            VulkanDisplayWrapper::Uninitialized { .. } => unreachable!(),
+        }
+    }
+}
 
 #[cfg(feature = "gfxstream")]
 #[link(name = "gfxstream_backend")]
@@ -339,6 +411,9 @@ struct XSurface {
     // Fields for handling window close requests
     delete_window_atom: c_ulong,
     close_requested: bool,
+
+    #[cfg(feature = "vulkan_display")]
+    vulkan_display: Arc<Mutex<VulkanDisplayWrapper>>,
 }
 
 impl XSurface {
@@ -498,6 +573,10 @@ impl GpuDisplaySurface for XSurface {
     }
 
     fn framebuffer(&mut self) -> Option<GpuDisplayFramebuffer> {
+        if self.gfxstream_subwindow {
+            return None;
+        }
+
         // Framebuffers are lazily allocated. If the next buffer is not in self.buffers, add it
         // using push_new_buffer and then get its memory.
         let framebuffer = self.lazily_allocate_buffer(self.buffer_next)?;
@@ -548,6 +627,45 @@ impl GpuDisplaySurface for XSurface {
             }
         }
     }
+
+    #[cfg(not(feature = "vulkan_display"))]
+    fn flip_to(
+        &mut self,
+        _import_id: u32,
+        _acquire_timepoint: Option<SemaphoreTimepoint>,
+        _release_timepoint: Option<SemaphoreTimepoint>,
+        _extra_info: Option<FlipToExtraInfo>,
+    ) -> anyhow::Result<sync::Waitable> {
+        bail!("vulkan_display feature is not enabled")
+    }
+
+    #[cfg(feature = "vulkan_display")]
+    fn flip_to(
+        &mut self,
+        import_id: u32,
+        acquire_timepoint: Option<SemaphoreTimepoint>,
+        release_timepoint: Option<SemaphoreTimepoint>,
+        extra_info: Option<FlipToExtraInfo>,
+    ) -> anyhow::Result<sync::Waitable> {
+        let last_layout_transition = match extra_info {
+            Some(FlipToExtraInfo::Vulkan {
+                old_layout,
+                new_layout,
+            }) => (old_layout, new_layout),
+            None => bail!("vulkan display flip_to requires old and new layout in extra_info"),
+        };
+        match *self.vulkan_display.lock() {
+            VulkanDisplayWrapper::Initialized(ref mut vulkan_display) => vulkan_display.post(
+                import_id,
+                last_layout_transition,
+                acquire_timepoint,
+                release_timepoint,
+            ),
+            VulkanDisplayWrapper::Uninitialized { .. } => {
+                bail!("VulkanDisplay is not initialized for this surface")
+            }
+        }
+    }
 }
 
 impl Drop for XSurface {
@@ -568,6 +686,10 @@ pub struct DisplayX {
     keycode_translator: KeycodeTranslator,
     current_event: Option<XEvent>,
     mt_tracking_id: u16,
+    #[cfg(feature = "vulkan_display")]
+    vulkan_library: Option<Arc<VulkanLibrary>>,
+    #[cfg(feature = "vulkan_display")]
+    vulkan_displays: HashMap<u32, Arc<Mutex<VulkanDisplayWrapper>>>,
 }
 
 impl DisplayX {
@@ -641,6 +763,15 @@ impl DisplayX {
                 keycode_translator,
                 current_event: None,
                 mt_tracking_id: 0,
+                #[cfg(feature = "vulkan_display")]
+                vulkan_library: VulkanLibrary::new()
+                    .map_err(|e| {
+                        base::warn!("VulkanDisplay is unavailable on X11: {:#}", e);
+                        e
+                    })
+                    .ok(),
+                #[cfg(feature = "vulkan_display")]
+                vulkan_displays: HashMap::new(),
             })
         }
     }
@@ -766,7 +897,7 @@ impl DisplayT for DisplayX {
     fn create_surface(
         &mut self,
         parent_surface_id: Option<u32>,
-        _surface_id: u32,
+        surface_id: u32,
         _scanout_id: Option<u32>,
         display_params: &DisplayParameters,
         _surf_type: SurfaceType,
@@ -845,6 +976,14 @@ impl DisplayT for DisplayX {
             // native subwindow for direct host presentation.
             self.display.sync();
 
+            #[cfg(feature = "vulkan_display")]
+            let vulkan_display = Arc::new(Mutex::new(VulkanDisplayWrapper::Uninitialized {
+                display: self.display.as_ptr() as usize,
+                window,
+                width,
+                height,
+            }));
+
             let mut surface = XSurface {
                 display: self.display.clone(),
                 visual: self.visual,
@@ -859,10 +998,69 @@ impl DisplayT for DisplayX {
                 gfxstream_subwindow: false,
                 delete_window_atom,
                 close_requested: false,
+                #[cfg(feature = "vulkan_display")]
+                vulkan_display: Arc::clone(&vulkan_display),
             };
             surface.setup_gfxstream_subwindow();
 
+            #[cfg(feature = "vulkan_display")]
+            self.vulkan_displays.insert(surface_id, vulkan_display);
+
             Ok(Box::new(surface))
+        }
+    }
+
+    #[cfg(feature = "vulkan_display")]
+    fn import_resource(
+        &mut self,
+        import_id: u32,
+        surface_id: u32,
+        external_display_resource: DisplayExternalResourceImport,
+    ) -> anyhow::Result<()> {
+        let vulkan_display = self
+            .vulkan_displays
+            .get(&surface_id)
+            .with_context(|| format!("No VulkanDisplay for X surface id {}", surface_id))?;
+        let mut vulkan_display = vulkan_display.lock();
+        match external_display_resource {
+            DisplayExternalResourceImport::VulkanImage {
+                descriptor,
+                metadata,
+                device_uuid,
+                driver_uuid,
+            } => {
+                let library = self
+                    .vulkan_library
+                    .as_ref()
+                    .context("Vulkan library is not available for X11 VulkanDisplay")?;
+                vulkan_display
+                    .get_or_init(Arc::clone(library), device_uuid, driver_uuid)?
+                    .import_image(import_id, descriptor, metadata)
+            }
+            DisplayExternalResourceImport::VulkanTimelineSemaphore { descriptor } => {
+                match *vulkan_display {
+                    VulkanDisplayWrapper::Initialized(ref mut vulkan_display) => {
+                        vulkan_display.import_semaphore(import_id, descriptor)
+                    }
+                    VulkanDisplayWrapper::Uninitialized { .. } => {
+                        bail!("VulkanDisplay is not initialized for this X surface")
+                    }
+                }
+            }
+            DisplayExternalResourceImport::Dmabuf { .. } => {
+                bail!("X11 VulkanDisplay does not support dmabuf imports")
+            }
+        }
+    }
+
+    #[cfg(feature = "vulkan_display")]
+    fn release_import(&mut self, import_id: u32, surface_id: u32) {
+        if let Some(vulkan_display) = self.vulkan_displays.get(&surface_id) {
+            if let VulkanDisplayWrapper::Initialized(ref mut vulkan_display) =
+                *vulkan_display.lock()
+            {
+                vulkan_display.delete_imported_image_or_semaphore(import_id);
+            }
         }
     }
 }

@@ -2447,8 +2447,8 @@ where
             })?
     };
 
-    let flags = RutabagaGrallocBackendFlags::new().disable_vulkano();
-    let gralloc = RutabagaGralloc::new(flags).context("failed to create gralloc")?;
+    let gralloc = RutabagaGralloc::new(RutabagaGrallocBackendFlags::new())
+        .context("failed to create gralloc")?;
 
     run_control(
         linux,

@@ -6,7 +6,7 @@ cfg_if::cfg_if! {
     if #[cfg(unix)] {
         pub mod unix;
         pub use unix as platform;
-        pub(crate) use self::unix::StubWindowEventLoop as PlatformWindowEventLoop;
+        pub(crate) use self::unix::UnixWindowEventLoop as PlatformWindowEventLoop;
     } else if #[cfg(windows)] {
         pub mod windows;
         pub use windows as platform;

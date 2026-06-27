@@ -387,6 +387,7 @@ impl DisplayT for DisplayWin {
                         DisplayExternalResourceImport::VulkanImage {
                             descriptor,
                             metadata,
+                            ..
                         } => {
                             vulkan_display.import_image(import_id, descriptor, metadata)?;
                         }
@@ -579,7 +580,7 @@ impl GpuDisplaySurface for SurfaceWin {
                 import_id,
                 last_layout_transition,
                 acquire_timepoint,
-                release_timepoint,
+                Some(release_timepoint),
             ),
             VulkanDisplayWrapper::Uninitialized => {
                 bail!("VulkanDisplay is not initialized for this surface")

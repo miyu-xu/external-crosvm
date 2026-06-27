@@ -22,11 +22,14 @@ use vulkano::device::DeviceCreateInfo;
 use vulkano::device::DeviceCreationError;
 use vulkano::device::QueueCreateInfo;
 use vulkano::device::QueueFlags;
-use vulkano::image;
+use vulkano::image::ImageAspect;
 use vulkano::image::ImageDimensions;
-use vulkano::image::ImageError;
+use vulkano::image::ImageTiling;
 use vulkano::image::ImageUsage;
 use vulkano::image::SampleCount;
+use vulkano::image::sys::ImageCreationError;
+use vulkano::image::sys::UnsafeImage;
+use vulkano::image::sys::UnsafeImageCreateInfo;
 use vulkano::instance::Instance;
 use vulkano::instance::InstanceCreateInfo;
 use vulkano::instance::InstanceCreationError;
@@ -40,7 +43,6 @@ use vulkano::memory::ExternalMemoryHandleTypes;
 use vulkano::memory::MappedDeviceMemory;
 use vulkano::memory::MemoryAllocateInfo;
 use vulkano::memory::MemoryMapError;
-use vulkano::memory::MemoryPropertyFlags;
 use vulkano::memory::MemoryRequirements;
 use vulkano::memory::MemoryType;
 use vulkano::sync::Sharing;
@@ -159,7 +161,10 @@ impl VulkanoGralloc {
         for physical in instance.enumerate_physical_devices()? {
             let queue_family_index = match physical.queue_family_properties().iter().position(|q| {
                 // We take the first queue family that supports graphics.
-                q.queue_flags.intersects(QueueFlags::GRAPHICS)
+                q.queue_flags.intersects(&QueueFlags {
+                    graphics: true,
+                    ..QueueFlags::empty()
+                })
             }) {
                 Some(family) => family,
                 None => {
@@ -225,7 +230,7 @@ impl VulkanoGralloc {
     unsafe fn create_image(
         &mut self,
         info: ImageAllocationInfo,
-    ) -> RutabagaResult<(Arc<image::sys::RawImage>, MemoryRequirements)> {
+    ) -> RutabagaResult<(Arc<UnsafeImage>, MemoryRequirements)> {
         let device = if self.has_integrated_gpu {
             self.devices
                 .get(&PhysicalDeviceType::IntegratedGpu)
@@ -237,8 +242,14 @@ impl VulkanoGralloc {
         };
 
         let usage = match info.flags.uses_rendering() {
-            true => ImageUsage::COLOR_ATTACHMENT,
-            false => ImageUsage::SAMPLED,
+            true => ImageUsage {
+                color_attachment: true,
+                ..ImageUsage::empty()
+            },
+            false => ImageUsage {
+                sampled: true,
+                ..ImageUsage::empty()
+            },
         };
 
         // Reasonable bounds on image width.
@@ -252,9 +263,9 @@ impl VulkanoGralloc {
         }
 
         let vulkan_format = info.drm_format.vulkan_format()?;
-        let raw_image = Arc::new(image::sys::RawImage::new(
+        let raw_image = UnsafeImage::new(
             device.clone(),
-            image::sys::ImageCreateInfo {
+            UnsafeImageCreateInfo {
                 dimensions: ImageDimensions::Dim2d {
                     width: info.width,
                     height: info.height,
@@ -262,15 +273,16 @@ impl VulkanoGralloc {
                 },
                 format: Some(vulkan_format),
                 samples: SampleCount::Sample1,
+                tiling: ImageTiling::Linear,
                 usage,
                 mip_levels: 1,
                 sharing: Sharing::Exclusive,
                 ..Default::default()
             },
-        )?);
+        )?;
 
         // Won't panic since this not a swapchain image.
-        let memory_requirements = raw_image.memory_requirements()[0];
+        let memory_requirements = raw_image.memory_requirements();
         Ok((raw_image, memory_requirements))
     }
 }
@@ -322,7 +334,13 @@ impl Gralloc for VulkanoGralloc {
         // will panic if we are not.
         for plane in 0..planar_layout.num_planes {
             let aspect = info.drm_format.vulkan_image_aspect(plane)?;
-            let layout = raw_image.subresource_layout(aspect, 0, 0)?;
+            let layout = unsafe {
+                if aspect == ImageAspect::Color {
+                    raw_image.color_linear_layout(0)
+                } else {
+                    raw_image.multiplane_color_layout(aspect)
+                }
+            };
             reqs.strides[plane] = layout.row_pitch as u32;
             reqs.offsets[plane] = layout.offset as u32;
         }
@@ -333,38 +351,23 @@ impl Gralloc for VulkanoGralloc {
         let (memory_type_index, memory_type) = {
             let filter = |current_type: &MemoryType| {
                 if need_visible
-                    && !current_type
-                        .property_flags
-                        .intersects(MemoryPropertyFlags::HOST_VISIBLE)
+                    && !current_type.property_flags.host_visible
                 {
                     return AllocFromRequirementsFilter::Forbidden;
                 }
 
-                if !need_visible
-                    && current_type
-                        .property_flags
-                        .intersects(MemoryPropertyFlags::DEVICE_LOCAL)
-                {
+                if !need_visible && current_type.property_flags.device_local {
                     return AllocFromRequirementsFilter::Preferred;
                 }
 
-                if need_visible
-                    && want_cached
-                    && current_type
-                        .property_flags
-                        .intersects(MemoryPropertyFlags::HOST_CACHED)
-                {
+                if need_visible && want_cached && current_type.property_flags.host_cached {
                     return AllocFromRequirementsFilter::Preferred;
                 }
 
                 if need_visible
                     && !want_cached
-                    && current_type
-                        .property_flags
-                        .intersects(MemoryPropertyFlags::HOST_COHERENT)
-                    && !current_type
-                        .property_flags
-                        .intersects(MemoryPropertyFlags::HOST_CACHED)
+                    && current_type.property_flags.host_coherent
+                    && !current_type.property_flags.host_cached
                 {
                     return AllocFromRequirementsFilter::Preferred;
                 }
@@ -397,21 +400,12 @@ impl Gralloc for VulkanoGralloc {
         };
 
         reqs.info = info;
-        reqs.size = memory_requirements.layout.size() as u64;
+        reqs.size = memory_requirements.size as u64;
 
-        if memory_type
-            .property_flags
-            .intersects(MemoryPropertyFlags::HOST_VISIBLE)
-        {
-            if memory_type
-                .property_flags
-                .intersects(MemoryPropertyFlags::HOST_CACHED)
-            {
+        if memory_type.property_flags.host_visible {
+            if memory_type.property_flags.host_cached {
                 reqs.map_info = RUTABAGA_MAP_CACHE_CACHED;
-            } else if memory_type
-                .property_flags
-                .intersects(MemoryPropertyFlags::HOST_COHERENT)
-            {
+            } else if memory_type.property_flags.host_coherent {
                 reqs.map_info = RUTABAGA_MAP_CACHE_WC;
             }
         }
@@ -453,19 +447,25 @@ impl Gralloc for VulkanoGralloc {
             match device.enabled_extensions().ext_external_memory_dma_buf {
                 true => (
                     ExternalMemoryHandleType::DmaBuf,
-                    ExternalMemoryHandleTypes::DMA_BUF,
+                    ExternalMemoryHandleTypes {
+                        dma_buf: true,
+                        ..ExternalMemoryHandleTypes::empty()
+                    },
                     RUTABAGA_MEM_HANDLE_TYPE_DMABUF,
                 ),
                 false => (
                     ExternalMemoryHandleType::OpaqueFd,
-                    ExternalMemoryHandleTypes::OPAQUE_FD,
+                    ExternalMemoryHandleTypes {
+                        opaque_fd: true,
+                        ..ExternalMemoryHandleTypes::empty()
+                    },
                     RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_FD,
                 ),
             };
 
         let dedicated_allocation = match device.enabled_extensions().khr_dedicated_allocation {
             true => {
-                if memory_requirements.prefers_dedicated_allocation {
+                if memory_requirements.prefer_dedicated {
                     Some(DedicatedAllocation::Image(&raw_image))
                 } else {
                     None
@@ -534,8 +534,8 @@ impl From<InstanceCreationError> for RutabagaError {
     }
 }
 
-impl From<ImageError> for RutabagaError {
-    fn from(e: ImageError) -> RutabagaError {
+impl From<ImageCreationError> for RutabagaError {
+    fn from(e: ImageCreationError) -> RutabagaError {
         RutabagaError::VkImageCreationError(e)
     }
 }

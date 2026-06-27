@@ -239,7 +239,7 @@ impl PostResource {
         graphics_queue: &Queue,
         present_queue: &Queue,
         post_image_acquire_timepoint: Option<&Timepoint>,
-        post_image_release_timepoint: &Timepoint,
+        post_image_release_timepoint: Option<&Timepoint>,
     ) -> ExternalImage {
         assert_eq!(
             device.internal_object(),
@@ -484,20 +484,21 @@ impl PostResource {
         {
             // The first values are not used, because they are not binary semaphores.
             let mut wait_semaphore_values = vec![0];
-            let signal_semaphore_values = [0, post_image_release_timepoint.value];
+            let mut signal_semaphore_values = vec![0];
             let mut wait_semaphores =
                 vec![self.acquire_swapchain_image_semaphore.internal_object()];
             let mut wait_dst_stage_mask = vec![vk::PipelineStageFlags::TRANSFER];
             let command_buffers = [command_buffer.internal_object()];
-            let signal_semaphores = [
-                self.command_complete_semaphore.internal_object(),
-                post_image_release_timepoint.semaphore.internal_object(),
-            ];
+            let mut signal_semaphores = vec![self.command_complete_semaphore.internal_object()];
 
             if let Some(post_image_acquire_timepoint) = post_image_acquire_timepoint {
                 wait_semaphore_values.push(post_image_acquire_timepoint.value);
                 wait_semaphores.push(post_image_acquire_timepoint.semaphore.internal_object());
                 wait_dst_stage_mask.push(vk::PipelineStageFlags::TRANSFER);
+            }
+            if let Some(post_image_release_timepoint) = post_image_release_timepoint {
+                signal_semaphore_values.push(post_image_release_timepoint.value);
+                signal_semaphores.push(post_image_release_timepoint.semaphore.internal_object());
             }
 
             let mut timeline_semaphore_submit_info = vk::TimelineSemaphoreSubmitInfo::builder()
@@ -569,6 +570,9 @@ impl PostWorker {
                     khr_external_memory_capabilities: true,
                     khr_get_physical_device_properties2: true,
                     khr_surface: true,
+                    #[cfg(unix)]
+                    khr_xlib_surface: true,
+                    #[cfg(windows)]
                     khr_win32_surface: true,
                     ..InstanceExtensions::empty()
                 },
@@ -686,10 +690,17 @@ impl PostWorker {
             DeviceCreateInfo {
                 enabled_extensions: DeviceExtensions {
                     khr_external_fence: true,
+                    #[cfg(windows)]
                     khr_external_fence_win32: true,
                     khr_external_semaphore: true,
+                    #[cfg(unix)]
+                    khr_external_semaphore_fd: true,
+                    #[cfg(windows)]
                     khr_external_semaphore_win32: true,
                     khr_external_memory: true,
+                    #[cfg(unix)]
+                    khr_external_memory_fd: true,
+                    #[cfg(windows)]
                     khr_external_memory_win32: true,
                     khr_swapchain: true,
                     khr_timeline_semaphore: true,
@@ -908,7 +919,7 @@ impl PostWorker {
         image: ExternalImage,
         last_layout_transition: (ImageLayout, ImageLayout),
         acquire_timepoint: Option<Timepoint>,
-        release_timepoint: Timepoint,
+        release_timepoint: Option<Timepoint>,
     ) -> ExternalImage {
         let device = Arc::clone(&self.device);
         let ash_device = Arc::clone(&self.ash_device);
@@ -925,7 +936,7 @@ impl PostWorker {
                     graphics_queue.borrow(),
                     present_queue.borrow(),
                     acquire_timepoint.as_ref(),
-                    &release_timepoint,
+                    release_timepoint.as_ref(),
                 );
                 out_image
             },

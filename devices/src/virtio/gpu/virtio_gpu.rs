@@ -19,10 +19,12 @@ use base::IntoRawDescriptor;
 use base::Protection;
 use base::SafeDescriptor;
 use base::VolatileSlice;
-use base::{error, info};
+use base::{error, info, warn};
 use gpu_display::*;
 use hypervisor::MemCacheType;
 use libc::c_void;
+#[cfg(feature = "vulkan_display")]
+use rutabaga_gfx::DrmFormat;
 use rutabaga_gfx::ResourceCreate3D;
 use rutabaga_gfx::ResourceCreateBlob;
 use rutabaga_gfx::Rutabaga;
@@ -72,6 +74,37 @@ use crate::virtio::resource_bridge::PlaneInfo;
 use crate::virtio::resource_bridge::ResourceInfo;
 use crate::virtio::resource_bridge::ResourceResponse;
 use crate::virtio::SharedMemoryMapper;
+
+#[cfg(feature = "vulkan_display")]
+const VK_FORMAT_R5G6B5_UNORM_PACK16: i32 = 4;
+#[cfg(feature = "vulkan_display")]
+const VK_FORMAT_R8G8B8A8_UNORM: i32 = 37;
+#[cfg(feature = "vulkan_display")]
+const VK_FORMAT_B8G8R8A8_UNORM: i32 = 44;
+#[cfg(feature = "vulkan_display")]
+const VK_IMAGE_LAYOUT_UNDEFINED: i32 = 0;
+#[cfg(feature = "vulkan_display")]
+const VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: i32 = 6;
+#[cfg(feature = "vulkan_display")]
+const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+#[cfg(feature = "vulkan_display")]
+const VK_IMAGE_TILING_LINEAR: i32 = 1;
+#[cfg(feature = "vulkan_display")]
+const VK_IMAGE_TYPE_2D: i32 = 1;
+#[cfg(feature = "vulkan_display")]
+const VK_IMAGE_USAGE_TRANSFER_SRC_BIT: u32 = 0x0000_0001;
+#[cfg(feature = "vulkan_display")]
+const VK_IMAGE_USAGE_TRANSFER_DST_BIT: u32 = 0x0000_0002;
+#[cfg(feature = "vulkan_display")]
+const VK_IMAGE_USAGE_SAMPLED_BIT: u32 = 0x0000_0004;
+#[cfg(feature = "vulkan_display")]
+const VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT: u32 = 0x0000_0010;
+#[cfg(feature = "vulkan_display")]
+const VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT: u32 = 0x0000_0080;
+#[cfg(feature = "vulkan_display")]
+const VK_SAMPLE_COUNT_1_BIT: u32 = 1;
+#[cfg(feature = "vulkan_display")]
+const VK_SHARING_MODE_EXCLUSIVE: i32 = 0;
 
 pub fn to_rutabaga_descriptor(s: SafeDescriptor) -> RutabagaDescriptor {
     // SAFETY:
@@ -186,6 +219,118 @@ struct VirtioGpuScanoutSnapshot {
 }
 
 impl VirtioGpuScanout {
+    #[cfg(feature = "vulkan_display")]
+    fn drm_format_to_vk_format(format: DrmFormat) -> Option<i32> {
+        match format.to_bytes() {
+            [b'R', b'G', b'1', b'6'] => Some(VK_FORMAT_R5G6B5_UNORM_PACK16),
+            [b'A', b'B', b'2', b'4'] | [b'X', b'B', b'2', b'4'] => {
+                Some(VK_FORMAT_R8G8B8A8_UNORM)
+            }
+            [b'A', b'R', b'2', b'4'] | [b'X', b'R', b'2', b'4'] => {
+                Some(VK_FORMAT_B8G8R8A8_UNORM)
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "vulkan_display")]
+    fn make_vulkan_display_metadata(
+        width: u32,
+        height: u32,
+        format: DrmFormat,
+        tiling: i32,
+        allocation_size: u64,
+        memory_type_index: u32,
+    ) -> Option<VulkanDisplayImageImportMetadata> {
+        Some(VulkanDisplayImageImportMetadata {
+            flags: 0,
+            image_type: VK_IMAGE_TYPE_2D,
+            format: Self::drm_format_to_vk_format(format)?,
+            extent: VkExtent3D {
+                width,
+                height,
+                depth: 1,
+            },
+            mip_levels: 1,
+            array_layers: 1,
+            samples: VK_SAMPLE_COUNT_1_BIT,
+            tiling,
+            usage: VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT
+                | VK_IMAGE_USAGE_SAMPLED_BIT
+                | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            sharing_mode: VK_SHARING_MODE_EXCLUSIVE,
+            queue_family_indices: Vec::new(),
+            initial_layout: VK_IMAGE_LAYOUT_UNDEFINED,
+            allocation_size,
+            memory_type_index,
+            dedicated_allocation: true,
+        })
+    }
+
+    #[cfg(feature = "vulkan_display")]
+    fn import_vulkan_resource_to_display(
+        display: &Rc<RefCell<GpuDisplay>>,
+        surface_id: u32,
+        resource: &VirtioGpuResource,
+        rutabaga: &mut Rutabaga,
+        width: u32,
+        height: u32,
+        format: DrmFormat,
+    ) -> Option<u32> {
+        let vulkan_info = rutabaga.vulkan_info(resource.resource_id).ok()?;
+        for tiling in [VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_TILING_LINEAR] {
+            let metadata = Self::make_vulkan_display_metadata(
+                width,
+                height,
+                format,
+                tiling,
+                resource.size,
+                vulkan_info.memory_idx,
+            )?;
+            let export = match rutabaga.export_blob(resource.resource_id) {
+                Ok(export) => export,
+                Err(e) => {
+                    warn!(
+                        "GpuFlush: VulkanDisplay export_blob failed for resource {}: {:?}",
+                        resource.resource_id, e
+                    );
+                    return None;
+                }
+            };
+            if export.handle_type != RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_FD {
+                return None;
+            }
+
+            let descriptor = to_safe_descriptor(export.os_handle);
+            match display.borrow_mut().import_resource(
+                surface_id,
+                DisplayExternalResourceImport::VulkanImage {
+                    descriptor: &descriptor,
+                    metadata,
+                    device_uuid: vulkan_info.device_id.device_uuid,
+                    driver_uuid: vulkan_info.device_id.driver_uuid,
+                },
+            ) {
+                Ok(import_id) => {
+                    info!(
+                        "GpuFlush: VulkanDisplay imported resource={} import={} tiling={}",
+                        resource.resource_id, import_id, tiling
+                    );
+                    return Some(import_id);
+                }
+                Err(e) => {
+                    warn!(
+                        "GpuFlush: VulkanDisplay import failed for resource {} tiling {}: {:#}",
+                        resource.resource_id, tiling, e
+                    );
+                }
+            }
+        }
+        None
+    }
+
     fn new_primary(scanout_id: u32, params: GpuDisplayParameters) -> VirtioGpuScanout {
         let (width, height) = params.get_virtual_display_size();
         VirtioGpuScanout {
@@ -366,7 +511,19 @@ impl VirtioGpuScanout {
             );
             display
                 .borrow_mut()
-                .flip_to(surface_id, import_id, None, None, None)
+                .flip_to(
+                    surface_id,
+                    import_id,
+                    None,
+                    None,
+                    #[cfg(feature = "vulkan_display")]
+                    Some(FlipToExtraInfo::Vulkan {
+                        old_layout: VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        new_layout: VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    }),
+                    #[cfg(not(feature = "vulkan_display"))]
+                    None,
+                )
                 .map_err(|e| {
                     error!("flip_to failed: {:#}", e);
                     ErrUnspec
@@ -374,11 +531,9 @@ impl VirtioGpuScanout {
             return Ok(OkNoData);
         }
 
-        // Import failed, fall back to a copy.
-        base::info!(
-            "GpuFlush: import failed, trying framebuffer copy for surface={}",
-            surface_id
-        );
+        // Import failed, fall back to a copy when the host display owns an XShm framebuffer.
+        // Gfxstream native subwindow present does not expose a framebuffer here; the renderer
+        // posts directly through DisplayVk, so a missing framebuffer is not a guest-visible error.
         let mut display = display.borrow_mut();
 
         // Prevent overwriting a buffer that is currently being used by the compositor.
@@ -386,9 +541,14 @@ impl VirtioGpuScanout {
             return Ok(OkNoData);
         }
 
-        let fb = display
-            .framebuffer_region(surface_id, 0, 0, self.width, self.height)
-            .ok_or(ErrUnspec)?;
+        let Some(fb) = display.framebuffer_region(surface_id, 0, 0, self.width, self.height) else {
+            return Ok(OkNoData);
+        };
+
+        base::info!(
+            "GpuFlush: import failed, using framebuffer copy for surface={}",
+            surface_id
+        );
 
         let mut transfer = Transfer3D::new_2d(0, 0, self.width, self.height, 0);
         transfer.stride = fb.stride();
@@ -413,25 +573,36 @@ impl VirtioGpuScanout {
             return Some(import_id);
         }
 
-        let dmabuf = to_safe_descriptor(rutabaga.export_blob(resource.resource_id).ok()?.os_handle);
         let query = rutabaga.query(resource.resource_id).ok()?;
 
         let (width, height, format, stride, offset) = match resource.scanout_data {
             Some(data) => (
                 data.width,
                 data.height,
-                data.drm_format.into(),
+                data.drm_format,
                 data.strides[0],
                 data.offsets[0],
             ),
             None => (
                 resource.width,
                 resource.height,
-                query.drm_fourcc,
+                DrmFormat(query.drm_fourcc),
                 query.strides[0],
                 query.offsets[0],
             ),
         };
+
+        #[cfg(feature = "vulkan_display")]
+        if let Some(import_id) = Self::import_vulkan_resource_to_display(
+            display, surface_id, resource, rutabaga, width, height, format,
+        ) {
+            resource.display_import = Some(import_id);
+            return Some(import_id);
+        }
+
+        let export = rutabaga.export_blob(resource.resource_id).ok()?;
+        let dmabuf = to_safe_descriptor(export.os_handle);
+        let fourcc = format.into();
 
         let import_id = display
             .borrow_mut()
@@ -444,7 +615,7 @@ impl VirtioGpuScanout {
                     modifiers: query.modifier,
                     width,
                     height,
-                    fourcc: format,
+                    fourcc,
                 },
             )
             .ok()?;
@@ -748,7 +919,6 @@ impl VirtioGpu {
     /// If the resource is the scanout resource, flush it to the display.
     pub fn flush_resource(&mut self, resource_id: u32) -> VirtioGpuResult {
         info!("flush_resource: id={}", resource_id);
-        eprintln!("GPU-FRONTEND: flush_resource id={}", resource_id);
         if resource_id == 0 {
             return Ok(OkNoData);
         }
@@ -1250,10 +1420,6 @@ impl VirtioGpu {
         scanout_data: Option<VirtioScanoutBlobData>,
         resource_id: u32,
     ) -> VirtioGpuResult {
-        eprintln!(
-            "GPU-FRONTEND: update_scanout_resource type={:?} scanout_id={} resource_id={}",
-            scanout_type, scanout_id, resource_id
-        );
         let scanout: &mut VirtioGpuScanout;
         let mut scanout_parent_surface_id = None;
 
