@@ -6,14 +6,17 @@ use std::path::Path;
 
 use base::AsRawDescriptor;
 use base::RawDescriptor;
+#[cfg(feature = "wl")]
 use base::WaitContext;
 
+#[cfg(feature = "wl")]
 use crate::gpu_display_wl::DisplayWl;
 use crate::DisplayEventToken;
 use crate::DisplayT;
 use crate::EventDevice;
 use crate::GpuDisplay;
 use crate::GpuDisplayExt;
+use crate::GpuDisplayError;
 use crate::GpuDisplayResult;
 
 pub(crate) trait UnixDisplayT: DisplayT {}
@@ -49,21 +52,27 @@ pub trait UnixGpuDisplayExt {
 
 impl UnixGpuDisplayExt for GpuDisplay {
     fn open_wayland<P: AsRef<Path>>(wayland_path: Option<P>) -> GpuDisplayResult<GpuDisplay> {
-        let display = match wayland_path {
-            Some(s) => DisplayWl::new(Some(s.as_ref()))?,
-            None => DisplayWl::new(None)?,
-        };
+        let _ = &wayland_path;
+        #[cfg(feature = "wl")]
+        {
+            let display = match wayland_path {
+                Some(s) => DisplayWl::new(Some(s.as_ref()))?,
+                None => DisplayWl::new(None)?,
+            };
 
-        let wait_ctx = WaitContext::new()?;
-        wait_ctx.add(&display, DisplayEventToken::Display)?;
+            let wait_ctx = WaitContext::new()?;
+            wait_ctx.add(&display, DisplayEventToken::Display)?;
 
-        Ok(GpuDisplay {
-            inner: Box::new(display),
-            next_id: 1,
-            event_devices: Default::default(),
-            surfaces: Default::default(),
-            wait_ctx,
-        })
+            Ok(GpuDisplay {
+                inner: Box::new(display),
+                next_id: 1,
+                event_devices: Default::default(),
+                surfaces: Default::default(),
+                wait_ctx,
+            })
+        }
+        #[cfg(not(feature = "wl"))]
+        Err(GpuDisplayError::Unsupported)
     }
 }
 

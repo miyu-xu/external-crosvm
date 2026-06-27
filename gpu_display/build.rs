@@ -110,7 +110,7 @@ fn main() {
     }
 
     match std::env::var("CARGO_CFG_TARGET_OS").as_deref().unwrap() {
-        "linux" | "android" => {
+        "linux" | "android" if std::env::var_os("CARGO_FEATURE_WL").is_some() => {
             build_wayland();
         }
         _ => {}

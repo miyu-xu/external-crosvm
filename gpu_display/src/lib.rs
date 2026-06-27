@@ -35,7 +35,7 @@ mod gpu_display_android_stub;
 mod gpu_display_stub;
 #[cfg(windows)]
 mod gpu_display_win;
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(all(any(target_os = "android", target_os = "linux"), feature = "wl"))]
 mod gpu_display_wl;
 #[cfg(feature = "x")]
 mod gpu_display_x;

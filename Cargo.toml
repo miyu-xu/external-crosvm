@@ -190,6 +190,9 @@ usb = ["devices/usb"]
 ## feature to enable a zero-copy display pipeline.
 wl-dmabuf = ["devices/minigbm"]
 
+## Enables the Wayland display backend on Linux/Android hosts.
+wl = ["devices/wl"]
+
 ## Enables the usage of the X11 protocol for display on the host.
 x = ["devices/x"]
 
