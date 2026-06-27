@@ -123,9 +123,13 @@ fn get_renderer_features(gpu_parameters: &GpuParameters) -> Option<String> {
 
     if gpu_parameters.angle {
         upsert_renderer_feature(&mut renderer_features, "AngleIndirect", true);
-        upsert_renderer_feature(&mut renderer_features, "GuestVulkanOnly", false);
+        upsert_renderer_feature(
+            &mut renderer_features,
+            "GuestVulkanOnly",
+            !gpu_parameters.renderer_use_gles,
+        );
         upsert_renderer_feature(&mut renderer_features, "ExternalBlob", false);
-        upsert_renderer_feature(&mut renderer_features, "VulkanAllocateHostMemory", true);
+        upsert_renderer_feature(&mut renderer_features, "VulkanAllocateHostMemory", false);
     }
 
     if renderer_features.is_empty() {

@@ -56,9 +56,6 @@ pub(crate) fn fixup_gpu_options(
             if !gpu_params.renderer_use_egl {
                 return Err("`angle=true` requires `egl=true`".to_string());
             }
-            if !gpu_params.renderer_use_gles {
-                return Err("`angle=true` requires `gles=true`".to_string());
-            }
             if gpu_params.renderer_use_glx {
                 return Err("`angle=true` is incompatible with `glx=true`".to_string());
             }
@@ -354,7 +351,12 @@ mod tests {
         assert!(parse_gpu_options("backend=2d,angle=true").is_err());
         assert!(parse_gpu_options("backend=gfxstream,angle=true,vulkan=false").is_err());
         assert!(parse_gpu_options("backend=gfxstream,angle=true,egl=false").is_err());
-        assert!(parse_gpu_options("backend=gfxstream,angle=true,gles=false").is_err());
+        let gpu_params = parse_gpu_options("backend=gfxstream,angle=true,gles=false").unwrap();
+        assert!(gpu_params.angle);
+        assert_eq!(gpu_params.use_vulkan, Some(true));
+        assert!(gpu_params.renderer_use_egl);
+        assert!(!gpu_params.renderer_use_gles);
+
         assert!(parse_gpu_options("backend=gfxstream,angle=true,glx=true").is_err());
         assert!(parse_gpu_options("backend=gfxstream,angle=true,external-blob=true").is_err());
     }
