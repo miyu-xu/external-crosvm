@@ -529,16 +529,46 @@ fn create_virtio_devices(
     virtio_snd_control_device_tube: Option<Tube>,
 ) -> DeviceResult<(Vec<VirtioDeviceStub>, Option<Tube>)> {
     let mut devs = Vec::new();
-    let mut vsock_control_tube = None;
 
-    for (_, param) in cfg
-        .serial_parameters
-        .iter()
-        .filter(|(_k, v)| v.hardware == SerialHardware::VirtioConsole)
-    {
+    for (_, param) in cfg.serial_parameters.iter().filter(|(_k, v)| {
+        v.hardware == SerialHardware::VirtioConsole
+            || v.hardware == SerialHardware::LegacyVirtioConsole
+    }) {
         let dev = create_console_device(cfg, param)?;
         devs.push(dev);
     }
+
+    #[cfg(feature = "pvclock")]
+    if let Some(tube) = pvclock_device_tube {
+        product::push_pvclock_device(cfg, &mut devs, tsc_frequency, tube);
+    }
+
+    #[cfg(feature = "slirp")]
+    if let Some(net_vhost_user_tube) = cfg.net_vhost_user_tube.take() {
+        let connection = Connection::<FrontendReq>::from(net_vhost_user_tube);
+        devs.push(create_vhost_user_net_device(cfg, connection)?);
+    }
+
+    // Match the x86_64 Android direct-boot PCI contract used by the Linux
+    // gfxstream runner: the first bootable block device must remain at
+    // 00:03.0. Keep vsock behind block so it cannot consume that slot.
+    if cfg.block_vhost_user_tube.is_empty() {
+        for disk in &cfg.disks {
+            let disk_device_tube = disk_device_tubes.remove(0);
+            devs.push(create_block_device(cfg, disk, disk_device_tube)?);
+        }
+    } else {
+        info!("Starting up vhost user block backends...");
+        for _disk in &cfg.disks {
+            let disk_device_tube = cfg.block_vhost_user_tube.remove(0);
+            let connection = Connection::<FrontendReq>::from(disk_device_tube);
+            devs.push(create_vhost_user_block_device(cfg, connection)?);
+        }
+    }
+
+    let (vsock_device, host_tube) = create_vsock_device(cfg)?;
+    let vsock_control_tube = Some(host_tube);
+    devs.push(vsock_device);
 
     #[cfg(feature = "audio")]
     {
@@ -556,37 +586,6 @@ fn create_virtio_devices(
                 };
                 initial_audio_session_states.push(initial_audio_session_state);
             }
-        }
-    }
-
-    #[cfg(feature = "pvclock")]
-    if let Some(tube) = pvclock_device_tube {
-        product::push_pvclock_device(cfg, &mut devs, tsc_frequency, tube);
-    }
-
-    #[cfg(feature = "slirp")]
-    if let Some(net_vhost_user_tube) = cfg.net_vhost_user_tube.take() {
-        let connection = Connection::<FrontendReq>::from(net_vhost_user_tube);
-        devs.push(create_vhost_user_net_device(cfg, connection)?);
-    }
-
-    let (vsock_device, host_tube) = create_vsock_device(cfg)?;
-    vsock_control_tube = Some(host_tube);
-    devs.push(vsock_device);
-
-    // Match the x86_64 Microdroid bootconfig contract, which assumes the bootable block devices
-    // come right after the virtio-console and vsock devices on the PCI bus.
-    if cfg.block_vhost_user_tube.is_empty() {
-        for disk in &cfg.disks {
-            let disk_device_tube = disk_device_tubes.remove(0);
-            devs.push(create_block_device(cfg, disk, disk_device_tube)?);
-        }
-    } else {
-        info!("Starting up vhost user block backends...");
-        for _disk in &cfg.disks {
-            let disk_device_tube = cfg.block_vhost_user_tube.remove(0);
-            let connection = Connection::<FrontendReq>::from(disk_device_tube);
-            devs.push(create_vhost_user_block_device(cfg, connection)?);
         }
     }
 
