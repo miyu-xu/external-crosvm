@@ -36,6 +36,7 @@ bindgen --no-layout-tests --no-derive-debug \
   --allowlist-function XDestroyImage \
   --allowlist-function XDestroyWindow \
   --allowlist-function XFlush \
+  --allowlist-function XSync \
   --allowlist-function XFree \
   --allowlist-function XFreeGC \
   --allowlist-function XGetVisualInfo \

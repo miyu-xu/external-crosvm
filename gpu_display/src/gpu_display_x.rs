@@ -86,6 +86,15 @@ impl XDisplay {
         }
     }
 
+    /// Blocks until all pending commands have been processed by the X server.
+    fn sync(&self) {
+        // TODO(b/315870313): Add safety comment
+        #[allow(clippy::undocumented_unsafe_blocks)]
+        unsafe {
+            xlib::XSync(self.as_ptr(), false as i32);
+        }
+    }
+
     /// Returns true of the XShm extension is supported on this display.
     fn supports_shm(&self) -> bool {
         // TODO(b/315870313): Add safety comment
@@ -340,8 +349,7 @@ impl XSurface {
                 return;
             }
         };
-        // Mark the buffer as in use. When the XShmCompletionEvent occurs, this will get marked
-        // false.
+        // Mark the buffer as in use while X reads from the shared-memory image.
         buffer.in_use = true;
         // TODO(b/315870313): Add safety comment
         #[allow(clippy::undocumented_unsafe_blocks)]
@@ -357,10 +365,14 @@ impl XSurface {
                 0, // dst y
                 self.width,
                 self.height,
-                true as i32, /* send XShmCompletionEvent event */
+                false as i32, /* send XShmCompletionEvent event */
             );
-            self.display.flush();
         }
+        // gfxstream scanout import can fall back to CPU readback on X11. Keep that path
+        // synchronous so the next guest frame cannot overwrite the XShm buffer while the X
+        // server is still consuming it, which otherwise shows up as flicker or torn frames.
+        self.display.sync();
+        buffer.in_use = false;
     }
 
     /// Gets the buffer at buffer_index, allocating it if necessary.

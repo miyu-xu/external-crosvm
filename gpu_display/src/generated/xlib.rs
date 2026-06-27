@@ -2667,6 +2667,12 @@ extern "C" {
     pub fn XFlush(arg1: *mut Display) -> ::std::os::raw::c_int;
 }
 extern "C" {
+    pub fn XSync(
+        arg1: *mut Display,
+        arg2: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
     pub fn XFree(arg1: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int;
 }
 extern "C" {
