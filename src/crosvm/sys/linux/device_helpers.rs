@@ -928,6 +928,9 @@ fn create_tap_for_net_device(
             tap.enable().map_err(NetError::TapEnable)?;
             Ok((tap, None))
         }
+        NetParametersMode::Slirp { .. } => {
+            anyhow::bail!("slirp net backend is only supported on Windows")
+        }
     }
 }
 
