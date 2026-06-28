@@ -23,7 +23,6 @@ use base::{error, info, warn};
 use gpu_display::*;
 use hypervisor::MemCacheType;
 use libc::c_void;
-#[cfg(feature = "vulkan_display")]
 use rutabaga_gfx::DrmFormat;
 use rutabaga_gfx::ResourceCreate3D;
 use rutabaga_gfx::ResourceCreateBlob;
@@ -44,6 +43,8 @@ use rutabaga_gfx::RUTABAGA_MAP_CACHE_CACHED;
 use rutabaga_gfx::RUTABAGA_MAP_CACHE_MASK;
 use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_DMABUF;
 use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_FD;
+#[cfg(windows)]
+use rutabaga_gfx::RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_WIN32;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;
@@ -223,12 +224,8 @@ impl VirtioGpuScanout {
     fn drm_format_to_vk_format(format: DrmFormat) -> Option<i32> {
         match format.to_bytes() {
             [b'R', b'G', b'1', b'6'] => Some(VK_FORMAT_R5G6B5_UNORM_PACK16),
-            [b'A', b'B', b'2', b'4'] | [b'X', b'B', b'2', b'4'] => {
-                Some(VK_FORMAT_R8G8B8A8_UNORM)
-            }
-            [b'A', b'R', b'2', b'4'] | [b'X', b'R', b'2', b'4'] => {
-                Some(VK_FORMAT_B8G8R8A8_UNORM)
-            }
+            [b'A', b'B', b'2', b'4'] | [b'X', b'B', b'2', b'4'] => Some(VK_FORMAT_R8G8B8A8_UNORM),
+            [b'A', b'R', b'2', b'4'] | [b'X', b'R', b'2', b'4'] => Some(VK_FORMAT_B8G8R8A8_UNORM),
             _ => None,
         }
     }
@@ -270,6 +267,16 @@ impl VirtioGpuScanout {
     }
 
     #[cfg(feature = "vulkan_display")]
+    fn is_vulkan_display_blob_handle(handle_type: u32) -> bool {
+        match handle_type {
+            RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_FD => true,
+            #[cfg(windows)]
+            RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_WIN32 => true,
+            _ => false,
+        }
+    }
+
+    #[cfg(feature = "vulkan_display")]
     fn import_vulkan_resource_to_display(
         display: &Rc<RefCell<GpuDisplay>>,
         surface_id: u32,
@@ -299,7 +306,7 @@ impl VirtioGpuScanout {
                     return None;
                 }
             };
-            if export.handle_type != RUTABAGA_MEM_HANDLE_TYPE_OPAQUE_FD {
+            if !Self::is_vulkan_display_blob_handle(export.handle_type) {
                 return None;
             }
 
@@ -1268,20 +1275,30 @@ impl VirtioGpu {
             }
         }
 
-        // fallback to ExternalMapping via rutabaga if sandboxing (hence external_blob) and fixed
-        // mapping are both disabled as neither is currently compatible.
+        // Fallback to ExternalMapping via rutabaga when hypervisor import is unavailable
+        // (e.g. host pointer blobs on Windows run-mp) or when sandboxing/fixed mapping
+        // are disabled.
+        let mut mapped_with_rutabaga = false;
         if source.is_none() {
             if self.external_blob || self.fixed_blob_mapping {
-                return Err(ErrUnspec);
+                if let Ok(mapping) = self.rutabaga.map(resource_id) {
+                    mapped_with_rutabaga = true;
+                    source = Some(VmMemorySource::ExternalMapping {
+                        ptr: mapping.ptr,
+                        size: mapping.size,
+                    });
+                } else {
+                    return Err(ErrUnspec);
+                }
+            } else {
+                let mapping = self.rutabaga.map(resource_id)?;
+                // resources mapped via rutabaga must also be marked for unmap via rutabaga.
+                mapped_with_rutabaga = true;
+                source = Some(VmMemorySource::ExternalMapping {
+                    ptr: mapping.ptr,
+                    size: mapping.size,
+                });
             }
-
-            let mapping = self.rutabaga.map(resource_id)?;
-            // resources mapped via rutabaga must also be marked for unmap via rutabaga.
-            resource.rutabaga_external_mapping = true;
-            source = Some(VmMemorySource::ExternalMapping {
-                ptr: mapping.ptr,
-                size: mapping.size,
-            });
         };
 
         let prot = match map_info & RUTABAGA_MAP_ACCESS_MASK {
@@ -1299,13 +1316,54 @@ impl VirtioGpu {
             MemCacheType::CacheCoherent
         };
 
-        self.mapper
+        let add_mapping_result = self
+            .mapper
             .lock()
             .as_mut()
             .expect("No backend request connection found")
-            .add_mapping(source.unwrap(), offset, prot, cache)
-            .map_err(|_| ErrUnspec)?;
+            .add_mapping(source.unwrap(), offset, prot, cache);
 
+        if let Err(e) = add_mapping_result {
+            if mapped_with_rutabaga {
+                let _ = self.rutabaga.unmap(resource_id);
+                return Err(ErrUnspec);
+            }
+
+            if !(self.external_blob || self.fixed_blob_mapping) {
+                return Err(ErrUnspec);
+            }
+
+            warn!(
+                "resource_map_blob: hypervisor mapping failed for resource {}, \
+                 falling back to rutabaga ExternalMapping: {:#}",
+                resource_id, e
+            );
+
+            let mapping = self.rutabaga.map(resource_id).map_err(|_| ErrUnspec)?;
+            let fallback_result = self
+                .mapper
+                .lock()
+                .as_mut()
+                .expect("No backend request connection found")
+                .add_mapping(
+                    VmMemorySource::ExternalMapping {
+                        ptr: mapping.ptr,
+                        size: mapping.size,
+                    },
+                    offset,
+                    prot,
+                    cache,
+                );
+
+            if fallback_result.is_err() {
+                let _ = self.rutabaga.unmap(resource_id);
+                return Err(ErrUnspec);
+            }
+
+            mapped_with_rutabaga = true;
+        }
+
+        resource.rutabaga_external_mapping = mapped_with_rutabaga;
         resource.shmem_offset = Some(offset);
         // Access flags not a part of the virtio-gpu spec.
         Ok(OkMapInfo {
