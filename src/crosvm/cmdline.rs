@@ -46,7 +46,7 @@ use devices::virtio::GpuDisplayParameters;
 use devices::virtio::GpuMouseMode;
 #[cfg(feature = "gpu")]
 use devices::virtio::GpuParameters;
-#[cfg(all(unix, feature = "net"))]
+#[cfg(feature = "net")]
 use devices::virtio::NetParameters;
 #[cfg(all(unix, feature = "net"))]
 use devices::virtio::NetParametersMode;
@@ -1648,11 +1648,15 @@ pub struct RunCommand {
     /// to 800x1280) and a name for the input device
     pub multi_touch: Vec<TouchDeviceOption>,
 
-    #[cfg(all(unix, feature = "net"))]
-    #[argh(
-        option,
-        arg_name = "(tap-name=TAP_NAME,mac=MAC_ADDRESS|tap-fd=TAP_FD,mac=MAC_ADDRESS|host-ip=IP,netmask=NETMASK,mac=MAC_ADDRESS),vhost-net=VHOST_NET,vq-pairs=N,pci-address=ADDR"
+    #[cfg(feature = "net")]
+    #[cfg_attr(
+        unix,
+        argh(
+            option,
+            arg_name = "(tap-name=TAP_NAME,mac=MAC_ADDRESS|tap-fd=TAP_FD,mac=MAC_ADDRESS|host-ip=IP,netmask=NETMASK,mac=MAC_ADDRESS),vhost-net=VHOST_NET,vq-pairs=N,pci-address=ADDR"
+        )
     )]
+    #[cfg_attr(windows, argh(option, arg_name = "mac=MAC,pci-address=ADDR"))]
     #[serde(default)]
     #[merge(strategy = append)]
     /// comma separated key=value pairs for setting up a network
@@ -3453,6 +3457,11 @@ impl TryFrom<RunCommand> for super::config::Config {
                     }
                 }
             }
+        }
+
+        #[cfg(all(windows, feature = "net"))]
+        {
+            cfg.net = cmd.net;
         }
 
         #[cfg(any(target_os = "android", target_os = "linux"))]

@@ -170,6 +170,11 @@ pub enum NetParametersMode {
         netmask: Ipv4Addr,
         mac: MacAddress,
     },
+    /// Windows slirp-backed virtio-net (mac-only direct runner form).
+    #[serde(rename_all = "kebab-case")]
+    Slirp {
+        mac: Option<MacAddress>,
+    },
 }
 
 #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -962,6 +967,25 @@ mod tests {
 
         // invalid parameter
         assert!(from_net_arg("tap-name=tap,foomatic=true").is_err());
+
+        let params = from_net_arg("mac=\"00:1a:11:e0:cf:00\",pci-address=00:01.1").unwrap();
+        assert_eq!(
+            params,
+            NetParameters {
+                #[cfg(any(target_os = "android", target_os = "linux"))]
+                vhost_net: None,
+                vq_pairs: None,
+                mode: NetParametersMode::Slirp {
+                    mac: Some(MacAddress::from_str("00:1a:11:e0:cf:00").unwrap()),
+                },
+                packed_queue: false,
+                pci_address: Some(PciAddress {
+                    bus: 0,
+                    dev: 1,
+                    func: 1,
+                }),
+            }
+        );
     }
 
     #[test]

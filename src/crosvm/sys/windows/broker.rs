@@ -644,17 +644,19 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
     )?;
 
     #[cfg(all(feature = "net", feature = "slirp"))]
-    let (_slirp_child, _net_children) = start_up_net_backend(
-        &mut main_child,
-        &mut children,
-        &mut exit_events,
-        &mut wait_ctx,
-        &mut cfg,
-        &log_args,
-        &mut metric_tubes,
-        #[cfg(feature = "process-invariants")]
-        &process_invariants,
-    )?;
+    if !cfg.net.is_empty() {
+        let (_slirp_children, _net_children) = start_up_net_backends(
+            &mut main_child,
+            &mut children,
+            &mut exit_events,
+            &mut wait_ctx,
+            &mut cfg,
+            &log_args,
+            &mut metric_tubes,
+            #[cfg(feature = "process-invariants")]
+            &process_invariants,
+        )?;
+    }
 
     #[cfg(feature = "audio")]
     let num_audio_devices = if let Some(gpu_params) = cfg.gpu_parameters.as_ref() {
@@ -1442,7 +1444,7 @@ where
 }
 
 #[cfg(all(feature = "net", feature = "slirp"))]
-fn start_up_net_backend(
+fn start_up_net_backends(
     main_child: &mut ChildProcess,
     children: &mut HashMap<u32, ChildCleanup>,
     exit_events: &mut Vec<Event>,
@@ -1451,6 +1453,60 @@ fn start_up_net_backend(
     log_args: &LogArgs,
     metric_tubes: &mut Vec<RecvTube>,
     #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
+) -> Result<(Vec<ChildProcess>, Vec<ChildProcess>)> {
+    use devices::virtio::net::NetParametersMode;
+
+    let net_backends: Vec<(usize, Option<net_util::MacAddress>)> = cfg
+        .net
+        .iter()
+        .enumerate()
+        .map(|(index, net_params)| {
+            let mac = match &net_params.mode {
+                NetParametersMode::Slirp { mac } => *mac,
+                NetParametersMode::RawConfig { mac, .. } => Some(*mac),
+                NetParametersMode::TapName { mac, .. } | NetParametersMode::TapFd { mac, .. } => {
+                    *mac
+                }
+            };
+            (index, mac)
+        })
+        .collect();
+    let mut slirp_children = Vec::with_capacity(net_backends.len());
+    let mut net_children = Vec::with_capacity(net_backends.len());
+
+    for (index, mac) in net_backends {
+        let (slirp_child, net_child) = start_up_single_net_backend(
+            main_child,
+            children,
+            exit_events,
+            wait_ctx,
+            cfg,
+            log_args,
+            metric_tubes,
+            #[cfg(feature = "process-invariants")]
+            process_invariants,
+            index,
+            mac,
+        )?;
+        slirp_children.push(slirp_child);
+        net_children.push(net_child);
+    }
+
+    Ok((slirp_children, net_children))
+}
+
+#[cfg(all(feature = "net", feature = "slirp"))]
+fn start_up_single_net_backend(
+    main_child: &mut ChildProcess,
+    children: &mut HashMap<u32, ChildCleanup>,
+    exit_events: &mut Vec<Event>,
+    wait_ctx: &mut WaitContext<Token>,
+    cfg: &mut Config,
+    log_args: &LogArgs,
+    metric_tubes: &mut Vec<RecvTube>,
+    #[cfg(feature = "process-invariants")] process_invariants: &EmulatorProcessInvariants,
+    index: usize,
+    mac: Option<net_util::MacAddress>,
 ) -> Result<(ChildProcess, ChildProcess)> {
     let (host_pipe, guest_pipe) = named_pipes::pair_with_buffer_size(
         &FramingMode::Message.into(),
@@ -1462,11 +1518,11 @@ fn start_up_net_backend(
     .expect("Failed to create named pipe pair.");
     let slirp_kill_event = Event::new().expect("Failed to create slirp kill event.");
 
-    let slirp_child = spawn_slirp(children, wait_ctx, cfg)?;
+    let slirp_child = spawn_slirp(children, wait_ctx, cfg, index)?;
 
     let slirp_child_startup_args = CommonChildStartupArgs::new(
         log_args,
-        get_log_path(cfg, "slirp_syslog.log"),
+        get_log_path(cfg, &format!("slirp_{index}_syslog.log")),
         #[cfg(feature = "crash-report")]
         create_crash_report_attrs(cfg, product_type::SLIRP),
         #[cfg(feature = "process-invariants")]
@@ -1484,15 +1540,19 @@ fn start_up_net_backend(
             .try_clone()
             .expect("Failed to clone slirp kill event."),
         #[cfg(any(feature = "slirp-ring-capture", feature = "slirp-debug"))]
-        slirp_capture_file: cfg.slirp_capture_file.take(),
+        slirp_capture_file: if index == 0 {
+            cfg.slirp_capture_file.take()
+        } else {
+            None
+        },
     };
     slirp_child.bootstrap_tube.send(&slirp_config).unwrap();
 
-    let net_child = spawn_net_backend(main_child, children, wait_ctx, cfg)?;
+    let net_child = spawn_net_backend(main_child, children, wait_ctx, cfg, index)?;
 
     let net_child_startup_args = CommonChildStartupArgs::new(
         log_args,
-        get_log_path(cfg, "net_syslog.log"),
+        get_log_path(cfg, &format!("net_{index}_syslog.log")),
         #[cfg(feature = "crash-report")]
         create_crash_report_attrs(cfg, product_type::SLIRP),
         #[cfg(feature = "process-invariants")]
@@ -1507,6 +1567,7 @@ fn start_up_net_backend(
     let net_backend_config = NetBackendConfig {
         guest_pipe,
         slirp_kill_event,
+        mac,
     };
     net_child.bootstrap_tube.send(&net_backend_config).unwrap();
     let exit_event = Event::new().exit_context(Exit::CreateEvent, "failed to create event")?;
@@ -1520,12 +1581,13 @@ fn spawn_slirp(
     children: &mut HashMap<u32, ChildCleanup>,
     wait_ctx: &mut WaitContext<Token>,
     cfg: &mut Config,
+    index: usize,
 ) -> Result<ChildProcess> {
     let slirp_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
         ["run-slirp"],
-        get_log_path(cfg, "slirp_stdout.log"),
-        get_log_path(cfg, "slirp_stderr.log"),
+        get_log_path(cfg, &format!("slirp_{index}_stdout.log")),
+        get_log_path(cfg, &format!("slirp_{index}_stderr.log")),
         ProcessType::Slirp,
         children,
         wait_ctx,
@@ -1551,6 +1613,7 @@ fn spawn_net_backend(
     children: &mut HashMap<u32, ChildCleanup>,
     wait_ctx: &mut WaitContext<Token>,
     cfg: &mut Config,
+    index: usize,
 ) -> Result<ChildProcess> {
     let (mut vhost_user_main_tube, mut vhost_user_device_tube) =
         Tube::pair().exit_context(Exit::CreateTube, "failed to create tube")?;
@@ -1560,8 +1623,8 @@ fn spawn_net_backend(
     let net_child = spawn_child(
         current_exe().unwrap().to_str().unwrap(),
         ["device", "net"],
-        get_log_path(cfg, "net_stdout.log"),
-        get_log_path(cfg, "net_stderr.log"),
+        get_log_path(cfg, &format!("net_{index}_stdout.log")),
+        get_log_path(cfg, &format!("net_{index}_stderr.log")),
         ProcessType::Net,
         children,
         wait_ctx,
@@ -1583,7 +1646,7 @@ fn spawn_net_backend(
         .exit_context(Exit::TubeTransporterInit, "failed to initialize tube")?;
 
     vhost_user_main_tube.set_target_pid(net_child.alias_pid);
-    cfg.net_vhost_user_tube = Some(vhost_user_main_tube);
+    cfg.net_vhost_user_tubes.push(vhost_user_main_tube);
 
     Ok(net_child)
 }

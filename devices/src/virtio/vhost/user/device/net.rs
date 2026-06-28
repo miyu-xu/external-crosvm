@@ -110,6 +110,8 @@ pub struct NetBackend<T: TapT + IntoAsync> {
     acked_features: u64,
     mtu: u16,
     #[cfg(all(windows, feature = "slirp"))]
+    guest_mac: Option<net_util::MacAddress>,
+    #[cfg(all(windows, feature = "slirp"))]
     slirp_kill_event: base::Event,
     workers: [Option<(TaskHandle<Queue>, oneshot::Sender<()>)>; MAX_QUEUE_NUM],
 }
@@ -164,7 +166,11 @@ where
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
-        let config_space = build_config(Self::max_vq_pairs() as u16, self.mtu, None);
+        #[cfg(all(windows, feature = "slirp"))]
+        let mac_bytes = self.guest_mac.map(|mac| mac.octets());
+        #[cfg(not(all(windows, feature = "slirp")))]
+        let mac_bytes: Option<[u8; 6]> = None;
+        let config_space = build_config(Self::max_vq_pairs() as u16, self.mtu, mac_bytes);
         virtio::copy_config(data, 0, config_space.as_bytes(), offset);
     }
 

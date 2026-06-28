@@ -134,6 +134,29 @@ impl SerialDevice for Serial {
             system_params,
         )
     }
+
+    fn new_with_split_pipes(
+        _protection_type: ProtectionType,
+        interrupt_evt: Event,
+        pipe_in: PipeConnection,
+        pipe_out: PipeConnection,
+        _options: SerialOptions,
+        _keep_rds: Vec<RawDescriptor>,
+    ) -> Serial {
+        let system_params = SystemSerialParams {
+            in_stream: Some(Box::new(pipe_in)),
+            sync: None,
+            sync_thread: None,
+            kill_evt: None,
+        };
+        Serial::new_common(
+            interrupt_evt,
+            None,
+            Some(Box::new(pipe_out)),
+            false,
+            system_params,
+        )
+    }
 }
 
 impl Drop for Serial {

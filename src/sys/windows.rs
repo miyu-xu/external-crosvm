@@ -294,13 +294,14 @@ type DeviceResult<T = VirtioDeviceStub> = Result<T>;
 fn create_vhost_user_block_device(
     cfg: &Config,
     connection: Connection<FrontendReq>,
+    pci_address: Option<devices::PciAddress>,
 ) -> DeviceResult {
     let dev = virtio::VhostUserFrontend::new(
         virtio::DeviceType::Block,
         virtio::base_features(cfg.protection_type),
         connection,
         None,
-        None,
+        pci_address,
     )
     .exit_context(
         Exit::VhostUserBlockDeviceNew,
@@ -418,14 +419,23 @@ fn create_mouse_device(cfg: &Config, event_pipe: StreamChannel, idx: u32) -> Dev
 }
 
 #[cfg(feature = "slirp")]
-fn create_vhost_user_net_device(cfg: &Config, connection: Connection<FrontendReq>) -> DeviceResult {
+fn create_vhost_user_net_device(
+    cfg: &Config,
+    connection: Connection<FrontendReq>,
+    pci_address: Option<devices::PciAddress>,
+) -> DeviceResult {
     let features = virtio::base_features(cfg.protection_type);
-    let dev =
-        virtio::VhostUserFrontend::new(virtio::DeviceType::Net, features, connection, None, None)
-            .exit_context(
-            Exit::VhostUserNetDeviceNew,
-            "failed to set up vhost-user net device",
-        )?;
+    let dev = virtio::VhostUserFrontend::new(
+        virtio::DeviceType::Net,
+        features,
+        connection,
+        None,
+        pci_address,
+    )
+    .exit_context(
+        Exit::VhostUserNetDeviceNew,
+        "failed to set up vhost-user net device",
+    )?;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -544,9 +554,13 @@ fn create_virtio_devices(
     }
 
     #[cfg(feature = "slirp")]
-    if let Some(net_vhost_user_tube) = cfg.net_vhost_user_tube.take() {
-        let connection = Connection::<FrontendReq>::from(net_vhost_user_tube);
-        devs.push(create_vhost_user_net_device(cfg, connection)?);
+    {
+        let net_tubes = std::mem::take(&mut cfg.net_vhost_user_tubes);
+        for (index, net_vhost_user_tube) in net_tubes.into_iter().enumerate() {
+            let pci_address = cfg.net.get(index).and_then(|params| params.pci_address);
+            let connection = Connection::<FrontendReq>::from(net_vhost_user_tube);
+            devs.push(create_vhost_user_net_device(cfg, connection, pci_address)?);
+        }
     }
 
     // Match the x86_64 Android direct-boot PCI contract used by the Linux
@@ -559,10 +573,14 @@ fn create_virtio_devices(
         }
     } else {
         info!("Starting up vhost user block backends...");
-        for _disk in &cfg.disks {
+        for disk in &cfg.disks {
             let disk_device_tube = cfg.block_vhost_user_tube.remove(0);
             let connection = Connection::<FrontendReq>::from(disk_device_tube);
-            devs.push(create_vhost_user_block_device(cfg, connection)?);
+            devs.push(create_vhost_user_block_device(
+                cfg,
+                connection,
+                disk.pci_address,
+            )?);
         }
     }
 

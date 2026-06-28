@@ -138,6 +138,13 @@ fn serial_parameters_default_debugcon_port() -> u16 {
     0x402
 }
 
+#[cfg(windows)]
+fn windows_named_pipe_path(path: Option<&PathBuf>) -> bool {
+    path.and_then(|p| p.to_str())
+        .map(|s| s.starts_with(r"\\.\pipe\"))
+        .unwrap_or(false)
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, FromKeyValues)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case", default)]
 pub struct SerialParameters {
@@ -189,6 +196,22 @@ impl SerialParameters {
         keep_rds.push(evt.as_raw_descriptor());
         cros_tracing::push_descriptors!(keep_rds);
         metrics::push_descriptors(keep_rds);
+        #[cfg(windows)]
+        if self.type_ == SerialType::File
+            && matches!(
+                self.hardware,
+                SerialHardware::VirtioConsole | SerialHardware::LegacyVirtioConsole
+            )
+            && windows_named_pipe_path(self.path.as_ref())
+            && windows_named_pipe_path(self.input.as_ref())
+        {
+            return create_dual_namedpipe_serial_device(
+                self,
+                protection_type,
+                evt,
+                keep_rds,
+            );
+        }
         let input: Option<Box<dyn SerialInput>> = if let Some(input_path) = &self.input {
             let input_path = input_path.as_path();
 

@@ -53,6 +53,23 @@ impl SerialDevice for Console {
             options.pci_address,
         )
     }
+
+    fn new_with_split_pipes(
+        protection_type: ProtectionType,
+        _interrupt_evt: Event,
+        pipe_in: named_pipes::PipeConnection,
+        pipe_out: named_pipes::PipeConnection,
+        options: SerialOptions,
+        keep_rds: Vec<RawDescriptor>,
+    ) -> Console {
+        Console::new(
+            protection_type,
+            Some(Box::new(pipe_in)),
+            Some(Box::new(pipe_out)),
+            keep_rds,
+            options.pci_address,
+        )
+    }
 }
 
 /// Platform-specific function to add a delay for reading rx.

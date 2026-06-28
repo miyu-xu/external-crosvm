@@ -41,6 +41,15 @@ pub trait SerialDevice {
         options: SerialOptions,
         keep_rds: Vec<RawDescriptor>,
     ) -> Self;
+    #[cfg(windows)]
+    fn new_with_split_pipes(
+        protection_type: ProtectionType,
+        interrupt_evt: Event,
+        pipe_in: named_pipes::PipeConnection,
+        pipe_out: named_pipes::PipeConnection,
+        options: SerialOptions,
+        keep_rds: Vec<RawDescriptor>,
+    ) -> Self;
 }
 
 pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
@@ -85,4 +94,51 @@ pub(crate) fn create_system_type_serial_device<T: SerialDevice>(
             ))
         }
     }
+}
+
+pub(crate) fn create_dual_namedpipe_serial_device<T: SerialDevice>(
+    param: &SerialParameters,
+    protection_type: ProtectionType,
+    evt: Event,
+    keep_rds: &mut Vec<RawDescriptor>,
+) -> std::result::Result<T, Error> {
+    let output_path = param.path.as_ref().ok_or(Error::PathRequired)?;
+    let input_path = param.input.as_ref().ok_or(Error::PathRequired)?;
+
+    let pipe_out = named_pipes::create_server_pipe(
+        output_path.to_str().unwrap(),
+        &FramingMode::Byte,
+        &BlockingMode::NoWait,
+        0,
+        named_pipes::DEFAULT_BUFFER_SIZE,
+        false,
+    )
+    .map_err(Error::SystemTypeError)?;
+
+    let pipe_in = named_pipes::create_server_pipe(
+        input_path.to_str().unwrap(),
+        &FramingMode::Byte,
+        &BlockingMode::NoWait,
+        0,
+        named_pipes::DEFAULT_BUFFER_SIZE,
+        false,
+    )
+    .map_err(Error::SystemTypeError)?;
+
+    keep_rds.push(pipe_in.as_raw_descriptor());
+    keep_rds.push(pipe_out.as_raw_descriptor());
+
+    Ok(T::new_with_split_pipes(
+        protection_type,
+        evt,
+        pipe_in,
+        pipe_out,
+        SerialOptions {
+            name: param.name.clone(),
+            out_timestamp: param.out_timestamp,
+            console: param.console,
+            pci_address: param.pci_address,
+        },
+        keep_rds.to_vec(),
+    ))
 }

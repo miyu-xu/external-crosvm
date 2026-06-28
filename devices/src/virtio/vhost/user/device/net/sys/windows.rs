@@ -31,6 +31,8 @@ use hypervisor::ProtectionType;
 use net_util::Slirp;
 use net_util::TapT;
 #[cfg(feature = "slirp")]
+use net_util::MacAddress;
+#[cfg(feature = "slirp")]
 use serde::Deserialize;
 #[cfg(feature = "slirp")]
 use serde::Serialize;
@@ -66,6 +68,7 @@ where
     pub fn new_slirp(
         guest_pipe: PipeConnection,
         slirp_kill_event: Event,
+        mac: Option<MacAddress>,
     ) -> anyhow::Result<NetBackend<Slirp>> {
         let avail_features = base_features(ProtectionType::Unprotected)
             | 1 << virtio_net::VIRTIO_NET_F_CTRL_VQ
@@ -77,6 +80,8 @@ where
             avail_features,
             acked_features: 0,
             mtu: 1500,
+            #[cfg(feature = "slirp")]
+            guest_mac: mac,
             slirp_kill_event,
             workers: Default::default(),
         })
@@ -264,6 +269,7 @@ where
 pub struct NetBackendConfig {
     pub guest_pipe: PipeConnection,
     pub slirp_kill_event: Event,
+    pub mac: Option<MacAddress>,
 }
 
 #[derive(FromArgs, Debug)]
@@ -303,6 +309,7 @@ pub fn start_device(opts: Options) -> anyhow::Result<()> {
     let dev = NetBackend::<net_util::Slirp>::new_slirp(
         net_backend_config.guest_pipe,
         net_backend_config.slirp_kill_event,
+        net_backend_config.mac,
     )
     .unwrap();
 
