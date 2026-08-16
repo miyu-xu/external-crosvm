@@ -103,6 +103,18 @@ fn build_wayland() {
     println!("cargo:rustc-link-lib=dylib=wayland-client");
 }
 
+fn build_cocoa() {
+    let mut build = cc::Build::new();
+    build
+        .file("src/cocoa_window.m")
+        .flag("-fblocks")
+        .flag("-fobjc-arc")
+        .compile("crosvm_cocoa_window");
+    println!("cargo:rerun-if-changed=src/cocoa_window.m");
+    println!("cargo:rustc-link-lib=framework=Cocoa");
+    println!("cargo:rustc-link-lib=framework=QuartzCore");
+}
+
 fn main() {
     // Skip installing dependencies when generating documents.
     if std::env::var("CARGO_DOC").is_ok() {
@@ -113,6 +125,7 @@ fn main() {
         "linux" | "android" if std::env::var_os("CARGO_FEATURE_WL").is_some() => {
             build_wayland();
         }
+        "macos" => build_cocoa(),
         _ => {}
     }
 }

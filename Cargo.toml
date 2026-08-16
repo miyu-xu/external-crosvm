@@ -548,6 +548,7 @@ android_audio = { path = "android_audio"}
 
 [target.'cfg(target_os = "macos")'.dependencies]
 minijail-stub = { path = "minijail-stub" }
+gpu_display = { path = "gpu_display", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 anti_tamper = { path = "vendor/generic/anti_tamper" }

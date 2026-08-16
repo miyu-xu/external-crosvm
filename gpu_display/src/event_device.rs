@@ -37,6 +37,8 @@ pub enum EventDeviceKind {
 #[derive(Deserialize, Serialize)]
 pub struct EventDevice {
     kind: EventDeviceKind,
+    #[serde(default)]
+    display_id: Option<u32>,
     event_buffer: VecDeque<u8>,
     event_socket: StreamChannel,
 }
@@ -46,6 +48,7 @@ impl EventDevice {
         let _ = event_socket.set_nonblocking(true);
         EventDevice {
             kind,
+            display_id: None,
             event_buffer: Default::default(),
             event_socket,
         }
@@ -62,6 +65,13 @@ impl EventDevice {
     }
 
     #[inline]
+    pub fn touchscreen_for_display(event_socket: StreamChannel, display_id: u32) -> EventDevice {
+        let mut device = Self::touchscreen(event_socket);
+        device.display_id = Some(display_id);
+        device
+    }
+
+    #[inline]
     pub fn keyboard(event_socket: StreamChannel) -> EventDevice {
         Self::new(EventDeviceKind::Keyboard, event_socket)
     }
@@ -69,6 +79,11 @@ impl EventDevice {
     #[inline]
     pub fn kind(&self) -> EventDeviceKind {
         self.kind
+    }
+
+    #[inline]
+    pub fn display_id(&self) -> Option<u32> {
+        self.display_id
     }
 
     /// Flushes the buffered events that did not fit into the underlying transport, if any.

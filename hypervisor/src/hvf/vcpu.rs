@@ -6,9 +6,11 @@
 use std::arch::asm;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Condvar;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -41,6 +43,7 @@ use libc::EIO;
 use libc::ENOSYS;
 
 use super::vm::check_hv;
+use super::vm::check_hv_quiet;
 use crate::AArch64SysRegId;
 use crate::IoEventAddress;
 use crate::IoOperation;
@@ -51,6 +54,8 @@ use crate::VcpuAArch64;
 use crate::VcpuExit;
 use crate::VcpuFeature;
 use crate::VcpuRegAArch64;
+use crate::VcpuSignalHandle;
+use crate::VcpuSignalHandleInner;
 use crate::PSCI_0_2;
 
 unsafe extern "C" {
@@ -68,14 +73,113 @@ pub(crate) struct MmioPending {
     pub sign_extend: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VcpuPowerState {
+    On,
+    Off,
+    OnPending { entry: u64, context: u64 },
+}
+
+#[derive(Default)]
+pub(crate) struct VcpuPowerControl {
+    states: Mutex<Vec<VcpuPowerState>>,
+    changed: Condvar,
+}
+
+impl VcpuPowerControl {
+    pub(crate) fn initialize(&self, count: usize) -> Result<()> {
+        let mut states = self.states.lock().map_err(|_| Error::new(EIO))?;
+        *states = (0..count)
+            .map(|id| {
+                if id == 0 {
+                    VcpuPowerState::On
+                } else {
+                    VcpuPowerState::Off
+                }
+            })
+            .collect();
+        Ok(())
+    }
+
+    fn register(&self, id: usize) -> Result<()> {
+        let mut states = self.states.lock().map_err(|_| Error::new(EIO))?;
+        if states.len() <= id {
+            let old_len = states.len();
+            states.resize(id + 1, VcpuPowerState::Off);
+            if old_len == 0 {
+                states[0] = VcpuPowerState::On;
+            }
+        }
+        Ok(())
+    }
+
+    fn set_off(&self, id: usize) -> Result<()> {
+        let mut states = self.states.lock().map_err(|_| Error::new(EIO))?;
+        let state = states.get_mut(id).ok_or_else(|| Error::new(EINVAL))?;
+        *state = VcpuPowerState::Off;
+        Ok(())
+    }
+}
+
+impl VcpuPowerControl {
+    fn request_on(&self, id: usize, entry: u64, context: u64) -> Result<i64> {
+        let mut states = self.states.lock().map_err(|_| Error::new(EIO))?;
+        let state = match states.get_mut(id) {
+            Some(state) => state,
+            None => return Ok(PSCI_RET_INVALID_PARAMS),
+        };
+        let response = match *state {
+            VcpuPowerState::On => PSCI_RET_ALREADY_ON,
+            VcpuPowerState::OnPending { .. } => PSCI_RET_ON_PENDING,
+            VcpuPowerState::Off => {
+                *state = VcpuPowerState::OnPending { entry, context };
+                self.changed.notify_all();
+                PSCI_RET_SUCCESS
+            }
+        };
+        Ok(response)
+    }
+}
+
+impl VcpuPowerControl {
+    fn affinity_info(&self, id: usize) -> Result<i64> {
+        let states = self.states.lock().map_err(|_| Error::new(EIO))?;
+        Ok(match states.get(id) {
+            Some(VcpuPowerState::On) => PSCI_AFFINITY_LEVEL_ON,
+            Some(VcpuPowerState::Off) => PSCI_AFFINITY_LEVEL_OFF,
+            Some(VcpuPowerState::OnPending { .. }) => PSCI_AFFINITY_LEVEL_ON_PENDING,
+            None => PSCI_RET_INVALID_PARAMS,
+        })
+    }
+}
+
+struct HvfVcpuSignalHandle {
+    vcpu: hv_vcpu_t,
+    immediate_exit: Arc<AtomicBool>,
+}
+
+impl VcpuSignalHandleInner for HvfVcpuSignalHandle {
+    fn signal_immediate_exit(&self) {
+        self.immediate_exit.store(true, Ordering::Release);
+        let vcpu = self.vcpu;
+        // SAFETY: Hypervisor.framework supports canceling a running vCPU
+        // from another thread with hv_vcpus_exit.
+        unsafe {
+            let _ = hv_vcpus_exit(&vcpu, 1);
+        }
+    }
+}
+
 pub struct HvfVcpu {
     id: usize,
     vcpu: hv_vcpu_t,
     exit: *const hv_vcpu_exit_t,
     cntfrq: u64,
-    summary: ExitSummary,
+    summary: Option<ExitSummary>,
     pending_mmio: Mutex<Option<MmioPending>>,
     ioevents: Arc<Mutex<HashMap<IoEventAddress, Event>>>,
+    power_control: Arc<VcpuPowerControl>,
+    immediate_exit: Arc<AtomicBool>,
 }
 
 unsafe impl Send for HvfVcpu {}
@@ -138,7 +242,9 @@ const CNTV_CTL_EL0: AArch64SysRegId =
 const PSCI_VERSION: u32 = 0x8400_0000;
 const PSCI_CPU_SUSPEND_64: u32 = 0xc400_0001;
 const PSCI_CPU_OFF: u32 = 0x8400_0002;
+const PSCI_CPU_ON: u32 = 0x8400_0003;
 const PSCI_CPU_ON_64: u32 = 0xc400_0003;
+const PSCI_AFFINITY_INFO: u32 = 0x8400_0004;
 const PSCI_AFFINITY_INFO_64: u32 = 0xc400_0004;
 const PSCI_MIGRATE_INFO_TYPE: u32 = 0x8400_0006;
 const PSCI_SYSTEM_OFF: u32 = 0x8400_0008;
@@ -147,7 +253,13 @@ const PSCI_FEATURES: u32 = 0x8400_000a;
 
 const PSCI_RET_SUCCESS: i64 = 0;
 const PSCI_RET_NOT_SUPPORTED: i64 = -1;
+const PSCI_RET_INVALID_PARAMS: i64 = -2;
 const PSCI_RET_ALREADY_ON: i64 = -4;
+const PSCI_RET_ON_PENDING: i64 = -5;
+
+const PSCI_AFFINITY_LEVEL_ON: i64 = 0;
+const PSCI_AFFINITY_LEVEL_OFF: i64 = 1;
+const PSCI_AFFINITY_LEVEL_ON_PENDING: i64 = 2;
 
 struct ExitSummary {
     last_log: Instant,
@@ -166,7 +278,11 @@ struct ExitSummary {
 }
 
 impl HvfVcpu {
-    pub fn new(id: usize, ioevents: Arc<Mutex<HashMap<IoEventAddress, Event>>>) -> Result<Self> {
+    pub fn new(
+        id: usize,
+        ioevents: Arc<Mutex<HashMap<IoEventAddress, Event>>>,
+        power_control: Arc<VcpuPowerControl>,
+    ) -> Result<Self> {
         let mut vcpu: hv_vcpu_t = 0;
         let mut exit: *const hv_vcpu_exit_t = std::ptr::null();
         let cntfrq = {
@@ -181,13 +297,14 @@ impl HvfVcpu {
                 std::ptr::null_mut(),
             )
         })?;
+        power_control.register(id)?;
         check_hv(unsafe { hv_vcpu_set_sys_reg(vcpu, hv_sys_reg_t::MPIDR_EL1, id as u64) })?;
         Ok(HvfVcpu {
             id,
             vcpu,
             exit,
             cntfrq,
-            summary: ExitSummary {
+            summary: std::env::var_os("CROSVM_HVF_EXIT_SUMMARY").map(|_| ExitSummary {
                 last_log: Instant::now(),
                 total: 0,
                 mmio: 0,
@@ -201,10 +318,44 @@ impl HvfVcpu {
                 last_pc: 0,
                 last_syndrome: 0,
                 last_gpa: 0,
-            },
+            }),
             pending_mmio: Mutex::new(None),
             ioevents,
+            power_control,
+            immediate_exit: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    fn wait_until_powered_on(&self) -> Result<bool> {
+        let mut states = self
+            .power_control
+            .states
+            .lock()
+            .map_err(|_| Error::new(EIO))?;
+        loop {
+            if self.immediate_exit.load(Ordering::Acquire) {
+                return Ok(false);
+            }
+            match states.get(self.id).copied() {
+                Some(VcpuPowerState::On) => return Ok(true),
+                Some(VcpuPowerState::OnPending { entry, context }) => {
+                    states[self.id] = VcpuPowerState::On;
+                    drop(states);
+                    self.write_reg(hv_reg_t::PC, entry)?;
+                    self.write_reg(hv_reg_t::X0, context)?;
+                    return Ok(true);
+                }
+                Some(VcpuPowerState::Off) => {
+                    let (next_states, _) = self
+                        .power_control
+                        .changed
+                        .wait_timeout(states, Duration::from_millis(50))
+                        .map_err(|_| Error::new(EIO))?;
+                    states = next_states;
+                }
+                None => return Err(Error::new(EINVAL)),
+            }
+        }
     }
 
     fn q_reg(n: u8) -> Result<hv_simd_fp_reg_t> {
@@ -327,7 +478,9 @@ impl HvfVcpu {
                     PSCI_VERSION
                     | PSCI_CPU_SUSPEND_64
                     | PSCI_CPU_OFF
+                    | PSCI_CPU_ON
                     | PSCI_CPU_ON_64
+                    | PSCI_AFFINITY_INFO
                     | PSCI_AFFINITY_INFO_64
                     | PSCI_MIGRATE_INFO_TYPE
                     | PSCI_SYSTEM_OFF
@@ -342,7 +495,11 @@ impl HvfVcpu {
                 self.write_reg(hv_reg_t::X0, 2)?;
                 Ok(None)
             }
-            PSCI_CPU_OFF | PSCI_SYSTEM_OFF => {
+            PSCI_CPU_OFF => {
+                self.power_control.set_off(self.id)?;
+                Ok(None)
+            }
+            PSCI_SYSTEM_OFF => {
                 let pc = self.read_reg(hv_reg_t::PC)?;
                 let lr = self.read_reg(hv_reg_t::X30)?;
                 let x1 = self.read_reg(hv_reg_t::X1)?;
@@ -362,8 +519,22 @@ impl HvfVcpu {
                 );
                 Ok(Some(VcpuExit::SystemEventReset))
             }
-            PSCI_CPU_ON_64 | PSCI_AFFINITY_INFO_64 | PSCI_CPU_SUSPEND_64 => {
-                self.write_reg(hv_reg_t::X0, Self::psci_ret(PSCI_RET_ALREADY_ON))?;
+            PSCI_CPU_ON | PSCI_CPU_ON_64 => {
+                let target = self.read_reg(hv_reg_t::X1)? as usize;
+                let entry = self.read_reg(hv_reg_t::X2)?;
+                let context = self.read_reg(hv_reg_t::X3)?;
+                let response = self.power_control.request_on(target, entry, context)?;
+                self.write_reg(hv_reg_t::X0, Self::psci_ret(response))?;
+                Ok(None)
+            }
+            PSCI_AFFINITY_INFO | PSCI_AFFINITY_INFO_64 => {
+                let target = self.read_reg(hv_reg_t::X1)? as usize;
+                let response = self.power_control.affinity_info(target)?;
+                self.write_reg(hv_reg_t::X0, Self::psci_ret(response))?;
+                Ok(None)
+            }
+            PSCI_CPU_SUSPEND_64 => {
+                self.write_reg(hv_reg_t::X0, Self::psci_ret(PSCI_RET_NOT_SUPPORTED))?;
                 Ok(None)
             }
             _ => {
@@ -384,7 +555,7 @@ impl HvfVcpu {
 
         if is_read {
             let mut value = 0u64;
-            if check_hv(unsafe { hv_vcpu_get_sys_reg(self.vcpu, sys, &mut value) }).is_err() {
+            if check_hv_quiet(unsafe { hv_vcpu_get_sys_reg(self.vcpu, sys, &mut value) }).is_err() {
                 warn!(
                     "HVF defaulting trapped sysreg read reg={:?} encoded=0x{:x} to zero",
                     reg,
@@ -400,7 +571,7 @@ impl HvfVcpu {
             } else {
                 0
             };
-            if check_hv(unsafe { hv_vcpu_set_sys_reg(self.vcpu, sys, value) }).is_err() {
+            if check_hv_quiet(unsafe { hv_vcpu_set_sys_reg(self.vcpu, sys, value) }).is_err() {
                 warn!(
                     "HVF ignoring trapped sysreg write reg={:?} encoded=0x{:x} value=0x{:x}",
                     reg,
@@ -437,54 +608,57 @@ impl HvfVcpu {
     }
 
     fn record_exit(&mut self, exit: &hv_vcpu_exit_t, pc: u64) {
-        self.summary.total += 1;
-        self.summary.last_pc = pc;
+        let Some(summary) = self.summary.as_mut() else {
+            return;
+        };
+        summary.total += 1;
+        summary.last_pc = pc;
         match exit.reason {
             hv_exit_reason_t::EXCEPTION => {
                 let ec = exit.exception.syndrome >> 26;
-                self.summary.last_syndrome = exit.exception.syndrome;
-                self.summary.last_gpa = exit.exception.physical_address;
+                summary.last_syndrome = exit.exception.syndrome;
+                summary.last_gpa = exit.exception.physical_address;
                 if ec == EC_AA64_HVC || ec == EC_AA64_SMC {
-                    self.summary.psci += 1;
+                    summary.psci += 1;
                 } else if ec == EC_SYSTEMREGISTERTRAP {
-                    self.summary.sysreg += 1;
+                    summary.sysreg += 1;
                 } else if ec == EC_WFX_TRAP {
-                    self.summary.wfx += 1;
+                    summary.wfx += 1;
                 } else if Self::parse_mmio(&exit.exception).is_some() {
-                    self.summary.mmio += 1;
+                    summary.mmio += 1;
                 } else {
-                    self.summary.other_exception += 1;
+                    summary.other_exception += 1;
                 }
             }
             hv_exit_reason_t::VTIMER_ACTIVATED => {
-                self.summary.vtimer += 1;
+                summary.vtimer += 1;
             }
             hv_exit_reason_t::CANCELED => {
-                self.summary.canceled += 1;
+                summary.canceled += 1;
             }
             hv_exit_reason_t::UNKNOWN => {
-                self.summary.unknown += 1;
+                summary.unknown += 1;
             }
         }
 
-        if self.summary.last_log.elapsed() >= Duration::from_secs(1) {
+        if summary.last_log.elapsed() >= Duration::from_secs(1) {
             warn!(
                 "HVF summary vcpu={} total={} mmio={} psci={} sysreg={} wfx={} vtimer={} other_exc={} canceled={} unknown={} last_pc=0x{:x} last_syndrome=0x{:x} last_gpa=0x{:x}",
                 self.id,
-                self.summary.total,
-                self.summary.mmio,
-                self.summary.psci,
-                self.summary.sysreg,
-                self.summary.wfx,
-                self.summary.vtimer,
-                self.summary.other_exception,
-                self.summary.canceled,
-                self.summary.unknown,
-                self.summary.last_pc,
-                self.summary.last_syndrome,
-                self.summary.last_gpa,
+                summary.total,
+                summary.mmio,
+                summary.psci,
+                summary.sysreg,
+                summary.wfx,
+                summary.vtimer,
+                summary.other_exception,
+                summary.canceled,
+                summary.unknown,
+                summary.last_pc,
+                summary.last_syndrome,
+                summary.last_gpa,
             );
-            self.summary.last_log = Instant::now();
+            summary.last_log = Instant::now();
         }
     }
 }
@@ -508,6 +682,9 @@ impl Vcpu for HvfVcpu {
 
     fn run(&mut self) -> Result<VcpuExit> {
         loop {
+            if !self.wait_until_powered_on()? {
+                return Ok(VcpuExit::Canceled);
+            }
             let r = unsafe { hv_vcpu_run(self.vcpu) };
             if r != hv_error_t::HV_SUCCESS as hv_return_t {
                 let mut pc = 0u64;
@@ -535,7 +712,7 @@ impl Vcpu for HvfVcpu {
             let mut pc = 0u64;
             let _ = check_hv(unsafe { hv_vcpu_get_reg(self.vcpu, hv_reg_t::PC, &mut pc) });
             self.record_exit(exit, pc);
-            if HVF_EXIT_LOG_COUNT.fetch_add(1, Ordering::Relaxed) < 2048 {
+            if self.summary.is_some() && HVF_EXIT_LOG_COUNT.fetch_add(1, Ordering::Relaxed) < 2048 {
                 match exit.reason {
                     hv_exit_reason_t::EXCEPTION => warn!(
                         "HVF exit vcpu={} reason=EXCEPTION pc=0x{:x} syndrome=0x{:x} gpa=0x{:x} gva=0x{:x}",
@@ -591,11 +768,22 @@ impl Vcpu for HvfVcpu {
     }
 
     fn set_immediate_exit(&self, exit: bool) {
+        self.immediate_exit.store(exit, Ordering::Release);
         if exit {
+            self.power_control.changed.notify_all();
             let v = self.vcpu;
             unsafe {
                 let _ = hv_vcpus_exit(&v, 1);
             }
+        }
+    }
+
+    fn signal_handle(&self) -> VcpuSignalHandle {
+        VcpuSignalHandle {
+            inner: Box::new(HvfVcpuSignalHandle {
+                vcpu: self.vcpu,
+                immediate_exit: self.immediate_exit.clone(),
+            }),
         }
     }
 
@@ -640,7 +828,7 @@ impl Vcpu for HvfVcpu {
         };
 
         let out = handle_fn(params)?;
-        if HVF_MMIO_LOG_COUNT.fetch_add(1, Ordering::Relaxed) < 2048 {
+        if self.summary.is_some() && HVF_MMIO_LOG_COUNT.fetch_add(1, Ordering::Relaxed) < 2048 {
             match (&params.operation, &out) {
                 (IoOperation::Write { data }, _) => warn!(
                     "HVF mmio vcpu={} addr=0x{:x} size={} write=true rt={} data={:02x?}",
@@ -724,7 +912,7 @@ impl VcpuAArch64 for HvfVcpu {
             match f {
                 VcpuFeature::PsciV0_2 => {}
                 VcpuFeature::PmuV3 => return Err(Error::new(ENOSYS)),
-                VcpuFeature::PowerOff => {}
+                VcpuFeature::PowerOff => self.power_control.set_off(self.id)?,
             }
         }
 

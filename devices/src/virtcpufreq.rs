@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use base::sched_attr;
-use base::sched_setattr;
-use base::warn;
-use base::Error;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
 use anyhow::Context;
+use base::sched_attr;
+use base::sched_setattr;
+use base::warn;
+use base::Error;
 use serde::Deserialize;
 use serde::Serialize;
 use sync::Mutex;

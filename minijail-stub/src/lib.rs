@@ -7,8 +7,12 @@
 //! `--sandbox` / device jails.
 
 use std::ffi::CString;
-use std::os::raw::{c_char, c_int, c_ulong, c_ushort};
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::raw::c_char;
+use std::os::raw::c_int;
+use std::os::raw::c_ulong;
+use std::os::raw::c_ushort;
+use std::os::unix::io::AsRawFd;
+use std::os::unix::io::RawFd;
 use std::path::Path;
 
 pub type rlim_t = u64;

@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use libc::EINVAL;
+
 use crate::errno::Error;
 use crate::errno::Result;
 use crate::number_of_logical_cores;
 use crate::Pid;
-use libc::EINVAL;
 
 /// Set CPU affinity (no-op on macOS; host policy is not exposed like Linux `sched_setaffinity`).
 pub fn set_cpu_affinity<I: IntoIterator<Item = usize>>(_cpus: I) -> Result<()> {

@@ -37,7 +37,7 @@ fn modify_mode<F: FnOnce(&mut termios)>(fd: RawFd, f: F) -> Result<()> {
     // Safety:
     // The following pair are safe because termios gets totally overwritten by tcgetattr and we
     // check the return result.
-    let ret = unsafe { tcgetattr(fd, &mut termios as *mut _) };
+    let ret = crate::handle_eintr_errno!(unsafe { tcgetattr(fd, &mut termios as *mut _) });
     if ret < 0 {
         return errno_result();
     }
@@ -45,7 +45,8 @@ fn modify_mode<F: FnOnce(&mut termios)>(fd: RawFd, f: F) -> Result<()> {
     f(&mut new_termios);
     // SAFETY:
     // Safe because the syscall will only read the extent of termios and we check the return result.
-    let ret = unsafe { tcsetattr(fd, TCSANOW, &new_termios as *const _) };
+    let ret =
+        crate::handle_eintr_errno!(unsafe { tcsetattr(fd, TCSANOW, &new_termios as *const _) });
     if ret < 0 {
         return errno_result();
     }

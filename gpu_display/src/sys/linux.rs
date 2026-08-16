@@ -15,8 +15,8 @@ use crate::DisplayEventToken;
 use crate::DisplayT;
 use crate::EventDevice;
 use crate::GpuDisplay;
-use crate::GpuDisplayExt;
 use crate::GpuDisplayError;
+use crate::GpuDisplayExt;
 use crate::GpuDisplayResult;
 
 pub(crate) trait UnixDisplayT: DisplayT {}

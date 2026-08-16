@@ -53,6 +53,10 @@ use vulkano::VulkanLibrary;
 
 use crate::keycode_converter::KeycodeTranslator;
 use crate::keycode_converter::KeycodeTypes;
+#[cfg(feature = "vulkan_display")]
+use crate::vulkan::NativeWindowType;
+#[cfg(feature = "vulkan_display")]
+use crate::vulkan::VulkanDisplay;
 use crate::DisplayExternalResourceImport;
 use crate::DisplayT;
 use crate::EventDeviceKind;
@@ -65,10 +69,6 @@ use crate::GpuDisplaySurface;
 use crate::SemaphoreTimepoint;
 use crate::SurfaceType;
 use crate::SysDisplayT;
-#[cfg(feature = "vulkan_display")]
-use crate::vulkan::NativeWindowType;
-#[cfg(feature = "vulkan_display")]
-use crate::vulkan::VulkanDisplay;
 
 const BUFFER_COUNT: usize = 2;
 

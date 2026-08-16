@@ -22,14 +22,14 @@ use vulkano::device::DeviceCreateInfo;
 use vulkano::device::DeviceCreationError;
 use vulkano::device::QueueCreateInfo;
 use vulkano::device::QueueFlags;
+use vulkano::image::sys::ImageCreationError;
+use vulkano::image::sys::UnsafeImage;
+use vulkano::image::sys::UnsafeImageCreateInfo;
 use vulkano::image::ImageAspect;
 use vulkano::image::ImageDimensions;
 use vulkano::image::ImageTiling;
 use vulkano::image::ImageUsage;
 use vulkano::image::SampleCount;
-use vulkano::image::sys::ImageCreationError;
-use vulkano::image::sys::UnsafeImage;
-use vulkano::image::sys::UnsafeImageCreateInfo;
 use vulkano::instance::Instance;
 use vulkano::instance::InstanceCreateInfo;
 use vulkano::instance::InstanceCreationError;
@@ -350,9 +350,7 @@ impl Gralloc for VulkanoGralloc {
 
         let (memory_type_index, memory_type) = {
             let filter = |current_type: &MemoryType| {
-                if need_visible
-                    && !current_type.property_flags.host_visible
-                {
+                if need_visible && !current_type.property_flags.host_visible {
                     return AllocFromRequirementsFilter::Forbidden;
                 }
 

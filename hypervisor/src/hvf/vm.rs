@@ -56,6 +56,7 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemory;
 
 use super::vcpu::HvfVcpu;
+use super::vcpu::VcpuPowerControl;
 use crate::BalloonEvent;
 use crate::ClockState;
 use crate::Config;
@@ -85,6 +86,7 @@ type HvGicConfigSetDistributorBase = unsafe extern "C" fn(*mut c_void, u64) -> h
 type HvGicConfigSetRedistributorBase = unsafe extern "C" fn(*mut c_void, u64) -> hv_return_t;
 type HvGicCreate = unsafe extern "C" fn(*mut c_void) -> hv_return_t;
 type HvGicGetDistributorSize = unsafe extern "C" fn(*mut u64) -> hv_return_t;
+type HvGicGetDistributorReg = unsafe extern "C" fn(u32, *mut u64) -> hv_return_t;
 type HvGicGetRedistributorRegionSize = unsafe extern "C" fn(*mut u64) -> hv_return_t;
 type HvGicSendMsi = unsafe extern "C" fn(hv_ipa_t, u32) -> hv_return_t;
 type HvGicSetSpi = unsafe extern "C" fn(u32, bool) -> hv_return_t;
@@ -95,6 +97,7 @@ struct HvfGicSymbols {
     config_set_distributor_base: HvGicConfigSetDistributorBase,
     config_set_redistributor_base: HvGicConfigSetRedistributorBase,
     create: HvGicCreate,
+    get_distributor_reg: HvGicGetDistributorReg,
     get_distributor_size: HvGicGetDistributorSize,
     get_redistributor_region_size: HvGicGetRedistributorRegionSize,
     send_msi: HvGicSendMsi,
@@ -135,6 +138,7 @@ fn load_hvf_gic_symbols() -> Option<HvfGicSymbols> {
             )?,
             create: load_hvf_gic_symbol(framework, b"hv_gic_create\0")?,
             get_distributor_size: load_hvf_gic_symbol(framework, b"hv_gic_get_distributor_size\0")?,
+            get_distributor_reg: load_hvf_gic_symbol(framework, b"hv_gic_get_distributor_reg\0")?,
             get_redistributor_region_size: load_hvf_gic_symbol(
                 framework,
                 b"hv_gic_get_redistributor_region_size\0",
@@ -157,13 +161,19 @@ where
     }
 }
 
-pub(crate) fn check_hv(r: hv_return_t) -> Result<()> {
+pub(crate) fn check_hv_quiet(r: hv_return_t) -> Result<()> {
     if r == hv_error_t::HV_SUCCESS as hv_return_t {
         Ok(())
     } else {
-        eprintln!("HVF call failed with code {}", r);
         Err(Error::new(EIO))
     }
+}
+
+pub(crate) fn check_hv(r: hv_return_t) -> Result<()> {
+    if r != hv_error_t::HV_SUCCESS as hv_return_t {
+        eprintln!("HVF call failed with code {}", r);
+    }
+    check_hv_quiet(r)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
@@ -224,6 +234,7 @@ pub struct HvfVm {
     ipa_bits: u8,
     gic_done: AtomicBool,
     ioevents: Arc<Mutex<HashMap<IoEventAddress, Event>>>,
+    power_control: Arc<VcpuPowerControl>,
 }
 
 impl HvfVm {
@@ -278,6 +289,7 @@ impl HvfVm {
                         ipa_bits: 40,
                         gic_done: AtomicBool::new(false),
                         ioevents: Arc::new(Mutex::new(HashMap::new())),
+                        power_control: Arc::new(VcpuPowerControl::default()),
                     });
                 }
                 eprintln!(
@@ -325,12 +337,14 @@ impl HvfVm {
             ipa_bits: 40,
             gic_done: AtomicBool::new(false),
             ioevents: Arc::new(Mutex::new(HashMap::new())),
+            power_control: Arc::new(VcpuPowerControl::default()),
         })
     }
 
     /// Installs the in-framework GICv3. Must run **before** any `hv_vcpu_create`, after guest RAM
     /// is mapped. Matches the guest physical layout used by `KvmKernelIrqChip` on AArch64.
     pub fn init_gic(&self, num_vcpus: usize) -> Result<()> {
+        self.power_control.initialize(num_vcpus)?;
         let gic = hvf_gic_symbols().ok_or_else(|| Error::new(ENOSYS))?;
         if self
             .gic_done
@@ -396,12 +410,51 @@ impl HvfVm {
     /// the first guest SPI).
     pub fn set_gic_spi(&self, intid: u32, level: bool) -> Result<()> {
         let gic = hvf_gic_symbols().ok_or_else(|| Error::new(ENOSYS))?;
-        check_hv(unsafe { (gic.set_spi)(intid, level) })
+        {
+            let r = unsafe { (gic.set_spi)(intid, level) };
+            if r != hv_error_t::HV_SUCCESS as hv_return_t {
+                eprintln!(
+                    "HVF hv_gic_set_spi failed: intid={intid} level={level} code={r} ({r:#x})"
+                );
+            }
+            check_hv(r)
+        }
+    }
+    fn gic_spi_distributor_bit(&self, register_base: u32, intid: u32) -> Result<bool> {
+        if intid < 32 {
+            return Err(Error::new(EINVAL));
+        }
+        let gic = hvf_gic_symbols().ok_or_else(|| Error::new(ENOSYS))?;
+        let reg = register_base + (intid / 32) * 4;
+        let mut value = 0u64;
+        let r = unsafe { (gic.get_distributor_reg)(reg, &mut value) };
+        check_hv(r)?;
+        Ok(value & (1u64 << (intid % 32)) != 0)
+    }
+
+    /// Returns whether an SPI is currently pending in the virtual GIC.
+    pub fn gic_spi_pending(&self, intid: u32) -> Result<bool> {
+        // GICD_ISPENDR<n> starts at offset 0x200 and has one bit per INTID.
+        self.gic_spi_distributor_bit(0x200, intid)
+    }
+
+    /// Returns whether an SPI is currently active in the virtual GIC.
+    pub fn gic_spi_active(&self, intid: u32) -> Result<bool> {
+        // GICD_ISACTIVER<n> starts at offset 0x300 and has one bit per INTID.
+        self.gic_spi_distributor_bit(0x300, intid)
     }
 
     pub fn send_gic_msi(&self, gpa: u64, intid: u32) -> Result<()> {
         let gic = hvf_gic_symbols().ok_or_else(|| Error::new(ENOSYS))?;
-        check_hv(unsafe { (gic.send_msi)(gpa as hv_ipa_t, intid) })
+        {
+            let r = unsafe { (gic.send_msi)(gpa as hv_ipa_t, intid) };
+            if r != hv_error_t::HV_SUCCESS as hv_return_t {
+                eprintln!(
+                    "HVF hv_gic_send_msi failed: gpa={gpa:#x} intid={intid} code={r} ({r:#x})"
+                );
+            }
+            check_hv(r)
+        }
     }
 
     pub(crate) fn guest_pagesize() -> usize {
@@ -429,6 +482,7 @@ impl Vm for HvfVm {
             ipa_bits: self.ipa_bits,
             gic_done: AtomicBool::new(self.gic_done.load(Ordering::SeqCst)),
             ioevents: self.ioevents.clone(),
+            power_control: self.power_control.clone(),
         })
     }
 
@@ -634,7 +688,11 @@ impl VmAArch64 for HvfVm {
     }
 
     fn create_vcpu(&self, id: usize) -> Result<Box<dyn crate::VcpuAArch64>> {
-        Ok(Box::new(HvfVcpu::new(id, self.ioevents.clone())?))
+        Ok(Box::new(HvfVcpu::new(
+            id,
+            self.ioevents.clone(),
+            self.power_control.clone(),
+        )?))
     }
 
     fn create_fdt(&self, _fdt: &mut Fdt, _phandles: &BTreeMap<&str, u32>) -> cros_fdt::Result<()> {

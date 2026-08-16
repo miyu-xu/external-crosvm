@@ -6,12 +6,13 @@
 
 #![allow(dead_code)]
 
+use std::sync::Arc;
+
 use base::RawDescriptor;
 use devices::serial_device::SerialParameters;
 use devices::BusDevice;
 use devices::Serial;
 use jail::FakeMinijailStub as Minijail;
-use std::sync::Arc;
 use sync::Mutex;
 
 use crate::DeviceRegistrationError;

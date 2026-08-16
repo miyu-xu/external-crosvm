@@ -49,6 +49,7 @@ impl<T: TimerTrait + IntoAsync> TimerAsync<T> {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 impl TimerAsync<Timer> {
     /// Async sleep for the given duration.
     ///
@@ -59,6 +60,19 @@ impl TimerAsync<Timer> {
         tfd.reset_oneshot(dur).map_err(Error::Timer)?;
         let t = TimerAsync::new(tfd, ex).map_err(Error::TimerAsync)?;
         t.wait().await.map_err(Error::TimerAsync)?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl TimerAsync<Timer> {
+    /// Async sleep for the given duration.
+    ///
+    /// A macOS `Timer` is backed by a kqueue descriptor. Tokio cannot register a kqueue inside its
+    /// own kqueue reactor, so drive one-shot sleeps on the executor's bounded blocking pool instead
+    /// of treating the descriptor like Linux timerfd.
+    pub async fn sleep(ex: &Executor, dur: Duration) -> std::result::Result<(), Error> {
+        ex.spawn_blocking(move || std::thread::sleep(dur)).await;
         Ok(())
     }
 }

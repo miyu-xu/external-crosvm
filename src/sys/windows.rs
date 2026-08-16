@@ -53,6 +53,8 @@ use arch::VmImage;
 use base::enable_high_res_timers;
 use base::error;
 use base::info;
+#[cfg(feature = "gpu")]
+use base::named_pipes::PipeConnection;
 use base::open_file_or_duplicate;
 use base::warn;
 use base::AsRawDescriptor;
@@ -409,6 +411,60 @@ fn create_multi_touch_device(
 }
 
 #[cfg(feature = "gpu")]
+fn create_trackpad_device(
+    cfg: &Config,
+    event_pipe: PipeConnection,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
+    idx: u32,
+) -> DeviceResult {
+    let dev = virtio::input::new_trackpad(
+        idx,
+        event_pipe,
+        width,
+        height,
+        name,
+        virtio::base_features(cfg.protection_type),
+    )
+    .exit_context(
+        Exit::InputDeviceNew,
+        "failed to set up trackpad input device",
+    )?;
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev),
+        jail: None,
+    })
+}
+
+#[cfg(feature = "gpu")]
+fn create_multi_touch_trackpad_device(
+    cfg: &Config,
+    event_pipe: PipeConnection,
+    width: u32,
+    height: u32,
+    name: Option<&str>,
+    idx: u32,
+) -> DeviceResult {
+    let dev = virtio::input::new_multitouch_trackpad(
+        idx,
+        event_pipe,
+        width,
+        height,
+        name,
+        virtio::base_features(cfg.protection_type),
+    )
+    .exit_context(
+        Exit::InputDeviceNew,
+        "failed to set up multi-touch trackpad input device",
+    )?;
+    Ok(VirtioDeviceStub {
+        dev: Box::new(dev),
+        jail: None,
+    })
+}
+
+#[cfg(feature = "gpu")]
 fn create_mouse_device(cfg: &Config, event_pipe: StreamChannel, idx: u32) -> DeviceResult {
     let dev = virtio::input::new_mouse(idx, event_pipe, virtio::base_features(cfg.protection_type))
         .exit_context(Exit::InputDeviceNew, "failed to set up input device")?;
@@ -695,6 +751,11 @@ fn create_virtio_input_event_devices(
         .multi_touch_pipes
         .drain(..)
         .enumerate();
+    let mut trackpad_pipes = input_event_vmm_config.trackpad_pipes.drain(..).enumerate();
+    let mut multi_touch_trackpad_pipes = input_event_vmm_config
+        .multi_touch_trackpad_pipes
+        .drain(..)
+        .enumerate();
     for input in &cfg.virtio_input {
         match input {
             InputDeviceOption::SingleTouch { .. } => {
@@ -706,9 +767,9 @@ fn create_virtio_input_event_devices(
                 name,
                 ..
             } => {
-                let Some((idx, pipe)) = multi_touch_pipes.next() else {
-                    break;
-                };
+                let (idx, pipe) = multi_touch_pipes
+                    .next()
+                    .context("missing native-window multi-touch input pipe")?;
                 let mut width = *width;
                 let mut height = *height;
                 if idx == 0 {
@@ -728,10 +789,54 @@ fn create_virtio_input_event_devices(
                     idx as u32,
                 )?);
             }
+            InputDeviceOption::Trackpad {
+                width,
+                height,
+                name,
+                ..
+            } => {
+                let (idx, pipe) = trackpad_pipes
+                    .next()
+                    .context("missing external trackpad input pipe")?;
+                devs.push(create_trackpad_device(
+                    cfg,
+                    pipe,
+                    width.unwrap_or(DEFAULT_TOUCH_DEVICE_WIDTH),
+                    height.unwrap_or(DEFAULT_TOUCH_DEVICE_HEIGHT),
+                    name.as_deref(),
+                    idx as u32,
+                )?);
+            }
+            InputDeviceOption::MultiTouchTrackpad {
+                width,
+                height,
+                name,
+                ..
+            } => {
+                let (idx, pipe) = multi_touch_trackpad_pipes
+                    .next()
+                    .context("missing external multi-touch trackpad input pipe")?;
+                devs.push(create_multi_touch_trackpad_device(
+                    cfg,
+                    pipe,
+                    width.unwrap_or(DEFAULT_TOUCH_DEVICE_WIDTH),
+                    height.unwrap_or(DEFAULT_TOUCH_DEVICE_HEIGHT),
+                    name.as_deref(),
+                    idx as u32,
+                )?);
+            }
             _ => {}
         }
     }
+    let unused_input_pipe = multi_touch_pipes.next().is_some()
+        || trackpad_pipes.next().is_some()
+        || multi_touch_trackpad_pipes.next().is_some();
     drop(multi_touch_pipes);
+    drop(trackpad_pipes);
+    drop(multi_touch_trackpad_pipes);
+    if unused_input_pipe {
+        anyhow::bail!("unused Windows virtio input pipe");
+    }
 
     product::push_mouse_device(cfg, &mut input_event_vmm_config, &mut devs)?;
 
@@ -993,15 +1098,15 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             Ok(vm_event) => {
                 let exit_state = match vm_event {
                     VmEventType::Exit => {
-                        info!("vcpu requested shutdown");
+                        info!("main loop: vcpu requested shutdown");
                         Some(ExitState::Stop)
                     }
                     VmEventType::Reset => {
-                        info!("vcpu requested reset");
+                        warn!("main loop: vcpu requested reset");
                         Some(ExitState::Reset)
                     }
                     VmEventType::Crash => {
-                        info!("vcpu crashed");
+                        warn!("main loop: vcpu reported a crash");
                         Some(ExitState::Crash)
                     }
                     VmEventType::Panic(_) => {
@@ -1009,7 +1114,7 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
                         None
                     }
                     VmEventType::WatchdogReset => {
-                        info!("vcpu stall detected");
+                        warn!("main loop: vcpu watchdog stall detected");
                         Some(ExitState::WatchdogReset)
                     }
                 };
@@ -1020,7 +1125,7 @@ fn handle_readable_event<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
             }
         },
         Token::BrokerShutdown => {
-            info!("main loop got broker shutdown event");
+            info!("main loop: received broker shutdown event");
             return Ok(Some(ExitState::Stop));
         }
         Token::VmControlServer => {
@@ -1653,7 +1758,25 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         remove_closed_tubes(&wait_ctx, &mut control_tubes, vm_control_ids_to_remove)?;
     }
 
-    info!("run_control poll loop completed, forcing vCPUs to exit...");
+    let exit_reason = match exit_state {
+        ExitState::Reset => "reset",
+        ExitState::Stop => "stop",
+        ExitState::Crash => "crash",
+        ExitState::GuestPanic => "guest panic",
+        ExitState::WatchdogReset => "watchdog reset",
+    };
+    match exit_state {
+        ExitState::Reset | ExitState::Crash | ExitState::GuestPanic | ExitState::WatchdogReset => {
+            warn!(
+                "run_control poll loop completed with {}, forcing vCPUs to exit...",
+                exit_reason
+            )
+        }
+        ExitState::Stop => info!(
+            "run_control poll loop completed with {}, forcing vCPUs to exit...",
+            exit_reason
+        ),
+    }
 
     // VCPU threads MUST see the VmRunMode flag, otherwise they may re-enter the VM.
     run_mode_arc.set_and_notify(VmRunMode::Exiting);

@@ -20,7 +20,6 @@ use base::ReadNotifier;
 
 use super::TapT;
 use super::TapTLinux;
-
 use crate::Error;
 use crate::MacAddress;
 use crate::Result;
@@ -158,7 +157,6 @@ pub mod fakes {
 
     use super::TapT;
     use super::TapTLinux;
-
     use crate::Error;
     use crate::MacAddress;
     use crate::Result;

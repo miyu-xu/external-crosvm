@@ -18,6 +18,8 @@ use base::RecvTube;
 use base::SendTube;
 use base::SerializeDescriptors;
 use base::Tube;
+use base::UnixSeqpacket;
+use base::UnixSeqpacketListener;
 use base::WaitContext;
 use serde::Deserialize;
 use serde::Serialize;
@@ -51,6 +53,21 @@ fn send_recv_no_fd() {
     let recv_msg: String = s2.recv().unwrap();
 
     assert_eq!(test_msg, recv_msg);
+}
+
+#[test]
+fn send_recv_named_unix_seqpacket() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let socket_path = temp_dir.path().join("tube.sock");
+    let listener = UnixSeqpacketListener::bind(&socket_path).unwrap();
+    let client =
+        Tube::new_from_unix_seqpacket(UnixSeqpacket::connect(&socket_path).unwrap()).unwrap();
+    let server = Tube::new_from_unix_seqpacket(listener.accept().unwrap()).unwrap();
+
+    client.send(&"request").unwrap();
+    assert_eq!(server.recv::<String>().unwrap(), "request");
+    server.send(&"response").unwrap();
+    assert_eq!(client.recv::<String>().unwrap(), "response");
 }
 
 #[test]
@@ -123,6 +140,18 @@ fn consume_messages(
         }
     }
     (tube, id1_count, id2_count)
+}
+
+#[test]
+fn send_recv_tube() {
+    let (control_send, control_recv) = Tube::pair().unwrap();
+    let (payload_send, payload_recv) = Tube::pair().unwrap();
+
+    control_send.send(&payload_send).unwrap();
+    let received: Tube = control_recv.recv().unwrap();
+    received.send(&"hi".to_string()).unwrap();
+
+    assert_eq!(payload_recv.recv::<String>().unwrap(), "hi");
 }
 
 #[test]

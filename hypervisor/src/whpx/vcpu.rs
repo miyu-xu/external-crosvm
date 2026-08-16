@@ -7,7 +7,8 @@ use std::arch::x86_64::CpuidResult;
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
@@ -1281,8 +1282,9 @@ impl VcpuX86_64 for WhpxVcpu {
         let eflags = self.last_exit_context.VpContext.Rflags;
         const IF_MASK: u64 = 0x00000200;
 
-        // WHvRegisterPendingInterruption reflects injections made via WHvSetVirtualProcessorRegisters
-        // since the last exit; last_exit_context.ExecutionState can be stale until the next run.
+        // WHvRegisterPendingInterruption reflects injections made via
+        // WHvSetVirtualProcessorRegisters since the last exit;
+        // last_exit_context.ExecutionState can be stale until the next run.
         let pending = match self.interruption_pending_live() {
             Ok(pending) => pending,
             Err(_) => unsafe {

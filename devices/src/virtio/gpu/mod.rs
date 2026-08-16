@@ -1911,6 +1911,9 @@ impl VirtioDevice for Gpu {
     //     completes them synchronously.
 
     fn virtio_sleep(&mut self) -> anyhow::Result<Option<BTreeMap<usize, Queue>>> {
+        if self.rutabaga_component != RutabagaComponentType::Rutabaga2D {
+            bail!("virtio-gpu sleep is only supported in 2D mode");
+        }
         if let Some((activate_tx, worker_thread)) = self.worker_thread.take() {
             self.sleep_requested.store(true, Ordering::SeqCst);
             drop(activate_tx);

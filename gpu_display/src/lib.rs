@@ -32,6 +32,8 @@ mod event_device;
 mod gpu_display_android;
 #[cfg(feature = "android_display_stub")]
 mod gpu_display_android_stub;
+#[cfg(target_os = "macos")]
+mod gpu_display_cocoa;
 mod gpu_display_stub;
 #[cfg(windows)]
 mod gpu_display_win;
@@ -39,7 +41,7 @@ mod gpu_display_win;
 mod gpu_display_wl;
 #[cfg(feature = "x")]
 mod gpu_display_x;
-#[cfg(any(windows, feature = "x"))]
+#[cfg(any(target_os = "macos", windows, feature = "x"))]
 mod keycode_converter;
 mod sys;
 #[cfg(feature = "vulkan_display")]
@@ -47,6 +49,10 @@ pub mod vulkan;
 
 pub use event_device::EventDevice;
 pub use event_device::EventDeviceKind;
+#[cfg(target_os = "macos")]
+pub use gpu_display_cocoa::run_main_loop as run_cocoa_main_loop;
+#[cfg(target_os = "macos")]
+pub use gpu_display_cocoa::stop_main_loop as stop_cocoa_main_loop;
 #[cfg(windows)]
 pub use gpu_display_win::WindowProcedureThread;
 #[cfg(windows)]
@@ -311,6 +317,15 @@ trait DisplayT: AsRawDescriptor {
         None
     }
 
+    fn selected_touchscreen_display_id(&self) -> Option<u32> {
+        None
+    }
+
+    fn set_scanout_resource(&mut self, _scanout_id: u32, _resource_id: u32) {
+        // Most display backends import or copy scanout resources directly and need no explicit
+        // renderer association.
+    }
+
     /// Creates a surface with the given parameters.  The display backend is given a non-zero
     /// `surface_id` as a handle for subsequent operations.
     fn create_surface(
@@ -494,10 +509,15 @@ impl GpuDisplay {
             .collect()
     }
 
+    pub fn set_scanout_resource(&mut self, scanout_id: u32, resource_id: u32) {
+        self.inner.set_scanout_resource(scanout_id, resource_id);
+    }
+
     fn dispatch_display_events(&mut self) -> GpuDisplayResult<()> {
         self.inner.flush();
         while self.inner.pending_events() {
             let surface_descriptor = self.inner.next_event()?;
+            let touchscreen_display_id = self.inner.selected_touchscreen_display_id();
 
             for surface in self.surfaces.values_mut() {
                 if surface_descriptor != surface.surface_descriptor() {
@@ -507,6 +527,12 @@ impl GpuDisplay {
                 if let Some(gpu_display_events) = self.inner.handle_next_event(surface) {
                     for event_device in self.event_devices.values_mut() {
                         if event_device.kind() != gpu_display_events.device_type {
+                            continue;
+                        }
+                        if gpu_display_events.device_type == EventDeviceKind::Touchscreen
+                            && event_device.display_id().is_some()
+                            && event_device.display_id() != touchscreen_display_id
+                        {
                             continue;
                         }
 
@@ -522,8 +548,15 @@ impl GpuDisplay {
     /// Dispatches internal events that were received from the compositor since the last call to
     /// `dispatch_events`.
     pub fn dispatch_events(&mut self) -> GpuDisplayResult<()> {
+        #[cfg(target_os = "macos")]
+        {
+            return self.dispatch_display_events();
+        }
+
+        #[cfg(not(target_os = "macos"))]
         let wait_events = self.wait_ctx.wait_timeout(Duration::default())?;
 
+        #[cfg(not(target_os = "macos"))]
         if let Some(wait_event) = wait_events.iter().find(|e| e.is_hungup) {
             base::error!(
                 "Display signaled with a hungup event for token {:?}",
@@ -533,6 +566,7 @@ impl GpuDisplay {
             return GpuDisplayResult::Err(GpuDisplayError::ConnectionBroken);
         }
 
+        #[cfg(not(target_os = "macos"))]
         for wait_event in wait_events.iter().filter(|e| e.is_writable) {
             if let DisplayEventToken::EventDevice { event_device_id } = wait_event.token {
                 if let Some(event_device) = self.event_devices.get_mut(&event_device_id) {
@@ -548,6 +582,7 @@ impl GpuDisplay {
             }
         }
 
+        #[cfg(not(target_os = "macos"))]
         for wait_event in wait_events.iter().filter(|e| e.is_readable) {
             match wait_event.token {
                 DisplayEventToken::Display => self.dispatch_display_events()?,

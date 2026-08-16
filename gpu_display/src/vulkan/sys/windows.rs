@@ -62,6 +62,7 @@ use winapi::um::winuser::GetClassInfoExW;
 use winapi::um::winuser::GetClientRect;
 use winapi::um::winuser::GetMessageW;
 use winapi::um::winuser::GetWindowLongPtrW;
+use winapi::um::winuser::IsWindow;
 use winapi::um::winuser::MoveWindow;
 use winapi::um::winuser::PostMessageW;
 use winapi::um::winuser::PostQuitMessage;
@@ -74,12 +75,23 @@ use winapi::um::winuser::CS_VREDRAW;
 use winapi::um::winuser::GWLP_USERDATA;
 use winapi::um::winuser::WM_CLOSE;
 use winapi::um::winuser::WM_DESTROY;
+use winapi::um::winuser::WM_LBUTTONDOWN;
+use winapi::um::winuser::WM_LBUTTONUP;
+use winapi::um::winuser::WM_MBUTTONDOWN;
+use winapi::um::winuser::WM_MBUTTONUP;
+use winapi::um::winuser::WM_MOUSEACTIVATE;
+use winapi::um::winuser::WM_MOUSEMOVE;
+use winapi::um::winuser::WM_MOUSEWHEEL;
 use winapi::um::winuser::WM_NCCREATE;
+use winapi::um::winuser::WM_RBUTTONDOWN;
+use winapi::um::winuser::WM_RBUTTONUP;
+use winapi::um::winuser::WM_SETCURSOR;
 use winapi::um::winuser::WM_SIZE;
 use winapi::um::winuser::WM_USER;
+use winapi::um::winuser::WM_XBUTTONDOWN;
+use winapi::um::winuser::WM_XBUTTONUP;
 use winapi::um::winuser::WNDCLASSEXW;
 use winapi::um::winuser::WS_CHILD;
-use winapi::um::winuser::WS_DISABLED;
 use winapi::um::winuser::WS_EX_NOPARENTNOTIFY;
 use winapi::um::winuser::WS_VISIBLE;
 
@@ -179,6 +191,7 @@ struct WindowState<AppState: ApplicationState> {
     app_state: AppState,
     user_event_rx: Receiver<AppState::UserEvent>,
     window: Arc<Window>,
+    input_window: HWND,
 }
 
 #[deny(unsafe_op_in_unsafe_fn)]
@@ -241,6 +254,30 @@ unsafe fn handle_window_message<AppState: ApplicationState>(
                 );
             }
             return Ok(0);
+        }
+        WM_MOUSEACTIVATE | WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN
+        | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP | WM_XBUTTONDOWN | WM_XBUTTONUP
+        | WM_MOUSEWHEEL | WM_SETCURSOR => {
+            // HD reparents this Vulkan presentation child beside crosvm's input window so the
+            // native Player remains a direct, zero-copy Vulkan surface. Forward pointer messages
+            // to the original parent, which owns the per-scanout virtio-input dispatcher. Both
+            // siblings use the same viewport geometry, so client coordinates remain unchanged.
+            if let Some(window_state) = window_state.borrow().as_ref() {
+                // SAFETY: input_window was the live parent supplied at window creation. Posting
+                // carries only Win32 message integers and never dereferences cross-thread data.
+                if !window_state.input_window.is_null()
+                    && unsafe { IsWindow(window_state.input_window) } != 0
+                {
+                    unsafe {
+                        PostMessageW(
+                            window_state.input_window,
+                            message.msg,
+                            message.w_param,
+                            message.l_param,
+                        )
+                    };
+                }
+            }
         }
         WM_USER_USER_EVENT_AVAILABLE => {
             let window_state = window_state.borrow();
@@ -446,7 +483,7 @@ where
     }
 
     let window_name = win32_wide_string("sub");
-    let mut style = WS_DISABLED | WS_VISIBLE;
+    let mut style = WS_VISIBLE;
     // In normal practice parent will not be NULL, but it is convenient for this function to also
     // support a NULL parent for unit tests.
     if !parent.is_null() {
@@ -484,6 +521,7 @@ where
         app_state,
         user_event_rx,
         window,
+        input_window: parent,
     });
 
     Ok(hwnd)

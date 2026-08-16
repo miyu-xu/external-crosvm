@@ -562,12 +562,26 @@ impl PipeConnection {
         }
         overlapped_wrapper.in_use = true;
 
-        PipeConnection::read_internal(
+        let result = PipeConnection::read_internal(
             &self.handle,
             self.blocking_mode,
             buf,
             Some(&mut overlapped_wrapper.overlapped.0),
-        )?;
+        );
+        if result
+            .as_ref()
+            .is_err_and(|error| error.raw_os_error() != Some(ERROR_MORE_DATA as i32))
+        {
+            // ReadFile completed synchronously with an error, so there is no outstanding I/O
+            // associated with this OVERLAPPED. In particular, a PIPE_NOWAIT connection reports
+            // ERROR_NO_DATA (mapped to WouldBlock) while it is connected but temporarily empty.
+            // ERROR_MORE_DATA is the exception: message-mode callers treat it as a completed
+            // partial read and still call get_overlapped_result for the transferred byte count.
+            // Leaving `in_use` set here makes the next legitimate read fail with
+            // "Overlapped struct already in use" and tears down virtio-console devices.
+            overlapped_wrapper.in_use = false;
+        }
+        result?;
         Ok(())
     }
 
@@ -727,11 +741,17 @@ impl PipeConnection {
         }
         overlapped_wrapper.in_use = true;
 
-        PipeConnection::write_internal(
+        let result = PipeConnection::write_internal(
             &self.handle,
             buf,
             Some(&mut overlapped_wrapper.overlapped.0),
-        )?;
+        );
+        if result.is_err() {
+            // A synchronous WriteFile error leaves no pending operation. Keep the wrapper
+            // reusable just as get_overlapped_result does after an asynchronous completion.
+            overlapped_wrapper.in_use = false;
+        }
+        result?;
         Ok(())
     }
 
@@ -1017,6 +1037,14 @@ impl PipeConnection {
 impl AsRawDescriptor for PipeConnection {
     fn as_raw_descriptor(&self) -> RawDescriptor {
         self.handle.as_raw_descriptor()
+    }
+}
+
+impl crate::ReadNotifier for PipeConnection {
+    fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+        // Unlike StreamChannel, a bare PipeConnection has no companion event that mirrors its
+        // readability. Preserve the existing wait contract for external input pipes.
+        self
     }
 }
 

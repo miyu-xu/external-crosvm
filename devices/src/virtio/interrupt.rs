@@ -9,7 +9,6 @@ use std::sync::Arc;
 #[cfg(target_arch = "x86_64")]
 use std::time::Instant;
 
-#[cfg(target_arch = "x86_64")]
 use base::debug;
 #[cfg(target_arch = "x86_64")]
 use base::error;

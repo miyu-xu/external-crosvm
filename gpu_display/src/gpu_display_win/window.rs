@@ -322,6 +322,7 @@ impl GuiWindow {
         class_name: &str,
         title: &str,
         dw_style: DWORD,
+        parent_window_handle: Option<u64>,
         initial_window_size: &Size2D<i32, HostWindowSpace>,
     ) -> Result<Self> {
         info!("Creating GUI window for scanout {}", scanout_id);
@@ -331,7 +332,8 @@ impl GuiWindow {
             class_name,
             title,
             dw_style,
-            /* hwnd_parent */ null_mut(),
+            /* hwnd_parent */
+            parent_window_handle.map_or(null_mut(), |handle| handle as HWND),
             initial_window_size,
         )
         .context("When creating GuiWindow")?;

@@ -383,7 +383,7 @@ async fn pcm_worker_loop(
             );
             #[cfg(windows)]
             let buffer_writer = &mut buffer_writer_lock;
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
             let (stream, buffer_writer) = (
                 &mut sys_direction_output.async_playback_buffer_stream,
                 &mut sys_direction_output.buffer_writer,
@@ -416,7 +416,14 @@ async fn pcm_worker_loop(
                 }
                 WorkerStatus::Running => match desc_receiver.try_next() {
                     Err(e) => {
-                        error!(
+                        // A running guest can temporarily stop supplying descriptors while the
+                        // Android UI switches streams or plays a short interaction sound. The
+                        // endpoint still requests one buffer per period, so logging this expected
+                        // underrun as an error produces a 100 Hz stderr storm on Windows. Besides
+                        // obscuring real failures, synchronous log capture can starve the GPU and
+                        // input workers and show up as pointer-driven frame gaps. Silence is
+                        // already written below; keep the diagnostic available at debug level.
+                        debug!(
                             "[Card {}] Underrun. No new DescriptorChain while running: {}",
                             card_index, e
                         );
@@ -474,7 +481,10 @@ async fn pcm_worker_loop(
                 }
                 WorkerStatus::Running => match desc_receiver.try_next() {
                     Err(e) => {
-                        error!(
+                        // Capture overruns have the same period-rate behavior as playback
+                        // underruns. They are recoverable here because the empty period is consumed
+                        // immediately below, so do not turn them into a continuous error stream.
+                        debug!(
                             "[Card {}] Overrun. No new DescriptorChain while running: {}",
                             card_index, e
                         );

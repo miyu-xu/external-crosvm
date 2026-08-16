@@ -564,7 +564,8 @@ impl MemoryMapping {
         // Safe because MLOCK_ONFAULT only affects the swap behavior of the kernel, so it has no
         // impact on rust semantics.
         // let ret = unsafe { libc::mlock2(addr as *mut _, count, libc::MLOCK_ONFAULT) };
-        // ANDROID(b/274805769): android glibc doesn't have mlock2, so we need to make the syscall directly.
+        // ANDROID(b/274805769): android glibc doesn't have mlock2, so we need to make the syscall
+        // directly.
         let ret = unsafe {
             libc::syscall(
                 libc::SYS_mlock2,

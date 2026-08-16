@@ -49,7 +49,10 @@ use devices::virtio::scsi::ScsiOption;
 use devices::virtio::snd::parameters::Parameters as SndParameters;
 #[cfg(not(all(target_os = "macos", feature = "hvf")))]
 use devices::virtio::vfio_wrapper::VfioWrapper;
-#[cfg(feature = "net")]
+#[cfg(all(
+    feature = "net",
+    any(target_os = "android", target_os = "linux", windows)
+))]
 use devices::virtio::vhost::user::NetBackend;
 use devices::virtio::vhost::user::VhostUserDeviceBuilder;
 #[cfg(not(all(target_os = "macos", feature = "hvf")))]
@@ -96,8 +99,10 @@ use minijail_stub::Minijail;
 type MinijailError = anyhow::Error;
 #[cfg(not(all(target_os = "macos", feature = "hvf")))]
 type MinijailError = minijail_stub::Error;
-#[cfg(feature = "net")]
+#[cfg(all(feature = "net", not(all(target_os = "macos", feature = "hvf"))))]
 use net_util::sys::linux::Tap;
+#[cfg(all(target_os = "macos", feature = "hvf", feature = "net"))]
+use net_util::sys::macos_hvf::VmnetTap as Tap;
 #[cfg(feature = "net")]
 use net_util::MacAddress;
 #[cfg(feature = "net")]
@@ -502,6 +507,8 @@ pub fn create_virtio_snd_device(
         Backend::Sys(virtio::snd::sys::StreamSourceBackend::AAUDIO) => "snd_aaudio_device",
         #[cfg(feature = "audio_cras")]
         Backend::Sys(virtio::snd::sys::StreamSourceBackend::CRAS) => "snd_cras_device",
+        #[cfg(target_os = "macos")]
+        Backend::Sys(virtio::snd::sys::StreamSourceBackend::COREAUDIO) => "snd_coreaudio_device",
         #[cfg(not(any(feature = "audio_cras", feature = "audio_aaudio")))]
         _ => unreachable!(),
     };
@@ -829,13 +836,17 @@ impl VirtioDeviceBuilder for &NetParameters {
         protection_type: ProtectionType,
     ) -> anyhow::Result<Box<dyn VirtioDevice>> {
         let vq_pairs = self.vq_pairs.unwrap_or(1);
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let multi_vq = vq_pairs > 1 && self.vhost_net.is_none();
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        let multi_vq = false;
 
         let features = virtio::base_features(protection_type);
         let (tap, mac) = create_tap_for_net_device(&self.mode, multi_vq)?;
 
-        Ok(if let Some(vhost_net) = &self.vhost_net {
-            Box::new(
+        #[cfg(any(target_os = "android", target_os = "linux"))]
+        if let Some(vhost_net) = &self.vhost_net {
+            return Ok(Box::new(
                 virtio::vhost::Net::<_, vhost::Net<_>>::new(
                     &vhost_net.device,
                     features,
@@ -845,20 +856,20 @@ impl VirtioDeviceBuilder for &NetParameters {
                     self.pci_address,
                 )
                 .context("failed to set up virtio-vhost networking")?,
-            ) as Box<dyn VirtioDevice>
-        } else {
-            Box::new(
-                virtio::Net::new(
-                    features,
-                    tap,
-                    vq_pairs,
-                    mac,
-                    self.packed_queue,
-                    self.pci_address,
-                )
-                .context("failed to set up virtio networking")?,
-            ) as Box<dyn VirtioDevice>
-        })
+            ) as Box<dyn VirtioDevice>);
+        }
+
+        Ok(Box::new(
+            virtio::Net::new(
+                features,
+                tap,
+                vq_pairs,
+                mac,
+                self.packed_queue,
+                self.pci_address,
+            )
+            .context("failed to set up virtio networking")?,
+        ) as Box<dyn VirtioDevice>)
     }
 
     fn create_jail(
@@ -866,15 +877,19 @@ impl VirtioDeviceBuilder for &NetParameters {
         jail_config: &Option<JailConfig>,
         virtio_transport: VirtioDeviceType,
     ) -> anyhow::Result<Option<Minijail>> {
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let policy = if self.vhost_net.is_some() {
             "vhost_net"
         } else {
             "net"
         };
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        let policy = "net";
 
         simple_jail(jail_config, &virtio_transport.seccomp_policy_file(policy))
     }
 
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     fn create_vhost_user_device(
         self,
         keep_rds: &mut Vec<RawDescriptor>,
@@ -899,8 +914,27 @@ fn create_tap_for_net_device(
 ) -> DeviceResult<(Tap, Option<MacAddress>)> {
     match mode {
         NetParametersMode::TapName { tap_name, mac } => {
+            #[cfg(all(target_os = "macos", feature = "hvf"))]
+            let tap = Tap::new_with_name_and_mac(tap_name.as_bytes(), mac.as_ref(), multi_vq)
+                .map_err(NetError::TapOpen)?;
+            #[cfg(not(all(target_os = "macos", feature = "hvf")))]
             let tap = Tap::new_with_name(tap_name.as_bytes(), true, multi_vq)
                 .map_err(NetError::TapOpen)?;
+            #[cfg(all(target_os = "macos", feature = "hvf"))]
+            {
+                let assigned_mac = tap
+                    .mac_address()
+                    .context("failed to read the vmnet-assigned MAC address")?;
+                if *mac != Some(assigned_mac) {
+                    warn!(
+                        "vmnet shared mode assigned MAC {}; requested MAC {:?} is unavailable, using the assigned address",
+                        assigned_mac,
+                        mac
+                    );
+                }
+                return Ok((tap, Some(assigned_mac)));
+            }
+            #[cfg(not(all(target_os = "macos", feature = "hvf")))]
             Ok((tap, *mac))
         }
         NetParametersMode::TapFd { tap_fd, mac } => {
@@ -1091,10 +1125,19 @@ impl VirtioDeviceBuilder for &VsockConfig {
     ) -> anyhow::Result<Box<dyn VirtioDevice>> {
         let features = virtio::base_features(protection_type);
 
-        let dev = virtio::vhost::Vsock::new(features, self)
-            .context("failed to set up virtual socket device")?;
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        {
+            let dev = virtio::vsock::Vsock::new(self.cid, None, features)
+                .context("failed to set up userspace virtual socket device")?;
+            Ok(Box::new(dev))
+        }
 
-        Ok(Box::new(dev))
+        #[cfg(not(all(target_os = "macos", feature = "hvf")))]
+        {
+            let dev = virtio::vhost::Vsock::new(features, self)
+                .context("failed to set up virtual socket device")?;
+            Ok(Box::new(dev))
+        }
     }
 
     fn create_vhost_user_device(
@@ -1548,7 +1591,7 @@ impl VirtioDeviceBuilder for &SerialParameters {
     }
 }
 
-#[cfg(feature = "audio")]
+#[cfg(all(feature = "audio", not(target_os = "macos")))]
 pub fn create_sound_device(
     path: &Path,
     protection_type: ProtectionType,

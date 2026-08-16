@@ -363,6 +363,8 @@ pub enum IrqHandlerRequest {
     /// running (such as for snapshot restore), this command must be sent
     /// otherwise the VM will not receive IRQs as expected.
     RefreshIrqEventTokens,
+    #[cfg(target_os = "macos")]
+    SetIrqEventTokensEnabled(bool),
     WakeAndNotifyIteration,
     /// No response is sent for this command.
     Exit,
@@ -375,6 +377,8 @@ const EXPECTED_MAX_IRQ_FLUSH_ITERATIONS: usize = 100;
 pub enum IrqHandlerResponse {
     /// Sent when the IRQ event tokens have been refreshed.
     IrqEventTokenRefreshComplete,
+    #[cfg(target_os = "macos")]
+    IrqEventTokensEnabled(bool),
     /// Specifies the number of tokens serviced in the requested iteration
     /// (less the token for the `WakeAndNotifyIteration` request).
     HandlerIterationComplete(usize),
@@ -1761,6 +1765,20 @@ impl Drop for DeviceSleepGuard<'_> {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn set_irq_event_tokens_enabled(irq_handler_control: &Tube, enabled: bool) -> anyhow::Result<()> {
+    irq_handler_control
+        .send(&IrqHandlerRequest::SetIrqEventTokensEnabled(enabled))
+        .context("failed to change IRQ event token state")?;
+    match irq_handler_control
+        .recv()
+        .context("failed to receive IRQ event token state response")?
+    {
+        IrqHandlerResponse::IrqEventTokensEnabled(actual) if actual == enabled => Ok(()),
+        response => bail!("unexpected IRQ event token state response: {:?}", response),
+    }
+}
+
 impl VmRequest {
     /// Executes this request on the given Vm and other mutable state.
     ///
@@ -1834,6 +1852,11 @@ impl VmRequest {
                 }
             }
             VmRequest::SuspendVcpus => {
+                #[cfg(target_os = "macos")]
+                if let Err(e) = set_irq_event_tokens_enabled(irq_handler_control, false) {
+                    error!("failed to pause IRQ delivery: {e}");
+                    return VmResponse::Err(SysError::new(EIO));
+                }
                 if !force_s2idle {
                     kick_vcpus(VcpuControl::RunState(VmRunMode::Suspending));
                     let current_mode = match get_vcpu_state(kick_vcpus, vcpu_size) {
@@ -1845,6 +1868,8 @@ impl VmRequest {
                     };
                     if current_mode != VmRunMode::Suspending {
                         error!("vCPUs failed to all suspend.");
+                        #[cfg(target_os = "macos")]
+                        let _ = set_irq_event_tokens_enabled(irq_handler_control, true);
                         return VmResponse::Err(SysError::new(EIO));
                     }
                 }
@@ -1883,6 +1908,20 @@ impl VmRequest {
                 }
 
                 kick_vcpus(VcpuControl::RunState(VmRunMode::Running));
+                #[cfg(target_os = "macos")]
+                {
+                    if !matches!(
+                        get_vcpu_state(&kick_vcpus, vcpu_size),
+                        Ok(VmRunMode::Running)
+                    ) {
+                        error!("vCPUs failed to all resume.");
+                        return VmResponse::Err(SysError::new(EIO));
+                    }
+                    if let Err(e) = set_irq_event_tokens_enabled(irq_handler_control, true) {
+                        error!("failed to resume IRQ delivery: {e}");
+                        return VmResponse::Err(SysError::new(EIO));
+                    }
+                }
                 VmResponse::Ok
             }
             VmRequest::ConnectVsock { port: _ } => VmResponse::Err(SysError::new(ENOTSUP)),
@@ -1977,6 +2016,11 @@ impl VmRequest {
             }
             VmRequest::SuspendVm => {
                 info!("Starting crosvm suspend");
+                #[cfg(target_os = "macos")]
+                if let Err(e) = set_irq_event_tokens_enabled(irq_handler_control, false) {
+                    error!("failed to pause IRQ delivery: {e}");
+                    return VmResponse::Err(SysError::new(EIO));
+                }
                 kick_vcpus(VcpuControl::RunState(VmRunMode::Suspending));
                 let current_mode = match get_vcpu_state(kick_vcpus, vcpu_size) {
                     Ok(state) => state,
@@ -1987,6 +2031,8 @@ impl VmRequest {
                 };
                 if current_mode != VmRunMode::Suspending {
                     error!("vCPUs failed to all suspend.");
+                    #[cfg(target_os = "macos")]
+                    let _ = set_irq_event_tokens_enabled(irq_handler_control, true);
                     return VmResponse::Err(SysError::new(EIO));
                 }
                 // Snapshot the pvclock ASAP after stopping vCPUs.
@@ -2062,6 +2108,20 @@ impl VmRequest {
                     }
                 }
                 kick_vcpus(VcpuControl::RunState(VmRunMode::Running));
+                #[cfg(target_os = "macos")]
+                {
+                    if !matches!(
+                        get_vcpu_state(&kick_vcpus, vcpu_size),
+                        Ok(VmRunMode::Running)
+                    ) {
+                        error!("vCPUs failed to all resume.");
+                        return VmResponse::Err(SysError::new(EIO));
+                    }
+                    if let Err(e) = set_irq_event_tokens_enabled(irq_handler_control, true) {
+                        error!("failed to resume IRQ delivery: {e}");
+                        return VmResponse::Err(SysError::new(EIO));
+                    }
+                }
                 VmResponse::Ok
             }
             VmRequest::Gpe { gpe, clear_evt } => {

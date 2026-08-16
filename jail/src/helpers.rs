@@ -8,8 +8,6 @@
 use std::path::Path;
 use std::str;
 
-#[cfg(target_os = "macos")]
-use crate::FakeMinijailStub as Minijail;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
@@ -30,6 +28,8 @@ use static_assertions::assert_eq_size;
 use zerocopy::AsBytes;
 
 use crate::config::JailConfig;
+#[cfg(target_os = "macos")]
+use crate::FakeMinijailStub as Minijail;
 
 // ANDROID: b/246968493
 #[cfg(not(feature = "seccomp_trace"))]
@@ -274,13 +274,14 @@ pub fn create_sandbox_minijail(
         #[cfg(not(feature = "seccomp_trace"))]
         if let Some(seccomp_policy_dir) = config.seccomp_policy_dir {
             let seccomp_policy_path = seccomp_policy_dir.join(config.seccomp_policy_name);
-            // By default we'll prioritize using the pre-compiled .bpf over the .policy file (the .bpf
-            // is expected to be compiled using "trap" as the failure behavior instead of the default
-            // "kill" behavior) when a policy path is supplied in the command line arugments. Otherwise
-            // the built-in pre-compiled policies will be used.
-            // Refer to the code comment for the "seccomp-log-failures" command-line parameter for an
-            // explanation about why the |log_failures| flag forces the use of .policy files (and the
-            // build-time alternative to this run-time flag).
+            // By default we'll prioritize using the pre-compiled .bpf over the .policy file (the
+            // .bpf is expected to be compiled using "trap" as the failure behavior
+            // instead of the default "kill" behavior) when a policy path is supplied in
+            // the command line arugments. Otherwise the built-in pre-compiled policies
+            // will be used. Refer to the code comment for the "seccomp-log-failures"
+            // command-line parameter for an explanation about why the |log_failures|
+            // flag forces the use of .policy files (and the build-time alternative to
+            // this run-time flag).
             let bpf_policy_file = seccomp_policy_path.with_extension("bpf");
             if bpf_policy_file.exists() && !config.log_failures {
                 jail.parse_seccomp_program(&bpf_policy_file)
@@ -291,8 +292,9 @@ pub fn create_sandbox_minijail(
                         )
                     })?;
             } else {
-                // Use TSYNC only for the side effect of it using SECCOMP_RET_TRAP, which will correctly
-                // kill the entire device process if a worker thread commits a seccomp violation.
+                // Use TSYNC only for the side effect of it using SECCOMP_RET_TRAP, which will
+                // correctly kill the entire device process if a worker thread
+                // commits a seccomp violation.
                 jail.set_seccomp_filter_tsync();
                 if config.log_failures {
                     jail.log_seccomp_filter_failures();

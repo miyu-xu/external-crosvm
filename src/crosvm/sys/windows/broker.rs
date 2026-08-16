@@ -16,6 +16,7 @@ use std::fmt::Formatter;
 use std::fs::OpenOptions;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::RawHandle;
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process;
@@ -30,6 +31,12 @@ use base::error;
 use base::generate_uuid;
 use base::info;
 use base::named_pipes;
+#[cfg(feature = "gpu")]
+use base::named_pipes::BlockingMode as PipeBlockingMode;
+#[cfg(feature = "gpu")]
+use base::named_pipes::FramingMode as PipeFramingMode;
+#[cfg(feature = "gpu")]
+use base::named_pipes::PipeConnection;
 use base::syslog;
 use base::syslog::LogArgs;
 use base::syslog::LogConfig;
@@ -116,7 +123,10 @@ use tube_transporter::TubeTransporter;
 use win_util::get_exit_code_process;
 use win_util::ProcessType;
 use winapi::shared::winerror::ERROR_ACCESS_DENIED;
-use winapi::um::processthreadsapi::TerminateProcess;
+use winapi::um::processthreadsapi::{
+    GetCurrentProcess, GetPriorityClass, SetPriorityClass, TerminateProcess,
+};
+use winapi::um::winbase::CREATE_NO_WINDOW;
 
 use crate::crosvm::config::InputDeviceOption;
 #[cfg(feature = "gpu")]
@@ -659,7 +669,9 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
     }
 
     #[cfg(feature = "audio")]
-    let num_audio_devices = if let Some(gpu_params) = cfg.gpu_parameters.as_ref() {
+    let num_audio_devices = if !cfg.virtio_snds.is_empty() {
+        u32::try_from(cfg.virtio_snds.len()).unwrap_or(u32::MAX)
+    } else if let Some(gpu_params) = cfg.gpu_parameters.as_ref() {
         match gpu_params.audio_device_mode {
             AudioDeviceMode::PerSurface => gpu_params.max_num_displays,
             AudioDeviceMode::OneGlobal => 1,
@@ -712,7 +724,15 @@ fn run_internal(mut cfg: Config, log_args: LogArgs) -> Result<()> {
         .context("create input event devices for virtio-gpu device")?;
 
     #[cfg(feature = "gpu")]
-    let mut window_procedure_thread_builder = Some(WindowProcedureThread::builder());
+    let mut window_procedure_thread_builder = Some({
+        let mut builder = WindowProcedureThread::builder();
+        builder.set_parent_window_handle(
+            cfg.gpu_parameters
+                .as_ref()
+                .and_then(|parameters| parameters.parent_window_handle),
+        );
+        builder
+    });
 
     #[cfg(feature = "gpu")]
     let gpu_cfg = platform_create_gpu(
@@ -1394,6 +1414,10 @@ where
     if let Some(w) = warning {
         warn!("sandbox: got warning spawning target: {}", w);
     }
+    inherit_broker_priority(target.process.as_raw_descriptor()).exit_context(
+        Exit::ProcessSpawnFailed,
+        "failed to inherit broker process priority",
+    )?;
     win_util::resume_thread(target.thread.as_raw_descriptor())
         .exit_context(Exit::ProcessSpawnFailed, "failed to spawn child process")?;
 
@@ -1428,6 +1452,10 @@ where
         proc.stderr(file);
     }
 
+    // Device helpers are product background processes even when crosvm is launched outside HD's
+    // managed-process wrapper. Suppress an independent console while retaining inherited handles
+    // and the broker priority class applied immediately after spawn.
+    proc.creation_flags(CREATE_NO_WINDOW);
     info!("spawning process: {:?}", proc);
     let proc = proc
         .spawn()
@@ -1438,9 +1466,28 @@ where
             .exit_context(Exit::CreateSocket, "failed to create socket")?;
     }
 
+    inherit_broker_priority(proc.as_raw_handle() as RawDescriptor).exit_context(
+        Exit::ProcessSpawnFailed,
+        "failed to inherit broker process priority",
+    )?;
     let process_id = proc.id();
 
     Ok((process_id, Box::new(UnsandboxedChild(proc))))
+}
+
+fn inherit_broker_priority(process: RawDescriptor) -> Result<()> {
+    // `sandbox::BrokerServices::spawn_target` creates targets with the normal priority class even
+    // when the latency-sensitive HD crosvm broker was created above normal. Apply the broker's
+    // actual class before resuming the target so every vCPU/device/gpu child observes one coherent
+    // scheduling policy. Standalone crosvm remains normal because its broker is normal.
+    let priority = unsafe { GetPriorityClass(GetCurrentProcess()) };
+    if priority == 0 {
+        return Err(std::io::Error::last_os_error()).context("GetPriorityClass(crosvm broker)");
+    }
+    if unsafe { SetPriorityClass(process, priority) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("SetPriorityClass(crosvm child)");
+    }
+    Ok(())
 }
 
 #[cfg(all(feature = "net", feature = "slirp"))]
@@ -1456,21 +1503,20 @@ fn start_up_net_backends(
 ) -> Result<(Vec<ChildProcess>, Vec<ChildProcess>)> {
     use devices::virtio::net::NetParametersMode;
 
-    let net_backends: Vec<(usize, Option<net_util::MacAddress>)> = cfg
-        .net
-        .iter()
-        .enumerate()
-        .map(|(index, net_params)| {
-            let mac = match &net_params.mode {
-                NetParametersMode::Slirp { mac } => *mac,
-                NetParametersMode::RawConfig { mac, .. } => Some(*mac),
-                NetParametersMode::TapName { mac, .. } | NetParametersMode::TapFd { mac, .. } => {
-                    *mac
-                }
-            };
-            (index, mac)
-        })
-        .collect();
+    let net_backends: Vec<(usize, Option<net_util::MacAddress>)> =
+        cfg.net
+            .iter()
+            .enumerate()
+            .map(|(index, net_params)| {
+                let mac = match &net_params.mode {
+                    NetParametersMode::Slirp { mac } => *mac,
+                    NetParametersMode::RawConfig { mac, .. } => Some(*mac),
+                    NetParametersMode::TapName { mac, .. }
+                    | NetParametersMode::TapFd { mac, .. } => *mac,
+                };
+                (index, mac)
+            })
+            .collect();
     let mut slirp_children = Vec::with_capacity(net_backends.len());
     let mut net_children = Vec::with_capacity(net_backends.len());
 
@@ -1674,12 +1720,20 @@ fn platform_create_snd(
 
     let (backend_config_product, vmm_config_product) = get_snd_product_configs()?;
 
-    let parameters = SndParameters {
-        backend: "winaudio".try_into().unwrap(),
-        num_input_devices: num_input_sound_devices(cfg),
-        num_input_streams: num_input_sound_streams(cfg),
-        ..Default::default()
-    };
+    // `--virtio-snd` is the per-instance Guest/Host audio contract. Preserve an explicit card
+    // verbatim so disabling capture creates no Guest input PCM and selecting the default Host
+    // microphone creates exactly the requested input device/stream. The product fallback remains
+    // available for callers that did not supply an explicit sound card.
+    let parameters = cfg
+        .virtio_snds
+        .get(card_index)
+        .cloned()
+        .unwrap_or_else(|| SndParameters {
+            backend: "winaudio".try_into().unwrap(),
+            num_input_devices: num_input_sound_devices(cfg),
+            num_input_streams: num_input_sound_streams(cfg),
+            ..Default::default()
+        });
 
     let audio_client_guid = generate_uuid();
 
@@ -1781,6 +1835,8 @@ fn start_up_snd(
 fn platform_create_input_event_config(cfg: &Config) -> Result<InputEventSplitConfig> {
     let mut event_devices = vec![];
     let mut multi_touch_pipes = vec![];
+    let mut trackpad_pipes = vec![];
+    let mut multi_touch_trackpad_pipes = vec![];
     let mut mouse_pipes = vec![];
     let mut keyboard_pipes = vec![];
 
@@ -1800,6 +1856,13 @@ fn platform_create_input_event_config(cfg: &Config) -> Result<InputEventSplitCon
                 event_devices.push(EventDevice::mouse(event_device_pipe));
                 mouse_pipes.push(virtio_input_pipe);
             }
+            InputDeviceOption::Trackpad { path, .. } => {
+                trackpad_pipes.push(connect_external_input_pipe(path, "trackpad")?);
+            }
+            InputDeviceOption::MultiTouchTrackpad { path, .. } => {
+                multi_touch_trackpad_pipes
+                    .push(connect_external_input_pipe(path, "multi-touch trackpad")?);
+            }
             _ => {}
         }
     }
@@ -1815,10 +1878,24 @@ fn platform_create_input_event_config(cfg: &Config) -> Result<InputEventSplitCon
         backend_config: Some(InputEventBackendConfig { event_devices }),
         vmm_config: InputEventVmmConfig {
             multi_touch_pipes,
+            trackpad_pipes,
+            multi_touch_trackpad_pipes,
             mouse_pipes,
             keyboard_pipes,
         },
     })
+}
+
+#[cfg(feature = "gpu")]
+fn connect_external_input_pipe(path: &Path, kind: &str) -> Result<PipeConnection> {
+    let path = path
+        .to_str()
+        .with_context(|| format!("{kind} input pipe path is not valid UTF-8"))?;
+    if !path.starts_with(r"\\.\pipe\") {
+        anyhow::bail!("{kind} input path must be a local Windows named pipe");
+    }
+    named_pipes::create_client_pipe(path, &PipeFramingMode::Byte, &PipeBlockingMode::Wait, false)
+        .with_context(|| format!("failed to connect {kind} input pipe {path}"))
 }
 
 #[cfg(feature = "gpu")]

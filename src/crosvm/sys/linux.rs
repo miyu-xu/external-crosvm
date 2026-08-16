@@ -345,55 +345,86 @@ fn create_virtio_devices(
         if let Some(gpu_parameters) = &cfg.gpu_parameters {
             let mut event_devices = Vec::new();
             if cfg.display_window_mouse {
-                let display_param = if gpu_parameters.display_params.is_empty() {
-                    Default::default()
-                } else {
-                    gpu_parameters.display_params[0].clone()
-                };
-                let (gpu_display_w, gpu_display_h) = display_param.get_virtual_display_size();
-
-                let (event_device_socket, virtio_dev_socket) =
-                    StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
-                        .context("failed to create socket")?;
-                let mut multi_touch_width = gpu_display_w;
-                let mut multi_touch_height = gpu_display_h;
-                let mut multi_touch_name = None;
-                for input in &cfg.virtio_input {
-                    if let InputDeviceOption::MultiTouch {
+                #[cfg(target_os = "macos")]
+                for (display_id, display_param) in gpu_parameters.display_params.iter().enumerate()
+                {
+                    let (width, height) = display_param.get_virtual_display_size();
+                    let (event_device_socket, virtio_dev_socket) =
+                        StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
+                            .context("failed to create display touchscreen socket")?;
+                    let display_id =
+                        u32::try_from(display_id).context("display touchscreen id overflow")?;
+                    let name = format!("virtio_input_multi_touch_{display_id}");
+                    let dev = virtio::input::new_multi_touch(
+                        display_id,
+                        virtio_dev_socket,
                         width,
                         height,
-                        name,
-                        ..
-                    } = input
-                    {
-                        if let Some(width) = width {
-                            multi_touch_width = *width;
-                        }
-                        if let Some(height) = height {
-                            multi_touch_height = *height;
-                        }
-                        if let Some(name) = name {
-                            multi_touch_name = Some(name.as_str());
-                        }
-                        break;
-                    }
+                        Some(&name),
+                        virtio::base_features(cfg.protection_type),
+                    )
+                    .context("failed to set up display touchscreen")?;
+                    devs.push(VirtioDeviceStub {
+                        dev: Box::new(dev),
+                        jail: simple_jail(&cfg.jail_config, "input_device")?,
+                    });
+                    event_devices.push(EventDevice::touchscreen_for_display(
+                        event_device_socket,
+                        display_id,
+                    ));
                 }
-                let dev = virtio::input::new_multi_touch(
-                    // u32::MAX is the least likely to collide with the indices generated above for
-                    // the multi_touch options, which begin at 0.
-                    u32::MAX,
-                    virtio_dev_socket,
-                    multi_touch_width,
-                    multi_touch_height,
-                    multi_touch_name,
-                    virtio::base_features(cfg.protection_type),
-                )
-                .context("failed to set up mouse device")?;
-                devs.push(VirtioDeviceStub {
-                    dev: Box::new(dev),
-                    jail: simple_jail(&cfg.jail_config, "input_device")?,
-                });
-                event_devices.push(EventDevice::touchscreen(event_device_socket));
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let display_param = if gpu_parameters.display_params.is_empty() {
+                        Default::default()
+                    } else {
+                        gpu_parameters.display_params[0].clone()
+                    };
+                    let (gpu_display_w, gpu_display_h) = display_param.get_virtual_display_size();
+
+                    let (event_device_socket, virtio_dev_socket) =
+                        StreamChannel::pair(BlockingMode::Nonblocking, FramingMode::Byte)
+                            .context("failed to create socket")?;
+                    let mut multi_touch_width = gpu_display_w;
+                    let mut multi_touch_height = gpu_display_h;
+                    let mut multi_touch_name = None;
+                    for input in &cfg.virtio_input {
+                        if let InputDeviceOption::MultiTouch {
+                            width,
+                            height,
+                            name,
+                            ..
+                        } = input
+                        {
+                            if let Some(width) = width {
+                                multi_touch_width = *width;
+                            }
+                            if let Some(height) = height {
+                                multi_touch_height = *height;
+                            }
+                            if let Some(name) = name {
+                                multi_touch_name = Some(name.as_str());
+                            }
+                            break;
+                        }
+                    }
+                    let dev = virtio::input::new_multi_touch(
+                        // u32::MAX is the least likely to collide with the indices generated above
+                        // for the multi_touch options, which begin at 0.
+                        u32::MAX,
+                        virtio_dev_socket,
+                        multi_touch_width,
+                        multi_touch_height,
+                        multi_touch_name,
+                        virtio::base_features(cfg.protection_type),
+                    )
+                    .context("failed to set up mouse device")?;
+                    devs.push(VirtioDeviceStub {
+                        dev: Box::new(dev),
+                        jail: simple_jail(&cfg.jail_config, "input_device")?,
+                    });
+                    event_devices.push(EventDevice::touchscreen(event_device_socket));
+                }
             }
             if cfg.display_window_keyboard {
                 let (event_device_socket, virtio_dev_socket) =
@@ -861,7 +892,7 @@ fn create_virtio_devices(
         devs.push(dev);
     }
 
-    #[cfg(feature = "audio")]
+    #[cfg(all(feature = "audio", not(target_os = "macos")))]
     if let Some(path) = &cfg.sound {
         devs.push(create_sound_device(
             path,
@@ -4252,6 +4283,21 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
         )?;
     }
 
+    // HVF cannot acknowledge device interrupts after its vCPUs have exited.
+    // Stop the IRQ worker first on macOS so pending device IRQs are ignored
+    // during device teardown instead of being injected into a stopped GIC.
+    #[cfg(target_os = "macos")]
+    {
+        eprintln!("crosvm: cleanup begin irq_handler");
+        if let Err(e) = irq_handler_control.send(&IrqHandlerRequest::Exit) {
+            error!("failed to request exit from IRQ handler thread: {}", e);
+        }
+        if let Err(e) = irq_handler_thread.join() {
+            error!("failed to exit irq handler thread: {:?}", e);
+        }
+        eprintln!("crosvm: cleanup done irq_handler");
+    }
+
     vcpu::kick_all_vcpus(
         &vcpu_handles,
         linux.irq_chip.as_irq_chip(),
@@ -4310,14 +4356,39 @@ fn run_control<V: VmArch + 'static, Vcpu: VcpuArch + 'static>(
     eprintln!("crosvm: cleanup done vm_memory_handler");
 
     // Shut down the IRQ handler thread.
-    eprintln!("crosvm: cleanup begin irq_handler");
-    if let Err(e) = irq_handler_control.send(&IrqHandlerRequest::Exit) {
-        error!("failed to request exit from IRQ handler thread: {}", e);
+    #[cfg(not(target_os = "macos"))]
+    {
+        eprintln!("crosvm: cleanup begin irq_handler");
+        if let Err(e) = irq_handler_control.send(&IrqHandlerRequest::Exit) {
+            error!("failed to request exit from IRQ handler thread: {}", e);
+        }
+        if let Err(e) = irq_handler_thread.join() {
+            error!("failed to exit irq handler thread: {:?}", e);
+        }
+        eprintln!("crosvm: cleanup done irq_handler");
     }
-    if let Err(e) = irq_handler_thread.join() {
-        error!("failed to exit irq handler thread: {:?}", e);
+
+    // Core VM threads are now stopped. Dropping the macOS PCI device graph can
+    // deadlock while joining renderer, block, or AppKit workers. The process is
+    // already terminating, so let the OS reclaim those workers and resources.
+    #[cfg(target_os = "macos")]
+    {
+        let status = match exit_state {
+            ExitState::Stop => 0,
+            ExitState::Reset => 32,
+            ExitState::Crash => 33,
+            ExitState::GuestPanic => 34,
+            ExitState::WatchdogReset => 36,
+        };
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+
+        // SAFETY: all state needed outside the terminating process has been
+        // flushed and the VM's core control threads have been joined.
+        unsafe {
+            libc::_exit(status);
+        }
     }
-    eprintln!("crosvm: cleanup done irq_handler");
 
     // At this point, the only remaining `Arc` references to the `Bus` objects should be the ones
     // inside `linux`. If the checks below fail, then some other thread is probably still running
@@ -4399,6 +4470,8 @@ fn irq_handler_thread(
             .add(evt, IrqHandlerToken::IrqFd { index: *index })
             .context("failed to add irq chip event tokens to wait context")?;
     }
+    #[cfg(target_os = "macos")]
+    let mut irq_event_tokens_enabled = true;
 
     let mut irq_control_tubes = BTreeMap::from_iter(irq_control_tubes.into_iter().enumerate());
     let mut next_control_id = irq_control_tubes.len();
@@ -4429,57 +4502,87 @@ fn irq_handler_thread(
             match event.token {
                 IrqHandlerToken::HandlerControl => {
                     match handler_control.recv::<IrqHandlerRequest>() {
-                        Ok(request) => {
-                            match request {
-                                IrqHandlerRequest::Exit => break 'wait,
-                                IrqHandlerRequest::AddIrqControlTubes(tubes) => {
-                                    for socket in tubes {
-                                        let id = next_control_id;
-                                        next_control_id += 1;
-                                        wait_ctx
+                        Ok(request) => match request {
+                            IrqHandlerRequest::Exit => break 'wait,
+                            IrqHandlerRequest::AddIrqControlTubes(tubes) => {
+                                for socket in tubes {
+                                    let id = next_control_id;
+                                    next_control_id += 1;
+                                    wait_ctx
                                         .add(
                                             socket.get_read_notifier(),
                                             IrqHandlerToken::VmIrq { id },
                                         )
-                                        .context("failed to add new IRQ control Tube to wait context")?;
-                                        irq_control_tubes.insert(id, socket);
-                                    }
-                                }
-                                IrqHandlerRequest::RefreshIrqEventTokens => {
-                                    for (_index, _gsi, evt) in irq_event_tokens.iter() {
-                                        wait_ctx.delete(evt).context(
-                                            "failed to remove irq chip event \
-                                                token from wait context",
+                                        .context(
+                                            "failed to add new IRQ control Tube to wait context",
                                         )?;
-                                    }
-
-                                    irq_event_tokens = irq_chip
-                                        .irq_event_tokens()
-                                        .context("failed get event tokens from irqchip")?;
-                                    for (index, _gsi, evt) in irq_event_tokens.iter() {
-                                        wait_ctx
-                                            .add(evt, IrqHandlerToken::IrqFd { index: *index })
-                                            .context(
-                                                "failed to add irq chip event \
-                                                tokens to wait context",
-                                            )?;
-                                    }
-
-                                    if let Err(e) = handler_control
-                                        .send(&IrqHandlerResponse::IrqEventTokenRefreshComplete)
-                                    {
-                                        error!(
-                                            "failed to notify IRQ event token refresh \
-                                            was completed: {}",
-                                            e
-                                        );
-                                    }
-                                }
-                                IrqHandlerRequest::WakeAndNotifyIteration => {
-                                    notify_control_on_iteration_end = true;
+                                    irq_control_tubes.insert(id, socket);
                                 }
                             }
-                        }
+                            IrqHandlerRequest::RefreshIrqEventTokens => {
+                                for (_index, _gsi, evt) in irq_event_tokens.iter() {
+                                    #[cfg(target_os = "macos")]
+                                    if !irq_event_tokens_enabled {
+                                        continue;
+                                    }
+                                    wait_ctx.delete(evt).context(
+                                        "failed to remove irq chip event \
+                                                token from wait context",
+                                    )?;
+                                }
+
+                                irq_event_tokens = irq_chip
+                                    .irq_event_tokens()
+                                    .context("failed get event tokens from irqchip")?;
+                                for (index, _gsi, evt) in irq_event_tokens.iter() {
+                                    #[cfg(target_os = "macos")]
+                                    if !irq_event_tokens_enabled {
+                                        continue;
+                                    }
+                                    wait_ctx
+                                        .add(evt, IrqHandlerToken::IrqFd { index: *index })
+                                        .context(
+                                            "failed to add irq chip event \
+                                                tokens to wait context",
+                                        )?;
+                                }
+
+                                if let Err(e) = handler_control
+                                    .send(&IrqHandlerResponse::IrqEventTokenRefreshComplete)
+                                {
+                                    error!(
+                                        "failed to notify IRQ event token refresh \
+                                            was completed: {}",
+                                        e
+                                    );
+                                }
+                            }
+                            #[cfg(target_os = "macos")]
+                            IrqHandlerRequest::SetIrqEventTokensEnabled(enabled) => {
+                                if enabled != irq_event_tokens_enabled {
+                                    for (index, _gsi, evt) in irq_event_tokens.iter() {
+                                        if enabled {
+                                            wait_ctx
+                                                .add(evt, IrqHandlerToken::IrqFd { index: *index })
+                                                .context("failed to enable IRQ event token")?;
+                                        } else {
+                                            wait_ctx
+                                                .delete(evt)
+                                                .context("failed to disable IRQ event token")?;
+                                        }
+                                    }
+                                    irq_event_tokens_enabled = enabled;
+                                }
+                                handler_control
+                                    .send(&IrqHandlerResponse::IrqEventTokensEnabled(
+                                        irq_event_tokens_enabled,
+                                    ))
+                                    .context("failed to acknowledge IRQ event token state")?;
+                            }
+                            IrqHandlerRequest::WakeAndNotifyIteration => {
+                                notify_control_on_iteration_end = true;
+                            }
+                        },
                         Err(e) => {
                             if let TubeError::Disconnected = e {
                                 warn!("irq handler control tube disconnected during teardown");
@@ -4497,12 +4600,17 @@ fn irq_handler_thread(
                             &mut irq_chip,
                             &mut vm_irq_tubes_to_remove,
                             &wait_ctx,
+                            &mut irq_event_tokens,
                             tube,
                             id,
                         );
                     }
                 }
                 IrqHandlerToken::IrqFd { index } => {
+                    #[cfg(target_os = "macos")]
+                    if !irq_event_tokens_enabled {
+                        continue;
+                    }
                     if let Err(e) = irq_chip.service_irq_event(index) {
                         error!("failed to signal irq {}: {}", index, e);
                     }
@@ -4548,14 +4656,40 @@ fn irq_handler_thread(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn refresh_macos_irq_event_tokens(
+    irq_chip: &mut Box<dyn IrqChipArch + 'static>,
+    wait_ctx: &WaitContext<IrqHandlerToken>,
+    irq_event_tokens: &mut Vec<(IrqEventIndex, IrqEventSource, Event)>,
+) -> base::Result<()> {
+    // kqueue removes an EVFILT_READ registration when the exact descriptor
+    // used for EV_ADD is closed. Dynamic MSI/MSI-X requests carry a temporary
+    // Event descriptor, so retain fresh irqchip-owned clones for as long as
+    // they are registered in the wait context.
+    for (_index, _source, evt) in irq_event_tokens.iter() {
+        wait_ctx.delete(evt)?;
+    }
+
+    let refreshed = irq_chip.irq_event_tokens()?;
+    for (index, _source, evt) in refreshed.iter() {
+        wait_ctx.add(evt, IrqHandlerToken::IrqFd { index: *index })?;
+    }
+    *irq_event_tokens = refreshed;
+    Ok(())
+}
+
 fn handle_irq_tube_request(
     sys_allocator_mutex: &Arc<Mutex<SystemAllocator>>,
     irq_chip: &mut Box<dyn IrqChipArch + 'static>,
     vm_irq_tubes_to_remove: &mut Vec<usize>,
     wait_ctx: &WaitContext<IrqHandlerToken>,
+    irq_event_tokens: &mut Vec<(IrqEventIndex, IrqEventSource, Event)>,
     tube: &Tube,
     tube_index: usize,
 ) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = irq_event_tokens;
+
     match tube.recv::<VmIrqRequest>() {
         Ok(request) => {
             let response = {
@@ -4571,6 +4705,13 @@ fn handle_irq_tube_request(
                             if let Some(event_index) =
                                 irq_chip.register_edge_irq_event(irq, &irq_evt, source)?
                             {
+                                #[cfg(target_os = "macos")]
+                                refresh_macos_irq_event_tokens(
+                                    irq_chip,
+                                    wait_ctx,
+                                    irq_event_tokens,
+                                )?;
+                                #[cfg(not(target_os = "macos"))]
                                 if let Err(e) =
                                     wait_ctx.add(ev, IrqHandlerToken::IrqFd { index: event_index })
                                 {
@@ -4583,7 +4724,10 @@ fn handle_irq_tube_request(
                         IrqSetup::Route(route) => irq_chip.route_irq(route),
                         IrqSetup::UnRegister(irq, ev) => {
                             let irq_evt = devices::IrqEdgeEvent::from_event(ev.try_clone()?);
-                            irq_chip.unregister_edge_irq_event(irq, &irq_evt)
+                            irq_chip.unregister_edge_irq_event(irq, &irq_evt)?;
+                            #[cfg(target_os = "macos")]
+                            refresh_macos_irq_event_tokens(irq_chip, wait_ctx, irq_event_tokens)?;
+                            Ok(())
                         }
                     },
                     &mut sys_allocator_mutex.lock(),

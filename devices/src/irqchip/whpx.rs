@@ -450,7 +450,7 @@ impl IrqChip for WhpxSplitIrqChip {
                             ioapic.service_irq(pin as usize, false);
                             asserted
                         };
-                        info!(
+                        debug!(
                             "whpx: IOAPIC pin={} injected={} resample={}",
                             pin,
                             injected,
@@ -578,7 +578,7 @@ impl IrqChip for WhpxSplitIrqChip {
             if let Some(vector) = vector {
                 match vcpu.interrupt(vector) {
                     Ok(()) => {
-                        info!("whpx: direct APIC vcpu.interrupt vector={:#x}", vector);
+                        debug!("whpx: direct APIC vcpu.interrupt vector={:#x}", vector);
                         *self.pending_apic_interrupt.lock() = None;
                         vcpu_ready = false;
                     }
@@ -608,7 +608,7 @@ impl IrqChip for WhpxSplitIrqChip {
             if let Some(vector) = self.get_external_interrupt(vcpu_id)? {
                 match vcpu.interrupt(vector) {
                     Ok(()) => {
-                        info!("whpx: PIC vcpu.interrupt vector={:#x}", vector);
+                        debug!("whpx: PIC vcpu.interrupt vector={:#x}", vector);
                         vcpu_ready = false;
                     }
                     Err(e) if e.errno() == libc::EINVAL => {

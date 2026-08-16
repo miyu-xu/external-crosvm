@@ -7,6 +7,8 @@ use std::mem;
 use std::ops::ControlFlow;
 use std::ptr::null;
 use std::ptr::null_mut;
+use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -93,6 +95,15 @@ pub(crate) struct MouseInputManager {
     /// would want to accumulate it until `WHEEL_DELTA` is reached.
     accumulated_wheel_delta: i16,
     mouse_mode: MouseMode,
+    // Linux type-B slots are stable while tracking IDs identify distinct contacts. Keep slot zero
+    // for the host mouse but allocate a new tracking ID for each drag, matching the macOS path.
+    next_primary_tracking_id: i32,
+    active_primary_tracking_id: Option<i32>,
+    // WM_MOUSEMOVE may arrive substantially faster than the guest display can consume input and
+    // produce frames. Coalesce motion to the configured display cadence while preserving the
+    // final coordinate on button-up.
+    touch_move_interval: Duration,
+    last_primary_touch_move: Option<Instant>,
     /// Used to transform coordinates from the host window space to the virtual device space
     transform: Transform2D<f64, HostWindowSpace, VirtualDisplaySpace>,
     /// A 2D box in virtual device coordinate space. If a touch event happens outside the box, the
@@ -105,6 +116,7 @@ impl MouseInputManager {
         _window: &GuiWindow,
         transform: Transform2D<f64, HostWindowSpace, VirtualDisplaySpace>,
         virtual_display_size: Size2D<u32, VirtualDisplaySpace>,
+        display_refresh_rate: u32,
         display_event_dispatcher: DisplayEventDispatcher,
     ) -> Self {
         let virtual_display_box = Box2D::new(
@@ -117,6 +129,12 @@ impl MouseInputManager {
             mouse_pos: None,
             accumulated_wheel_delta: 0,
             mouse_mode: MouseMode::Touchscreen,
+            next_primary_tracking_id: 0,
+            active_primary_tracking_id: None,
+            touch_move_interval: Duration::from_nanos(
+                1_000_000_000 / u64::from(display_refresh_rate.clamp(30, 240)),
+            ),
+            last_primary_touch_move: None,
             transform,
             virtual_display_box,
         }
@@ -288,9 +306,9 @@ impl MouseInputManager {
         Some(pos.round().to_i32())
     }
 
-    /// Takes a down or up event and converts it into suitable multi touch events. Those events are
-    /// then dispatched to the guest. Note that a "click" and movement of the cursor with a button
-    /// down are represented as the same event.
+    /// Converts the mouse-backed primary contact into Linux type-B multitouch reports. Contact
+    /// begin/end carry tracking state, while movement of an existing contact carries coordinates
+    /// only.
     fn handle_multi_touch_finger(
         &mut self,
         window: &GuiWindow,
@@ -302,19 +320,50 @@ impl MouseInputManager {
             Some(pos) => pos,
             None => return,
         };
-        if pressed {
+        if pressed && self.active_primary_tracking_id.is_none() {
+            let tracking_id = self.next_primary_tracking_id;
+            self.next_primary_tracking_id = tracking_id.wrapping_add(1) & i32::MAX;
             self.display_event_dispatcher.dispatch(
                 window,
                 &[
                     virtio_input_event::multitouch_slot(finger_id),
-                    virtio_input_event::multitouch_tracking_id(finger_id),
+                    virtio_input_event::multitouch_tracking_id(tracking_id),
                     virtio_input_event::multitouch_absolute_x(pos.x),
                     virtio_input_event::multitouch_absolute_y(pos.y),
-                    virtio_input_event::touch(pressed),
+                    virtio_input_event::touch(true),
                 ],
                 EventDeviceKind::Touchscreen,
             );
-        } else {
+            self.active_primary_tracking_id = Some(tracking_id);
+            self.last_primary_touch_move = Some(Instant::now());
+        } else if pressed {
+            self.display_event_dispatcher.dispatch(
+                window,
+                &[
+                    virtio_input_event::multitouch_slot(finger_id),
+                    // Linux type-B keeps tracking state active until an explicit -1 report. Do
+                    // not repeat tracking ID or BTN_TOUCH for every Win32 move: the Windows
+                    // dispatcher turns each batch into a separate SYN report, and Android 15's
+                    // InputReader/HWUI path exhibits long stalls when that contact state is
+                    // redundantly replayed. macOS batches through a different Cocoa queue, so
+                    // parity is the stable contact lifecycle, not byte-for-byte event fields.
+                    virtio_input_event::multitouch_absolute_x(pos.x),
+                    virtio_input_event::multitouch_absolute_y(pos.y),
+                ],
+                EventDeviceKind::Touchscreen,
+            );
+        } else if self.active_primary_tracking_id.is_some() {
+            // A throttled move may hold the newest coordinate. Commit the button-up coordinate
+            // before ending the contact so the guest observes the exact drag endpoint.
+            self.display_event_dispatcher.dispatch(
+                window,
+                &[
+                    virtio_input_event::multitouch_slot(finger_id),
+                    virtio_input_event::multitouch_absolute_x(pos.x),
+                    virtio_input_event::multitouch_absolute_y(pos.y),
+                ],
+                EventDeviceKind::Touchscreen,
+            );
             self.display_event_dispatcher.dispatch(
                 window,
                 &[
@@ -324,6 +373,8 @@ impl MouseInputManager {
                 ],
                 EventDeviceKind::Touchscreen,
             );
+            self.active_primary_tracking_id = None;
+            self.last_primary_touch_move = None;
         }
     }
 
@@ -337,8 +388,30 @@ impl MouseInputManager {
         left_down: bool,
     ) {
         if let MouseMode::Touchscreen { .. } = self.mouse_mode {
-            if left_down {
-                self.handle_multi_touch_finger(window, pos, left_down, PRIMARY_FINGER_ID);
+            if left_down && self.active_primary_tracking_id.is_some() {
+                let now = Instant::now();
+                let cadence_origin = self.last_primary_touch_move;
+                let elapsed = cadence_origin.map(|last| now.duration_since(last));
+                if elapsed.is_none_or(|elapsed| elapsed >= self.touch_move_interval) {
+                    self.handle_multi_touch_finger(window, pos, true, PRIMARY_FINGER_ID);
+                    // Preserve the fractional cadence remainder instead of restarting the clock at
+                    // the host event that happened to cross the threshold. A common 125 Hz mouse
+                    // reports every 8 ms; resetting at that event turns a 16.7 ms display cadence
+                    // into one report every 24 ms (~41.7 Hz), which looks like dropped frames even
+                    // though every submitted gfxstream frame is valid. Advance by whole display
+                    // intervals so the next event can consume the retained remainder. Long idle
+                    // gaps still produce only one guest report and cannot create a catch-up burst.
+                    self.last_primary_touch_move = cadence_origin
+                        .zip(elapsed)
+                        .and_then(|(last, elapsed)| {
+                            let interval_nanos = self.touch_move_interval.as_nanos().max(1);
+                            let intervals = (elapsed.as_nanos() / interval_nanos)
+                                .clamp(1, u128::from(u32::MAX))
+                                as u32;
+                            last.checked_add(self.touch_move_interval.saturating_mul(intervals))
+                        })
+                        .or(Some(now));
+                }
             }
         }
     }
@@ -434,6 +507,19 @@ impl MouseInputManager {
             return;
         }
 
+        if self.active_primary_tracking_id.is_some() {
+            self.display_event_dispatcher.dispatch(
+                window,
+                &[
+                    virtio_input_event::multitouch_slot(PRIMARY_FINGER_ID),
+                    virtio_input_event::multitouch_tracking_id(-1),
+                    virtio_input_event::touch(false),
+                ],
+                EventDeviceKind::Touchscreen,
+            );
+            self.active_primary_tracking_id = None;
+            self.last_primary_touch_move = None;
+        }
         self.mouse_mode = mode;
         self.mouse_pos = None;
         if let Err(e) = self.adjust_cursor_capture(window) {

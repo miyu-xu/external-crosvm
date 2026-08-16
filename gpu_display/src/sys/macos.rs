@@ -43,6 +43,6 @@ impl MacGpuDisplayExt for GpuDisplay {}
 
 impl AsRawDescriptor for GpuDisplay {
     fn as_raw_descriptor(&self) -> RawDescriptor {
-        self.wait_ctx.as_raw_descriptor()
+        self.inner.as_raw_descriptor()
     }
 }

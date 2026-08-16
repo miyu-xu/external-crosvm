@@ -680,20 +680,20 @@ impl VirtioPciDevice {
             })
             .collect::<anyhow::Result<BTreeMap<usize, Queue>>>()?;
 
-        info!(
+        debug!(
             "VHOST-PCI: calling device.activate for {}",
             self.debug_label()
         );
         if let Err(e) = self.device.activate(self.mem.clone(), interrupt, queues) {
             error!("{} activate failed: {:#}", self.debug_label(), e);
-            info!(
+            debug!(
                 "VHOST-PCI: device.activate FAILED for {}: {:#}",
                 self.debug_label(),
                 e
             );
             self.common_config.driver_status |= VIRTIO_CONFIG_S_NEEDS_RESET as u8;
         } else {
-            info!(
+            debug!(
                 "VHOST-PCI: device.activate SUCCESS for {}",
                 self.debug_label()
             );
@@ -955,7 +955,7 @@ impl PciDevice for VirtioPciDevice {
         static WB_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = WB_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if n < 30 {
-            info!(
+            debug!(
                 "WRITE-BAR #{}: {} bar={} offset=0x{:x} size={} data={:02x?} activated={}",
                 n,
                 self.debug_label(),
@@ -981,7 +981,7 @@ impl PciDevice for VirtioPciDevice {
                     );
                     let new_status = self.common_config.driver_status;
                     if offset_in_config == 20 || old_status != new_status {
-                        info!("VHOST-PCI: {} write_bar common offset={} data={:02x?} status:{:02x}->{:02x} ready={} activated={}",
+                        debug!("VHOST-PCI: {} write_bar common offset={} data={:02x?} status:{:02x}->{:02x} ready={} activated={}",
                             self.debug_label(), offset_in_config, data, old_status, new_status,
                             self.is_driver_ready(), self.device_activated);
                     }
@@ -1006,7 +1006,7 @@ impl PciDevice for VirtioPciDevice {
                     // triggers its event, which is equivalent to what the ioevent would do.
                     let queue_index = (offset - NOTIFICATION_BAR_OFFSET) as usize
                         / NOTIFY_OFF_MULTIPLIER as usize;
-                    info!(
+                    debug!(
                         "{} MMIO notification fallback for queue {}",
                         self.device.debug_label(),
                         queue_index
@@ -1038,19 +1038,19 @@ impl PciDevice for VirtioPciDevice {
         }
 
         if !self.device_activated && self.is_driver_ready() {
-            info!(
+            debug!(
                 "VHOST-PCI: device {} is ready, calling activate",
                 self.debug_label()
             );
             if let Err(e) = self.activate() {
                 error!("failed to activate device: {:#}", e);
-                info!(
+                debug!(
                     "VHOST-PCI: activate FAILED for {}: {:#}",
                     self.debug_label(),
                     e
                 );
             } else {
-                info!("VHOST-PCI: activate SUCCESS for {}", self.debug_label());
+                debug!("VHOST-PCI: activate SUCCESS for {}", self.debug_label());
             }
         }
 

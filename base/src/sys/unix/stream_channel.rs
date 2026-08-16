@@ -5,6 +5,8 @@
 use std::io;
 use std::io::Read;
 use std::os::unix::io::AsRawFd;
+#[cfg(target_os = "macos")]
+use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
@@ -150,6 +152,16 @@ impl StreamChannel {
     }
 
     pub fn from_unix_seqpacket(sock: UnixSeqpacket) -> StreamChannel {
+        #[cfg(target_os = "macos")]
+        {
+            // macOS implements UnixSeqpacket with SOCK_STREAM. Preserve message boundaries
+            // by selecting byte-stream framing, just like StreamChannel::pair does.
+            let stream = unsafe { UnixStream::from_raw_fd(sock.into_raw_descriptor()) };
+            StreamChannel {
+                stream: SocketType::Byte(stream),
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
         StreamChannel {
             stream: SocketType::Message(sock),
         }

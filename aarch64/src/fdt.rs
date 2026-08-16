@@ -545,7 +545,11 @@ fn create_pci_nodes(
         // CONTROLLER_DATA(3)
         interrupts.push(GIC_FDT_IRQ_TYPE_SPI);
         interrupts.push(*irq_num);
-        interrupts.push(IRQ_TYPE_LEVEL_HIGH);
+        interrupts.push(if cfg!(all(target_os = "macos", feature = "hvf")) {
+            IRQ_TYPE_EDGE_RISING
+        } else {
+            IRQ_TYPE_LEVEL_HIGH
+        });
 
         // PCI_DEVICE(3)
         masks.push(0xf800); // bits 11..15 (device)

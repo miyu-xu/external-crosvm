@@ -741,6 +741,15 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn parse_gpu_options_parent_window_handle() {
+        let gpu_params =
+            parse_gpu_options("displays=[[mode=windowed[800,600]]],parent-window-handle=305419896")
+                .unwrap();
+        assert_eq!(gpu_params.parent_window_handle, Some(0x1234_5678));
+    }
+
     #[test]
     fn parse_gpu_options_multi_display() {
         {

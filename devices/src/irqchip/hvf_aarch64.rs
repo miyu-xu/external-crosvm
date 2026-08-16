@@ -39,9 +39,7 @@ use crate::VcpuRunState;
 struct RegisteredIrq {
     gsi: u32,
     event: Event,
-    #[allow(dead_code)]
     resample_event: Option<Event>,
-    #[allow(dead_code)]
     level: bool,
     source: IrqEventSource,
 }
@@ -145,13 +143,11 @@ impl IrqChip for HvfKernelIrqChip {
         irq_event: &IrqLevelEvent,
         source: IrqEventSource,
     ) -> Result<Option<IrqEventIndex>> {
-        self.register_irq_event(
-            irq,
-            irq_event.get_trigger(),
-            Some(irq_event.get_resample()),
-            true,
-            source,
-        )
+        // PCI INTx lines are described as edge-triggered in the macOS/HVF guest FDT. Virtio
+        // already coalesces notifications until the guest clears the ISR, so an edge is enough
+        // and avoids holding a virtual GIC line high while waiting for an EOI notification that
+        // Hypervisor.framework does not expose.
+        self.register_irq_event(irq, irq_event.get_trigger(), None, false, source)
     }
 
     fn unregister_level_irq_event(&mut self, irq: u32, irq_event: &IrqLevelEvent) -> Result<()> {
@@ -212,14 +208,21 @@ impl IrqChip for HvfKernelIrqChip {
     }
 
     fn service_irq_event(&mut self, event_index: IrqEventIndex) -> Result<()> {
-        let gsi = {
+        let (gsi, is_level, resample_event) = {
             let irq_events = self.irq_events.lock();
             let evt = irq_events
                 .get(event_index)
                 .and_then(|s| s.as_ref())
                 .ok_or_else(|| Error::new(libc::EINVAL))?;
             evt.event.wait()?;
-            evt.gsi
+            (
+                evt.gsi,
+                evt.level,
+                evt.resample_event
+                    .as_ref()
+                    .map(Event::try_clone)
+                    .transpose()?,
+            )
         };
 
         let routes: Vec<IrqRoute> = self
@@ -232,7 +235,14 @@ impl IrqChip for HvfKernelIrqChip {
 
         if routes.is_empty() {
             let intid = Self::gsi_to_spi_intid(gsi);
-            return self.vm.set_gic_spi(intid, true);
+            self.vm.set_gic_spi(intid, true)?;
+            if is_level {
+                self.vm.set_gic_spi(intid, false)?;
+                resample_event
+                    .ok_or_else(|| Error::new(libc::EINVAL))?
+                    .signal()?;
+            }
+            return Ok(());
         }
 
         for route in routes {
@@ -246,6 +256,9 @@ impl IrqChip for HvfKernelIrqChip {
                 } => {
                     let intid = Self::gsi_to_spi_intid(pin);
                     self.vm.set_gic_spi(intid, true)?;
+                    if is_level {
+                        self.vm.set_gic_spi(intid, false)?;
+                    }
                 }
                 _ => {
                     error!(
@@ -255,6 +268,11 @@ impl IrqChip for HvfKernelIrqChip {
                     return Err(Error::new(libc::EINVAL));
                 }
             }
+        }
+        if is_level {
+            resample_event
+                .ok_or_else(|| Error::new(libc::EINVAL))?
+                .signal()?;
         }
         Ok(())
     }

@@ -3,10 +3,10 @@
 // found in the LICENSE file.
 
 use std::ffi::CString;
-use std::mem::MaybeUninit;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::RawHandle;
 use std::ptr::null;
+use std::ptr::null_mut;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -200,7 +200,7 @@ impl PlatformEvent {
     }
 
     pub fn try_clone(&self) -> Result<PlatformEvent> {
-        let mut event_clone: HANDLE = MaybeUninit::uninit().as_mut_ptr();
+        let mut event_clone: HANDLE = null_mut();
         // SAFETY: Safe because return value is checked.
         let duplicate_result = unsafe {
             DuplicateHandle(

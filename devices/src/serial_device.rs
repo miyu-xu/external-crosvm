@@ -205,12 +205,7 @@ impl SerialParameters {
             && windows_named_pipe_path(self.path.as_ref())
             && windows_named_pipe_path(self.input.as_ref())
         {
-            return create_dual_namedpipe_serial_device(
-                self,
-                protection_type,
-                evt,
-                keep_rds,
-            );
+            return create_dual_namedpipe_serial_device(self, protection_type, evt, keep_rds);
         }
         let input: Option<Box<dyn SerialInput>> = if let Some(input_path) = &self.input {
             let input_path = input_path.as_path();
@@ -244,9 +239,19 @@ impl SerialParameters {
             }
             SerialType::File => match &self.path {
                 Some(path) => {
-                    let file =
-                        open_file_or_duplicate(path, OpenOptions::new().append(true).create(true))
-                            .map_err(|e| Error::FileCreate(e.into(), path.clone()))?;
+                    let mut options = OpenOptions::new();
+                    #[cfg(windows)]
+                    if windows_named_pipe_path(Some(path)) {
+                        // Named pipes do not grant FILE_APPEND_DATA. Asking for append access can
+                        // connect successfully but every WriteFile then fails with ACCESS_DENIED.
+                        options.write(true);
+                    } else {
+                        options.append(true).create(true);
+                    }
+                    #[cfg(not(windows))]
+                    options.append(true).create(true);
+                    let file = open_file_or_duplicate(path, &options)
+                        .map_err(|e| Error::FileCreate(e.into(), path.clone()))?;
                     let sync = file.try_clone().map_err(Error::FileClone)?;
 
                     keep_rds.push(file.as_raw_descriptor());

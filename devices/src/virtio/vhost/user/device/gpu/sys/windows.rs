@@ -13,6 +13,7 @@ use anyhow::Context;
 use argh::FromArgs;
 use base::error;
 use base::info;
+use base::named_pipes::PipeConnection;
 use base::Event;
 use base::FromRawDescriptor;
 use base::RawDescriptor;
@@ -168,6 +169,8 @@ pub struct Options {
 pub struct InputEventVmmConfig {
     // Pipes to receive input events on.
     pub multi_touch_pipes: Vec<StreamChannel>,
+    pub trackpad_pipes: Vec<PipeConnection>,
+    pub multi_touch_trackpad_pipes: Vec<PipeConnection>,
     pub mouse_pipes: Vec<StreamChannel>,
     pub keyboard_pipes: Vec<StreamChannel>,
 }

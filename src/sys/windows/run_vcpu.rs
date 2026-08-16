@@ -30,6 +30,7 @@ use arch::RunnableLinuxVm;
 use arch::VcpuAffinity;
 use arch::VcpuArch;
 use arch::VmArch;
+use base::debug;
 use base::error;
 use base::info;
 use base::set_audio_thread_priority;
@@ -864,64 +865,66 @@ where
                                 }
                             }
                         };
-                        let mut mmio_handler = |IoParams {
-                                                    address,
-                                                    mut size,
-                                                    operation,
-                                                }| {
-                            match operation {
-                                IoOperation::Read => {
-                                    let mut data = [0u8; 8];
-                                    if size > data.len() {
-                                        error!("unsupported MmioRead size of {} bytes", size);
-                                        size = data.len();
+                        let mut mmio_handler =
+                            |IoParams {
+                                 address,
+                                 mut size,
+                                 operation,
+                             }|
+                             -> BaseResult<Option<[u8; 8]>> {
+                                match operation {
+                                    IoOperation::Read => {
+                                        let mut data = [0u8; 8];
+                                        if size > data.len() {
+                                            error!("unsupported MmioRead size of {} bytes", size);
+                                            size = data.len();
+                                        }
+                                        {
+                                            let data = &mut data[..size];
+                                            if !mmio_bus.read(address, data) {
+                                                vm.get_memory()
+                                                    .read_exact_at_addr(
+                                                        data,
+                                                        vm_memory::GuestAddress(address),
+                                                    )
+                                                    .unwrap_or_else(|e| {
+                                                        error!(
+                                                            "guest memory read failed at {:x}: {}",
+                                                            address, e
+                                                        )
+                                                    });
+                                            }
+                                        }
+                                        Ok(Some(data))
                                     }
-                                    {
-                                        let data = &mut data[..size];
-                                        if !mmio_bus.read(address, data) {
+                                    IoOperation::Write { data } => {
+                                        if size > data.len() {
+                                            error!("unsupported MmioWrite size of {} bytes", size);
+                                            size = data.len()
+                                        }
+                                        let data = &data[..size];
+                                        vm.handle_io_events(IoEventAddress::Mmio(address), data)
+                                        .unwrap_or_else(|e| error!(
+                                            "failed to handle ioevent for mmio write to {} on vcpu {}: {}",
+                                            address, context.cpu_id, e
+                                        ));
+                                        if !mmio_bus.write(address, data) {
                                             vm.get_memory()
-                                                .read_exact_at_addr(
+                                                .write_all_at_addr(
                                                     data,
                                                     vm_memory::GuestAddress(address),
                                                 )
                                                 .unwrap_or_else(|e| {
                                                     error!(
-                                                        "guest memory read failed at {:x}: {}",
+                                                        "guest memory write failed at {:x}: {}",
                                                         address, e
                                                     )
                                                 });
                                         }
+                                        Ok(None)
                                     }
-                                    Ok(Some(data))
                                 }
-                                IoOperation::Write { data } => {
-                                    if size > data.len() {
-                                        error!("unsupported MmioWrite size of {} bytes", size);
-                                        size = data.len()
-                                    }
-                                    let data = &data[..size];
-                                    vm.handle_io_events(IoEventAddress::Mmio(address), data)
-                                        .unwrap_or_else(|e| error!(
-                                            "failed to handle ioevent for mmio write to {} on vcpu {}: {}",
-                                            address, context.cpu_id, e
-                                        ));
-                                    if !mmio_bus.write(address, data) {
-                                        vm.get_memory()
-                                            .write_all_at_addr(
-                                                data,
-                                                vm_memory::GuestAddress(address),
-                                            )
-                                            .unwrap_or_else(|e| {
-                                                error!(
-                                                    "guest memory write failed at {:x}: {}",
-                                                    address, e
-                                                )
-                                            });
-                                    }
-                                    Ok(None)
-                                }
-                            }
-                        };
+                            };
                         #[cfg(feature = "whpx")]
                         {
                             let vcpu_arch: &mut dyn VcpuArch = &mut vcpu;
@@ -944,7 +947,7 @@ where
                         std::sync::atomic::AtomicU32::new(0);
                     let n = MMIO_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if n < 5 || n % 500 == 0 {
-                        info!("MMIO-EXIT #{}", n);
+                        debug!("MMIO-EXIT #{}", n);
                     }
                     #[cfg(all(feature = "whpx", target_arch = "x86_64"))]
                     let intr_state = {
@@ -1001,7 +1004,7 @@ where
                                 static MMIO_WRITE_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                                 let count = MMIO_WRITE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 if count < 20 || count % 1000 == 0 {
-                                    info!("MMIO-WRITE #{}: addr=0x{:x} size={} data={:02x?}", count, address, size, &data[..size.min(8)]);
+                                    debug!("MMIO-WRITE #{}: addr=0x{:x} size={} data={:02x?}", count, address, size, &data[..size.min(8)]);
                                 }
                                 let bus_write_ok = mmio_bus.write(address, data);
                                 if !bus_write_ok {

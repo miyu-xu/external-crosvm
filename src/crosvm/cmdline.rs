@@ -48,7 +48,7 @@ use devices::virtio::GpuMouseMode;
 use devices::virtio::GpuParameters;
 #[cfg(feature = "net")]
 use devices::virtio::NetParameters;
-#[cfg(all(unix, feature = "net"))]
+#[cfg(all(feature = "net", any(target_os = "android", target_os = "linux")))]
 use devices::virtio::NetParametersMode;
 use devices::FwCfgParameters;
 use devices::PflashParameters;
@@ -566,9 +566,9 @@ pub enum CrossPlatformDevicesCommands {
     Block(device::BlockOptions),
     #[cfg(feature = "gpu")]
     Gpu(device::GpuOptions),
-    #[cfg(feature = "net")]
+    #[cfg(all(feature = "net", not(target_os = "macos")))]
     Net(device::NetOptions),
-    #[cfg(feature = "audio")]
+    #[cfg(all(feature = "audio", not(target_os = "macos")))]
     Snd(device::SndOptions),
 }
 
@@ -585,6 +585,7 @@ pub enum GpuSubCommand {
     AddDisplays(GpuAddDisplaysCommand),
     ListDisplays(GpuListDisplaysCommand),
     RemoveDisplays(GpuRemoveDisplaysCommand),
+    ReplaceDisplay(GpuReplaceDisplayCommand),
     SetDisplayMouseMode(GpuSetDisplayMouseModeCommand),
 }
 
@@ -620,6 +621,22 @@ pub struct GpuRemoveDisplaysCommand {
     #[argh(option)]
     /// display id
     pub display_id: Vec<u32>,
+    #[argh(positional, arg_name = "VM_SOCKET")]
+    /// VM Socket path
+    pub socket_path: String,
+}
+
+#[cfg(feature = "gpu")]
+#[derive(FromArgs)]
+/// Atomically replace an attached GPU display while keeping its scanout id.
+#[argh(subcommand, name = "replace-display")]
+pub struct GpuReplaceDisplayCommand {
+    #[argh(option)]
+    /// display id
+    pub display_id: u32,
+    #[argh(option)]
+    /// replacement display parameters
+    pub gpu_display: GpuDisplayParameters,
     #[argh(positional, arg_name = "VM_SOCKET")]
     /// VM Socket path
     pub socket_path: String,
@@ -2603,8 +2620,9 @@ pub struct RunCommand {
     /// Possible key values:
     ///     capture=(false,true) - Disable/enable audio capture.
     ///         Default is false.
-    ///     backend=(null,file,[cras]) - Which backend to use for
-    ///         virtio-snd.
+    ///     backend=BACKEND - Which backend to use for virtio-snd. In addition
+    ///         to null and file, the system backend is platform-specific
+    ///         (cras, winaudio, or coreaudio).
     ///     client_type=(crosvm,arcvm,borealis) - Set specific
     ///         client type for cras backend. Default is crosvm.
     ///     socket_type=(legacy,unified) Set specific socket type
@@ -3343,7 +3361,7 @@ impl TryFrom<RunCommand> for super::config::Config {
             }
         }
 
-        #[cfg(all(unix, feature = "net"))]
+        #[cfg(all(feature = "net", any(target_os = "android", target_os = "linux")))]
         {
             use devices::virtio::VhostNetParameters;
             use devices::virtio::VHOST_NET_DEFAULT_PATH;
@@ -3455,6 +3473,19 @@ impl TryFrom<RunCommand> for super::config::Config {
                         log::warn!("the number of net vq pairs must not exceed the vcpu count, falling back to single queue mode");
                         net.vq_pairs = None;
                     }
+                }
+            }
+        }
+
+        #[cfg(all(target_os = "macos", feature = "hvf", feature = "net"))]
+        {
+            cfg.net = cmd.net;
+            for net in &mut cfg.net {
+                if net.vq_pairs.unwrap_or(1) != 1 {
+                    log::warn!(
+                        "vmnet.framework supports one queue pair; falling back to vq-pairs=1"
+                    );
+                    net.vq_pairs = Some(1);
                 }
             }
         }

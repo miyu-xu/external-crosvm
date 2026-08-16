@@ -56,6 +56,11 @@ pub struct GpuParameters {
     pub audio_device_mode: AudioDeviceMode,
     #[serde(rename = "displays")]
     pub display_params: Vec<DisplayParameters>,
+    /// Ephemeral host window handle used to embed the Windows GPU window.
+    ///
+    /// This is intentionally a launch-only backend parameter. Callers must not persist it because
+    /// native handles are valid only for the lifetime of their owning host process.
+    pub parent_window_handle: Option<u64>,
     // `width` and `height` are supported for CLI backwards compatibility.
     #[serde(rename = "width")]
     pub __width_compat: Option<u32>,
@@ -99,6 +104,7 @@ impl Default for GpuParameters {
             max_num_displays: default_max_num_displays(),
             audio_device_mode: default_audio_device_mode(),
             display_params: vec![],
+            parent_window_handle: None,
             __width_compat: None,
             __height_compat: None,
             renderer_use_egl: true,

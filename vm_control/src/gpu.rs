@@ -130,6 +130,10 @@ pub enum GpuControlCommand {
     RemoveDisplays {
         display_ids: Vec<u32>,
     },
+    ReplaceDisplay {
+        display_id: u32,
+        display: DisplayParameters,
+    },
     SetDisplayMouseMode {
         display_id: u32,
         mouse_mode: MouseMode,
@@ -234,6 +238,20 @@ pub fn do_gpu_display_remove<T: AsRef<Path> + std::fmt::Debug>(
     display_ids: Vec<u32>,
 ) -> ModifyGpuResult {
     let request = VmRequest::GpuCommand(GpuControlCommand::RemoveDisplays { display_ids });
+    handle_request(&request, control_socket_path)
+        .map_err(|_| ModifyGpuError::SocketFailed)?
+        .into()
+}
+
+pub fn do_gpu_display_replace<T: AsRef<Path> + std::fmt::Debug>(
+    control_socket_path: T,
+    display_id: u32,
+    display: DisplayParameters,
+) -> ModifyGpuResult {
+    let request = VmRequest::GpuCommand(GpuControlCommand::ReplaceDisplay {
+        display_id,
+        display,
+    });
     handle_request(&request, control_socket_path)
         .map_err(|_| ModifyGpuError::SocketFailed)?
         .into()

@@ -6,12 +6,23 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
+use std::fs;
 use std::io;
 use std::io::Read;
 use std::io::Write;
+use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::result;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use anyhow::Context;
@@ -79,8 +90,8 @@ pub enum VsockError {
     CloneDescriptor(SysError),
     #[error("Failed to create EventAsync: {0}")]
     CreateEventAsync(AsyncError),
-    #[error("Failed to create wait context: {0}")]
-    CreateWaitContext(SysError),
+    #[error("Failed to create host-initiated vsock listener: {0}")]
+    HostConnectListener(io::Error),
     #[error("Failed to read queue: {0}")]
     ReadQueue(io::Error),
     #[error("Failed to run executor: {0}")]
@@ -95,11 +106,6 @@ pub type Result<T> = result::Result<T, VsockError>;
 // Vsock has three virt IO queues: rx, tx, and event.
 const QUEUE_SIZE: u16 = 256;
 const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE, QUEUE_SIZE, QUEUE_SIZE];
-// We overload port numbers so that if message is to be received from
-// CONNECTION_EVENT_PORT_NUM (invalid port number), we recognize that a
-// new connection was set up.
-const CONNECTION_EVENT_PORT_NUM: u32 = u32::MAX;
-
 /// Number of bytes in a kilobyte. Used to simplify and clarify buffer size definitions.
 const KB: usize = 1024;
 
@@ -129,6 +135,9 @@ const MIN_FREE_BUFFER_PCT: f64 = 0.1;
 
 // Number of packets to buffer in the tx processing channels.
 const CHANNEL_SIZE: usize = 256;
+const HOST_CONNECT_MAGIC: &[u8; 4] = b"HDVS";
+const HOST_CONNECT_VERSION: u32 = 1;
+const HOST_CONNECT_HEADER_SIZE: usize = 12;
 
 type VsockConnectionMap = RwLock<HashMap<PortPair, VsockConnection>>;
 
@@ -392,6 +401,42 @@ struct VsockConnection {
     is_buffer_full: bool,
 }
 
+struct PendingHostConnection {
+    guest_port: u32,
+    host_stream: UnixStream,
+}
+
+struct AcceptedHostConnection {
+    guest_port: u32,
+    host_stream: UnixStream,
+}
+
+struct HostConnectListener {
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+    path: PathBuf,
+    endpoint_dev: u64,
+    endpoint_ino: u64,
+}
+
+impl Drop for HostConnectListener {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        if let Ok(metadata) = fs::symlink_metadata(&self.path) {
+            if metadata.file_type().is_socket()
+                && metadata.uid() == unsafe { libc::geteuid() }
+                && metadata.dev() == self.endpoint_dev
+                && metadata.ino() == self.endpoint_ino
+            {
+                let _ = fs::remove_file(&self.path);
+            }
+        }
+    }
+}
+
 struct Worker {
     mem: GuestMemory,
     interrupt: Interrupt,
@@ -399,6 +444,8 @@ struct Worker {
     guest_cid: u64,
     // Map of host port to a VsockConnection.
     connections: VsockConnectionMap,
+    pending_host_connections: RwLock<HashMap<PortPair, PendingHostConnection>>,
+    next_host_port: AtomicU32,
     connection_event: Event,
     device_event_queue_tx: mpsc::Sender<virtio_vsock_event>,
     device_event_queue_rx: Option<mpsc::Receiver<virtio_vsock_event>>,
@@ -406,6 +453,37 @@ struct Worker {
 }
 
 impl Worker {
+    async fn send_host_connection_reset(
+        &self,
+        port: PortPair,
+        recv_queue: &Arc<RwLock<Queue>>,
+        rx_queue_evt: &mut EventAsync,
+    ) -> Result<()> {
+        let reset_header = virtio_vsock_hdr {
+            src_cid: 2.into(),
+            dst_cid: self.guest_cid.into(),
+            src_port: Le32::from(port.host),
+            dst_port: Le32::from(port.guest),
+            len: 0.into(),
+            r#type: TYPE_STREAM_SOCKET.into(),
+            op: vsock_op::VIRTIO_VSOCK_OP_RST.into(),
+            buf_alloc: 0.into(),
+            fwd_cnt: 0.into(),
+            ..Default::default()
+        };
+        self.write_bytes_to_queue(
+            &mut *recv_queue.lock().await,
+            rx_queue_evt,
+            reset_header.as_bytes(),
+        )
+        .await?;
+        info!(
+            "vsock: port {}: reset guest after host connection closed",
+            port
+        );
+        Ok(())
+    }
+
     async fn write_host_bytes_to_guest(
         &self,
         port: PortPair,
@@ -466,11 +544,12 @@ impl Worker {
         stop_rx: &mut oneshot::Receiver<()>,
     ) -> Result<bool> {
         let mut ready = Vec::new();
+        let mut closed = Vec::new();
         {
             let mut connections = self.connections.lock().await;
             for (port, connection) in connections.iter_mut() {
-                let peer_free_buf_size =
-                    connection.peer_buf_alloc - (connection.tx_cnt - connection.peer_recv_cnt);
+                let outstanding = connection.tx_cnt.saturating_sub(connection.peer_recv_cnt);
+                let peer_free_buf_size = connection.peer_buf_alloc.saturating_sub(outstanding);
                 let max_read = peer_free_buf_size.min(TEMP_READ_BUF_SIZE_BYTES);
                 if max_read == 0 {
                     if !connection.is_buffer_full {
@@ -489,6 +568,7 @@ impl Worker {
                 match connection.host_stream.read(&mut buf[..max_read]) {
                     Ok(0) => {
                         info!("vsock: port {}: host closed connection (EOF)", port);
+                        closed.push(*port);
                     }
                     Ok(n) => {
                         info!("vsock: port {}: host -> guest {} bytes", port, n);
@@ -503,11 +583,19 @@ impl Worker {
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                     Err(e) => {
                         error!("vsock: port {}: read host socket: {}", port, e);
+                        closed.push(*port);
                     }
                 }
             }
         }
 
+        for port in &closed {
+            self.connections.lock().await.remove(port);
+        }
+        for port in closed {
+            self.send_host_connection_reset(port, recv_queue, rx_queue_evt)
+                .await?;
+        }
         let found_ready = !ready.is_empty();
         for (port, guest_port, buf_alloc, recv_cnt, data) in ready {
             self.write_host_bytes_to_guest(
@@ -546,11 +634,206 @@ impl Worker {
             host_guid,
             guest_cid,
             connections: existing_connections.unwrap_or_default(),
+            pending_host_connections: Default::default(),
+            next_host_port: AtomicU32::new(49152),
             connection_event: Event::new().unwrap(),
             device_event_queue_tx,
             device_event_queue_rx: Some(device_event_queue_rx),
             send_protocol_reset,
         }
+    }
+
+    fn host_connect_path(&self) -> PathBuf {
+        PathBuf::from(format!(
+            "/tmp/bscp_crosvm_vsock_{}.sock",
+            self.guest_cid as u32
+        ))
+    }
+
+    fn start_host_connect_listener(
+        &self,
+        mut accepted_tx: mpsc::Sender<AcceptedHostConnection>,
+    ) -> io::Result<HostConnectListener> {
+        let path = self.host_connect_path();
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_socket() || metadata.uid() != unsafe { libc::geteuid() }
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!(
+                            "refusing to replace unowned or non-socket host-vsock endpoint {}",
+                            path.display()
+                        ),
+                    ));
+                }
+                fs::remove_file(&path)?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        let listener = UnixListener::bind(&path)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        listener.set_nonblocking(true)?;
+        let endpoint_metadata = fs::symlink_metadata(&path)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let thread = thread::Builder::new()
+            .name(format!("vsock-host-connect-{}", self.guest_cid))
+            .spawn(move || {
+                while !thread_stop.load(Ordering::Acquire) {
+                    let (mut host_stream, _) = match listener.accept() {
+                        Ok(accepted) => accepted,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(250));
+                            continue;
+                        }
+                        Err(error) => {
+                            warn!("vsock: host-connect listener accept failed: {error}");
+                            break;
+                        }
+                    };
+                    if let Err(error) =
+                        host_stream.set_read_timeout(Some(Duration::from_secs(2)))
+                    {
+                        warn!("vsock: failed to set host-connect header timeout: {error}");
+                        continue;
+                    }
+                    let mut header = [0_u8; HOST_CONNECT_HEADER_SIZE];
+                    if let Err(error) = host_stream.read_exact(&mut header) {
+                        warn!("vsock: failed to read host-connect header: {error}");
+                        continue;
+                    }
+                    if &header[..4] != HOST_CONNECT_MAGIC {
+                        warn!("vsock: rejected host-connect request with invalid magic");
+                        continue;
+                    }
+                    let version = u32::from_be_bytes(header[4..8].try_into().unwrap());
+                    let guest_port = u32::from_be_bytes(header[8..12].try_into().unwrap());
+                    if version != HOST_CONNECT_VERSION || guest_port < 1024 {
+                        warn!(
+                            "vsock: rejected host-connect request version={version} guest_port={guest_port}"
+                        );
+                        continue;
+                    }
+                    if let Err(error) = host_stream.set_read_timeout(None) {
+                        warn!("vsock: failed to clear host-connect header timeout: {error}");
+                        continue;
+                    }
+                    if let Err(error) = host_stream.set_nonblocking(true) {
+                        warn!("vsock: failed to make host-connect stream nonblocking: {error}");
+                        continue;
+                    }
+                    if let Err(error) = accepted_tx.try_send(AcceptedHostConnection {
+                        guest_port,
+                        host_stream,
+                    }) {
+                        warn!("vsock: dropping host-connect request: {error}");
+                    }
+                }
+            })?;
+
+        info!(
+            "vsock: listening for host-initiated connections on {}",
+            path.display()
+        );
+        Ok(HostConnectListener {
+            stop,
+            thread: Some(thread),
+            path,
+            endpoint_dev: endpoint_metadata.dev(),
+            endpoint_ino: endpoint_metadata.ino(),
+        })
+    }
+
+    async fn process_host_connects(
+        &self,
+        recv_queue: Arc<RwLock<Queue>>,
+        mut rx_queue_evt: EventAsync,
+        mut accepted_rx: mpsc::Receiver<AcceptedHostConnection>,
+        mut stop_rx: oneshot::Receiver<()>,
+    ) -> Result<()> {
+        loop {
+            let accepted = select_biased! {
+                accepted = accepted_rx.next() => accepted,
+                _ = stop_rx => break,
+            };
+            let Some(accepted) = accepted else {
+                break;
+            };
+            let guest_port_busy = self
+                .connections
+                .read_lock()
+                .await
+                .keys()
+                .any(|port| port.guest == accepted.guest_port)
+                || self
+                    .pending_host_connections
+                    .read_lock()
+                    .await
+                    .keys()
+                    .any(|port| port.guest == accepted.guest_port);
+            if guest_port_busy {
+                warn!(
+                    "vsock: guest port {} already has an active or pending host connection",
+                    accepted.guest_port
+                );
+                continue;
+            }
+
+            let host_port = loop {
+                let candidate = self.next_host_port.fetch_add(1, Ordering::Relaxed);
+                let candidate = if candidate < 49152 { 49152 } else { candidate };
+                let port = PortPair {
+                    host: candidate,
+                    guest: accepted.guest_port,
+                };
+                if !self.connections.read_lock().await.contains_key(&port)
+                    && !self
+                        .pending_host_connections
+                        .read_lock()
+                        .await
+                        .contains_key(&port)
+                {
+                    break candidate;
+                }
+            };
+            let port = PortPair {
+                host: host_port,
+                guest: accepted.guest_port,
+            };
+            self.pending_host_connections.lock().await.insert(
+                port,
+                PendingHostConnection {
+                    guest_port: accepted.guest_port,
+                    host_stream: accepted.host_stream,
+                },
+            );
+            let request_header = virtio_vsock_hdr {
+                src_cid: 2.into(),
+                dst_cid: self.guest_cid.into(),
+                src_port: Le32::from(port.host),
+                dst_port: Le32::from(port.guest),
+                len: 0.into(),
+                r#type: TYPE_STREAM_SOCKET.into(),
+                op: vsock_op::VIRTIO_VSOCK_OP_REQUEST.into(),
+                buf_alloc: Le32::from(DEFAULT_BUF_ALLOC_BYTES as u32),
+                fwd_cnt: 0.into(),
+                ..Default::default()
+            };
+            self.write_bytes_to_queue(
+                &mut *recv_queue.lock().await,
+                &mut rx_queue_evt,
+                request_header.as_bytes(),
+            )
+            .await?;
+            info!(
+                "vsock: port {}: sent host-initiated connection request",
+                port
+            );
+        }
+        Ok(())
     }
 
     async fn process_rx_queue(
@@ -567,137 +850,63 @@ impl Worker {
             {
                 continue 'connections_changed;
             }
-
-            let mut futures: FuturesUnordered<
-                std::pin::Pin<
-                    Box<
-                        dyn std::future::Future<Output = result::Result<PortPair, VsockError>>
-                            + Send,
-                    >,
-                >,
-            > = FuturesUnordered::new();
-            {
-                let connections = self.connections.read_lock().await;
-                for (port, connection) in connections.iter() {
-                    let stream = connection.host_stream.try_clone().map_err(|e| {
-                        error!("vsock: could not clone host socket fd: {}", e);
-                        VsockError::CloneDescriptor(e.into())
-                    })?;
-                    let ex = ex.clone();
-                    let port = *port;
-                    futures.push(Box::pin(async move {
-                        let io = ex.async_from(AsyncWrapper::new(stream)).map_err(|e| {
-                            error!("vsock: async_from for rx wait: {:?}", e);
-                            VsockError::RunExecutor(e)
-                        })?;
-                        io.wait_readable().await.map_err(|e| {
-                            error!("vsock: wait_readable: {:?}", e);
-                            VsockError::RunExecutor(e)
-                        })?;
-                        Ok(port)
-                    }));
-                }
+            if let Err(error) = self.connection_event.reset() {
+                warn!("vsock: failed to clear connection notification: {error}");
             }
-            let connection_evt_clone = self.connection_event.try_clone().map_err(|e| {
-                error!("Could not clone connection_event.");
-                VsockError::CloneDescriptor(e)
-            })?;
-            let connection_evt_async = EventAsync::new(connection_evt_clone, ex).map_err(|e| {
-                error!("Could not create EventAsync.");
-                VsockError::CreateEventAsync(e)
-            })?;
-            futures.push(Box::pin(async move {
-                let _ = connection_evt_async.next_val().await.map_err(|e| {
-                    error!("connection_event wait: {:?}", e);
-                    VsockError::RunExecutor(e)
-                })?;
-                Ok(PortPair {
-                    host: CONNECTION_EVENT_PORT_NUM,
-                    guest: 0,
-                })
-            }));
 
-            let futures_len = futures.len();
-            let mut ready_chunks = futures.ready_chunks(futures_len);
-            let ports = select_biased! {
-                ports = ready_chunks.next() => {
-                    ports.expect("failed to wait on vsock sockets")
-                }
+            // Keep the readiness registrations inside one bounded blocking poll. Async socket
+            // futures on macOS retain kqueue registrations when canceled during virtio reset,
+            // while a 10 ms sleep loop wakes the executor one hundred times per second even when
+            // ADB is idle. poll(2) provides event-driven wakeups and its one-second bound lets a
+            // reset retire the blocking task without leaking descriptors or threads.
+            let connection_event = self.connection_event.try_clone().map_err(|error| {
+                error!("Could not clone connection_event.");
+                VsockError::CloneDescriptor(error)
+            })?;
+            let sockets = {
+                let connections = self.connections.read_lock().await;
+                connections
+                    .values()
+                    .map(|connection| {
+                        connection.host_stream.try_clone().map_err(|error| {
+                            error!("vsock: could not clone host socket fd: {error}");
+                            VsockError::CloneDescriptor(error.into())
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            };
+            let wait = ex
+                .spawn_blocking(move || {
+                    let mut poll_fds = Vec::with_capacity(sockets.len() + 1);
+                    poll_fds.push(libc::pollfd {
+                        fd: connection_event.as_raw_descriptor(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    });
+                    poll_fds.extend(sockets.iter().map(|socket| libc::pollfd {
+                        fd: socket.as_raw_descriptor(),
+                        events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+                        revents: 0,
+                    }));
+                    loop {
+                        // SAFETY: poll_fds owns valid descriptors for the duration of this call.
+                        let result = unsafe {
+                            libc::poll(poll_fds.as_mut_ptr(), poll_fds.len() as libc::nfds_t, 1_000)
+                        };
+                        if result >= 0
+                            || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted
+                        {
+                            break;
+                        }
+                    }
+                })
+                .fuse();
+            pin_mut!(wait);
+            select_biased! {
+                _ = wait => {}
                 _ = stop_rx => {
                     break;
                 }
-            };
-
-            for port in ports {
-                let port = match port {
-                    Ok(p) => p,
-                    Err(e) => {
-                        error!("vsock: socket wait future failed: {:?}", e);
-                        continue 'connections_changed;
-                    }
-                };
-                if port.host == CONNECTION_EVENT_PORT_NUM {
-                    #[cfg(not(target_os = "macos"))]
-                    if let Err(e) = self.connection_event.reset() {
-                        error!("vsock: could not reset connection_event: {:?}", e);
-                    }
-                    continue 'connections_changed;
-                }
-                let mut connections = self.connections.lock().await;
-                let connection = if let Some(conn) = connections.get_mut(&port) {
-                    conn
-                } else {
-                    continue 'connections_changed;
-                };
-
-                let peer_free_buf_size =
-                    connection.peer_buf_alloc - (connection.tx_cnt - connection.peer_recv_cnt);
-                let max_read = peer_free_buf_size.min(TEMP_READ_BUF_SIZE_BYTES);
-                if max_read == 0 {
-                    if !connection.is_buffer_full {
-                        warn!(
-                            "vsock: port {}: Peer has insufficient free buffer space ({} bytes available)",
-                            port, peer_free_buf_size
-                        );
-                        connection.is_buffer_full = true;
-                    }
-                    continue;
-                } else if connection.is_buffer_full {
-                    connection.is_buffer_full = false;
-                }
-
-                let guest_port = connection.guest_port;
-                let buf_alloc = connection.buf_alloc;
-                let recv_cnt = connection.recv_cnt;
-                let mut buf = [0u8; TEMP_READ_BUF_SIZE_BYTES];
-                let data_size = match connection.host_stream.read(&mut buf[..max_read]) {
-                    Ok(0) => {
-                        info!("vsock: port {}: host closed connection (EOF)", port);
-                        continue 'connections_changed;
-                    }
-                    Ok(n) => n,
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        continue 'connections_changed;
-                    }
-                    Err(e) => {
-                        error!("vsock: port {}: read host socket: {}", port, e);
-                        continue 'connections_changed;
-                    }
-                };
-                info!("vsock: port {}: host -> guest {} bytes", port, data_size);
-                let data_read = &buf[..data_size];
-                drop(connections);
-                self.write_host_bytes_to_guest(
-                    port,
-                    guest_port,
-                    buf_alloc,
-                    recv_cnt,
-                    data_read,
-                    &recv_queue,
-                    &mut rx_queue_evt,
-                    &mut stop_rx,
-                )
-                .await;
             }
         }
         Ok(())
@@ -756,7 +965,12 @@ impl Worker {
             }
 
             queue.add_used(avail_desc, 0);
-            queue.trigger_interrupt();
+            // Complete a burst with one interrupt instead of interrupting for every descriptor.
+            // The next asynchronous lookup returns immediately while more descriptors are
+            // available, so defer the notification until the available ring has been drained.
+            if queue.peek().is_none() {
+                queue.trigger_interrupt();
+            }
         }
 
         Ok(queue)
@@ -856,28 +1070,27 @@ impl Worker {
         let io = ex
             .async_from(AsyncWrapper::new(stream))
             .map_err(VsockError::RunExecutor)?;
-        let (written, _) = io
-            .write_from_vec(None, data.to_vec())
-            .await
-            .map_err(VsockError::RunExecutor)?;
-        info!("vsock: port {}: guest -> host {} bytes", port, written);
-        if written != data.len() {
-            return Err(VsockError::WriteFailed(
-                port,
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!(
-                        "port {} short write: expected {}, wrote {}",
-                        port,
-                        data.len(),
-                        written
+        let mut remaining = data.to_vec();
+        while !remaining.is_empty() {
+            let (written, mut buffer) = io
+                .write_from_vec(None, remaining)
+                .await
+                .map_err(VsockError::RunExecutor)?;
+            if written == 0 {
+                return Err(VsockError::WriteFailed(
+                    port,
+                    io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        format!("port {} wrote zero bytes to host socket", port),
                     ),
-                ),
-            ));
+                ));
+            }
+            remaining = buffer.split_off(written);
         }
+        info!("vsock: port {}: guest -> host {} bytes", port, data.len());
         let mut connections = self.connections.lock().await;
         if let Some(connection) = connections.get_mut(&port) {
-            connection.recv_cnt += written;
+            connection.recv_cnt += data.len();
         } else {
             error!(
                 "vsock: Guest attempted to send data packet over unconnected \
@@ -1081,10 +1294,52 @@ impl Worker {
                 );
             }
             vsock_op::VIRTIO_VSOCK_OP_RESPONSE => {
-                // TODO(b/237811512): Implement this for host-initiated connections
+                let pending = self.pending_host_connections.lock().await.remove(&port);
+                if let Some(pending) = pending {
+                    self.connections.lock().await.insert(
+                        port,
+                        VsockConnection {
+                            guest_port: Le32::from(pending.guest_port),
+                            host_stream: pending.host_stream,
+                            recv_cnt: 0,
+                            prev_recv_cnt: 0,
+                            buf_alloc: DEFAULT_BUF_ALLOC_BYTES,
+                            peer_recv_cnt: header.fwd_cnt.to_native() as usize,
+                            peer_buf_alloc: header.buf_alloc.to_native() as usize,
+                            tx_cnt: 0,
+                            is_buffer_full: false,
+                        },
+                    );
+                    self.connection_event.signal().unwrap_or_else(|_| {
+                        panic!(
+                            "Failed to signal host-initiated connection ready for {}",
+                            port
+                        )
+                    });
+                    info!(
+                        "vsock: port {}: host-initiated connection established",
+                        port
+                    );
+                } else {
+                    warn!(
+                        "vsock: port {}: unexpected response with no pending host connect",
+                        port
+                    );
+                }
             }
             vsock_op::VIRTIO_VSOCK_OP_RST => {
-                // TODO(b/237811512): Implement this for host-initiated connections
+                if self
+                    .pending_host_connections
+                    .lock()
+                    .await
+                    .remove(&port)
+                    .is_some()
+                {
+                    warn!(
+                        "vsock: port {}: guest rejected host-initiated connection",
+                        port
+                    );
+                }
             }
             vsock_op::VIRTIO_VSOCK_OP_SHUTDOWN => {
                 // While the header provides flags to specify tx/rx-specific shutdown,
@@ -1158,12 +1413,20 @@ impl Worker {
             vsock_op::VIRTIO_VSOCK_OP_CREDIT_UPDATE => {
                 let port = PortPair::from_tx_header(&header);
                 let mut connections = self.connections.lock().await;
-                if let Some(connection) = connections.get_mut(&port) {
+                let updated = if let Some(connection) = connections.get_mut(&port) {
                     connection.peer_recv_cnt = header.fwd_cnt.to_native() as usize;
                     connection.peer_buf_alloc = header.buf_alloc.to_native() as usize;
+                    true
                 } else {
                     error!("vsock: port {}: got credit update on unknown port", port);
                     is_open = false;
+                    false
+                };
+                drop(connections);
+                if updated {
+                    if let Err(err) = self.connection_event.signal() {
+                        error!("vsock: failed to wake RX after credit update: {}", err);
+                    }
                 }
             }
             // A request from our peer to get *our* buffer state. We reply to the RX queue.
@@ -1431,10 +1694,34 @@ impl Worker {
             pin_mut!(tx_handler);
 
             let stop_rx = create_stop_oneshot(&mut stop_queue_oneshots);
+            let packet_rx_queue_evt = rx_queue_evt
+                .try_clone()
+                .map_err(VsockError::CloneDescriptor)?;
             let packet_handler =
-                self.process_tx_packets(&rx_queue_arc, rx_queue_evt, recv, &ex, stop_rx);
+                self.process_tx_packets(&rx_queue_arc, packet_rx_queue_evt, recv, &ex, stop_rx);
             let packet_handler = packet_handler.fuse();
             pin_mut!(packet_handler);
+
+            let (accepted_host_connect_tx, accepted_host_connect_rx) = mpsc::channel(CHANNEL_SIZE);
+            let _host_connect_listener = self
+                .start_host_connect_listener(accepted_host_connect_tx)
+                .map_err(VsockError::HostConnectListener)?;
+            let stop_rx = create_stop_oneshot(&mut stop_queue_oneshots);
+            let host_connect_handler = self
+                .process_host_connects(
+                    rx_queue_arc.clone(),
+                    EventAsync::new(
+                        rx_queue_evt
+                            .try_clone()
+                            .map_err(VsockError::CloneDescriptor)?,
+                        &ex,
+                    )
+                    .expect("Failed to set up host connect rx queue event"),
+                    accepted_host_connect_rx,
+                    stop_rx,
+                )
+                .fuse();
+            pin_mut!(host_connect_handler);
 
             let event_evt_async = EventAsync::new(
                 event_queue
@@ -1479,6 +1766,7 @@ impl Worker {
                     _ = rx_handler => return Err(anyhow!("rx_handler stopped unexpetedly")),
                     _ = tx_handler => return Err(anyhow!("tx_handler stop unexpectedly.")),
                     _ = packet_handler => return Err(anyhow!("packet_handler stop unexpectedly.")),
+                    _ = host_connect_handler => return Err(anyhow!("host_connect_handler stopped unexpectedly.")),
                     _ = event_handler => return Err(anyhow!("event_handler stop unexpectedly.")),
                     _ = resample_handler => return Err(anyhow!("resample_handler stop unexpectedly.")),
                 }
@@ -1492,6 +1780,9 @@ impl Worker {
 
                 rx_handler.await.context("Failed to stop rx handler.")?;
                 packet_handler.await;
+                host_connect_handler
+                    .await
+                    .context("Failed to stop host connect handler.")?;
 
                 Ok((
                     tx_handler.await.context("Failed to stop tx handler.")?,

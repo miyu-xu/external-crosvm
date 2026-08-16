@@ -405,7 +405,7 @@ async fn process_one_chain(
             std::sync::atomic::AtomicU64::new(0);
         let n = COMPLETION_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if n < 5 || n % 500 == 0 {
-            base::info!("virtio-block: completion #{} len={} irq=true", n, len);
+            base::debug!("virtio-block: completion #{} len={} irq=true", n, len);
         }
     }
     #[cfg(not(windows))]

@@ -22,6 +22,7 @@ use std::thread;
 
 use anyhow::anyhow;
 use anyhow::Context;
+use base::debug;
 use base::error;
 use base::info;
 use base::named_pipes;
@@ -661,11 +662,32 @@ impl Worker {
                     Ok(size) => size as usize,
                     Err(e) => {
                         error!("vsock: port {}: Failed to read from pipe {}", port, e);
-                        // TODO(b/237278629): Close the connection if we fail to read.
+                        let buf_alloc = connection.buf_alloc;
+                        let recv_cnt = connection.recv_cnt;
+                        connections.remove(&port);
+                        drop(connections);
+                        let reset_header = virtio_vsock_hdr {
+                            src_cid: 2.into(),
+                            dst_cid: self.guest_cid.into(),
+                            src_port: Le32::from(port.host),
+                            dst_port: Le32::from(port.guest),
+                            len: 0.into(),
+                            r#type: TYPE_STREAM_SOCKET.into(),
+                            op: vsock_op::VIRTIO_VSOCK_OP_RST.into(),
+                            buf_alloc: Le32::from(buf_alloc as u32),
+                            fwd_cnt: Le32::from(recv_cnt as u32),
+                            ..Default::default()
+                        };
+                        self.write_bytes_to_queue(
+                            &mut *recv_queue.lock().await,
+                            &mut rx_queue_evt,
+                            reset_header.as_bytes(),
+                        )
+                        .await?;
                         continue 'connections_changed;
                     }
                 };
-                info!("vsock: port {}: read {} raw host bytes", port, data_size);
+                debug!("vsock: port {}: read {} raw host bytes", port, data_size);
 
                 connection.prev_recv_cnt = connection.recv_cnt;
 
@@ -1188,7 +1210,7 @@ impl Worker {
         ex: &Executor,
     ) -> Result<()> {
         let port = PortPair::from_tx_header(&header);
-        info!(
+        debug!(
             "vsock: port {}: guest data op={} len={}",
             port,
             header.op.to_native(),

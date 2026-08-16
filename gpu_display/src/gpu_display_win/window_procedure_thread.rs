@@ -238,12 +238,18 @@ impl WindowProcedureThread {
         WindowProcedureThreadBuilder {
             max_num_windows: 1,
             display_tube: None,
+            parent_window_handle: None,
             #[cfg(feature = "kiwi")]
             ime_tube: None,
         }
     }
 
-    fn start_thread(max_num_windows: u32, gpu_main_display_tube: Option<Tube>) -> Result<Self> {
+    fn start_thread(
+        max_num_windows: u32,
+        gpu_main_display_tube: Option<Tube>,
+        parent_window_handle: Option<u64>,
+        #[cfg(feature = "kiwi")] _ime_tube: Tube,
+    ) -> Result<Self> {
         let (message_router_handle_sender, message_router_handle_receiver) = channel();
         let message_loop_state = Arc::new(AtomicI32::new(MessageLoopState::NotStarted as i32));
         let close_requested_event = Event::new().unwrap();
@@ -263,6 +269,7 @@ impl WindowProcedureThread {
                         message_loop_state_clone,
                         gpu_main_display_tube,
                         close_requested_event,
+                        parent_window_handle,
                     ),
                     Err(e) => error!("Failed to clone close_requested_event: {}", e),
                 }
@@ -337,12 +344,13 @@ impl WindowProcedureThread {
         message_loop_state: Arc<AtomicI32>,
         gpu_main_display_tube: Option<Tube>,
         close_requested_event: Event,
+        parent_window_handle: Option<u64>,
     ) {
         let gpu_main_display_tube = gpu_main_display_tube.map(Rc::new);
         // SAFETY:
         // Safe because the dispatcher will take care of the lifetime of the `MessageOnlyWindow` and
         // `GuiWindow` objects.
-        match unsafe { Self::create_windows(max_num_windows) }.and_then(
+        match unsafe { Self::create_windows(max_num_windows, parent_window_handle) }.and_then(
             |(message_router_window, gui_windows)| {
                 WindowMessageDispatcher::new(
                     message_router_window,
@@ -540,7 +548,10 @@ impl WindowProcedureThread {
     /// # Safety
     /// The owner of the returned window objects is responsible for dropping them before we finish
     /// processing `WM_NCDESTROY`, because the window handle will become invalid afterwards.
-    unsafe fn create_windows(max_num_windows: u32) -> Result<(MessageOnlyWindow, Vec<GuiWindow>)> {
+    unsafe fn create_windows(
+        max_num_windows: u32,
+        parent_window_handle: Option<u64>,
+    ) -> Result<(MessageOnlyWindow, Vec<GuiWindow>)> {
         let message_router_window = MessageOnlyWindow::new(
             /* class_name */
             Self::get_window_class_name::<MessageOnlyWindow>()
@@ -559,6 +570,11 @@ impl WindowProcedureThread {
         // See b/197786842 for details.
         let mut gui_windows = Vec::with_capacity(max_num_windows as usize);
         for scanout_id in 0..max_num_windows {
+            let window_style = if parent_window_handle.is_some() {
+                WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS
+            } else {
+                WS_POPUP | WS_CLIPCHILDREN
+            };
             gui_windows.push(GuiWindow::new(
                 scanout_id,
                 /* class_name */
@@ -570,8 +586,10 @@ impl WindowProcedureThread {
                         )
                     })?
                     .as_str(),
-                /* title */ Self::get_window_title().as_str(),
-                /* dw_style */ WS_POPUP | WS_CLIPCHILDREN,
+                /* title */
+                format!("{}-scanout-{scanout_id}", Self::get_window_title()).as_str(),
+                /* dw_style */ window_style,
+                parent_window_handle,
                 // The window size and style can be adjusted later when `Surface` is created.
                 &size2(1, 1),
             )?);
@@ -650,6 +668,7 @@ unsafe impl Send for WindowProcedureThread {}
 pub struct WindowProcedureThreadBuilder {
     max_num_windows: u32,
     display_tube: Option<Tube>,
+    parent_window_handle: Option<u64>,
     #[cfg(feature = "kiwi")]
     ime_tube: Option<Tube>,
 }
@@ -662,6 +681,11 @@ impl WindowProcedureThreadBuilder {
 
     pub fn set_display_tube(&mut self, display_tube: Option<Tube>) -> &mut Self {
         self.display_tube = display_tube;
+        self
+    }
+
+    pub fn set_parent_window_handle(&mut self, parent_window_handle: Option<u64>) -> &mut Self {
+        self.parent_window_handle = parent_window_handle;
         self
     }
 
@@ -685,10 +709,15 @@ impl WindowProcedureThreadBuilder {
                 WindowProcedureThread::start_thread(
                     self.max_num_windows,
                     self.display_tube,
+                    self.parent_window_handle,
                     ime_tube,
                 )
             } else {
-                WindowProcedureThread::start_thread(self.max_num_windows, None)
+                WindowProcedureThread::start_thread(
+                    self.max_num_windows,
+                    None,
+                    self.parent_window_handle,
+                )
             }
         }
     }

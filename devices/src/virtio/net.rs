@@ -99,7 +99,11 @@ pub enum NetError {
     #[error("failed to read control message header: {0}")]
     ReadCtrlHeader(io::Error),
     /// There are no more available descriptors to receive into.
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", feature = "hvf")
+    ))]
     #[error("no rx descriptors available")]
     RxDescriptorsExhausted,
     /// Failure creating the Slirp loop.
@@ -146,7 +150,11 @@ pub enum NetError {
     #[error("failed to write control message ack: {0}")]
     WriteAck(io::Error),
     /// Writing to a buffer in the guest failed.
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", feature = "hvf")
+    ))]
     #[error("failed to write to guest buffer: {0}")]
     WriteBuffer(io::Error),
 }
@@ -172,9 +180,7 @@ pub enum NetParametersMode {
     },
     /// Windows slirp-backed virtio-net (mac-only direct runner form).
     #[serde(rename_all = "kebab-case")]
-    Slirp {
-        mac: Option<MacAddress>,
-    },
+    Slirp { mac: Option<MacAddress> },
 }
 
 #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -384,7 +390,11 @@ where
                 self.overlapped_wrapper.get_h_event_ref().unwrap(),
                 Token::RxTap,
             ),
-            #[cfg(any(target_os = "android", target_os = "linux"))]
+            #[cfg(any(
+                target_os = "android",
+                target_os = "linux",
+                all(target_os = "macos", feature = "hvf")
+            ))]
             (self.tap.get_read_notifier(), Token::RxTap),
             (self.rx_queue.event(), Token::RxQueue),
             (self.tx_queue.event(), Token::TxQueue),
@@ -529,6 +539,12 @@ where
         // UFO (UDP fragmentation offload)
         // See the network device feature bits section for further details:
         //     http://docs.oasis-open.org/virtio/virtio/v1.1/csprd01/virtio-v1.1-csprd01.html#x1-1970003
+        #[cfg(all(target_os = "macos", feature = "hvf"))]
+        let mut avail_features = base_features | 1 << virtio_net::VIRTIO_NET_F_MTU;
+
+        // vmnet.framework exchanges complete Ethernet frames and has no API for
+        // virtio checksum or segmentation offloads.
+        #[cfg(not(all(target_os = "macos", feature = "hvf")))]
         let mut avail_features = base_features
             | 1 << virtio_net::VIRTIO_NET_F_GUEST_CSUM
             | 1 << virtio_net::VIRTIO_NET_F_CSUM

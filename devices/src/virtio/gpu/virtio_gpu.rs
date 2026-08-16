@@ -14,12 +14,14 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::Context;
+use base::error;
+use base::info;
+use base::warn;
 use base::FromRawDescriptor;
 use base::IntoRawDescriptor;
 use base::Protection;
 use base::SafeDescriptor;
 use base::VolatileSlice;
-use base::{error, info, warn};
 use gpu_display::*;
 use hypervisor::MemCacheType;
 use libc::c_void;
@@ -860,6 +862,22 @@ impl VirtioGpu {
         GpuControlResult::DisplaysUpdated
     }
 
+    /// Replaces a display definition under the same scanout id in one GPU control transaction.
+    /// Keeping the scanout id stable prevents consumers from observing an intermediate missing
+    /// display between the remove and add operations.
+    fn replace_display(&mut self, display_id: u32, display: DisplayParameters) -> GpuControlResult {
+        let Some(mut previous) = self.scanouts.remove(&display_id) else {
+            return GpuControlResult::NoSuchDisplay { display_id };
+        };
+        previous.release_surface(&self.display);
+        self.scanouts.insert(
+            display_id,
+            VirtioGpuScanout::new_primary(display_id, display),
+        );
+        self.scanouts_updated.store(true, Ordering::Relaxed);
+        GpuControlResult::DisplaysUpdated
+    }
+
     fn set_display_mouse_mode(
         &mut self,
         display_id: u32,
@@ -880,6 +898,10 @@ impl VirtioGpu {
             GpuControlCommand::AddDisplays { displays } => self.add_displays(displays),
             GpuControlCommand::ListDisplays => self.list_displays(),
             GpuControlCommand::RemoveDisplays { display_ids } => self.remove_displays(display_ids),
+            GpuControlCommand::ReplaceDisplay {
+                display_id,
+                display,
+            } => self.replace_display(display_id, display),
             GpuControlCommand::SetDisplayMouseMode {
                 display_id,
                 mouse_mode,
@@ -1504,8 +1526,15 @@ impl VirtioGpu {
         // Virtio spec: "The driver can use resource_id = 0 to disable a scanout."
         if resource_id == 0 {
             // Ignore any initial set_scanout(..., resource_id: 0) calls.
-            if scanout.resource_id.is_some() {
+            let was_enabled = scanout.resource_id.is_some();
+            if was_enabled {
                 scanout.release_surface(&self.display);
+            }
+
+            if was_enabled && scanout_type == SurfaceType::Scanout {
+                self.display
+                    .borrow_mut()
+                    .set_scanout_resource(scanout_id, 0);
             }
 
             scanout.resource_id = None;
@@ -1537,6 +1566,11 @@ impl VirtioGpu {
             None => return Ok(OkNoData),
         };
         scanout.resource_id = Some(resource_id);
+        if scanout_type == SurfaceType::Scanout {
+            self.display
+                .borrow_mut()
+                .set_scanout_resource(scanout_id, resource_id.get());
+        }
 
         Ok(OkNoData)
     }

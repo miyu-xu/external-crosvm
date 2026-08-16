@@ -20,6 +20,8 @@ pub use crate::gpu::do_gpu_display_list;
 #[cfg(feature = "gpu")]
 pub use crate::gpu::do_gpu_display_remove;
 #[cfg(feature = "gpu")]
+pub use crate::gpu::do_gpu_display_replace;
+#[cfg(feature = "gpu")]
 pub use crate::gpu::do_gpu_set_display_mouse_mode;
 #[cfg(feature = "gpu")]
 pub use crate::gpu::ModifyGpuResult;

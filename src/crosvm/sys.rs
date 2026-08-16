@@ -23,6 +23,9 @@ cfg_if::cfg_if! {
         pub(crate) use linux::gpu::GpuRenderServerParameters;
     } else if #[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "hvf"))] {
         use macos as platform;
+
+        #[cfg(feature = "gpu")]
+        pub(crate) use linux::gpu::GpuRenderServerParameters;
     } else if #[cfg(windows)] {
         use windows as platform;
         #[cfg(feature = "pci-hotplug")]

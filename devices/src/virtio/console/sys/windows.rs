@@ -11,10 +11,12 @@ use std::time::Duration;
 use base::error;
 use base::named_pipes;
 use base::Event;
+use base::EventWaitResult;
 use base::FileSync;
 use base::RawDescriptor;
 use base::WorkerThread;
 use sync::Mutex;
+use winapi::shared::winerror::ERROR_PIPE_LISTENING;
 
 use crate::serial_device::SerialInput;
 use crate::serial_device::SerialOptions;
@@ -116,10 +118,29 @@ pub(in crate::virtio::console) fn spawn_input_thread(
             in_avail_evt.signal().unwrap();
         }
 
-        match rx.wait_for_client_connection_overlapped_blocking(&kill_evt) {
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => return rx,
-            Err(e) => panic!("failed to wait for client: {}", e),
-            Ok(()) => (),
+        // Serial pipes are deliberately created with PIPE_NOWAIT so output cannot deadlock input
+        // on the same virtio-console device. ConnectNamedPipe therefore reports
+        // ERROR_PIPE_LISTENING while no Host component has opened this optional input endpoint.
+        // Poll that documented state with an interruptible delay; treating it as fatal tears down
+        // the whole Windows VM during a normal component/console connection race.
+        loop {
+            match rx.wait_for_client_connection() {
+                Ok(()) => break,
+                Err(e) if e.raw_os_error() == Some(ERROR_PIPE_LISTENING as i32) => {
+                    match kill_evt.wait_timeout(Duration::from_millis(20)) {
+                        Ok(EventWaitResult::TimedOut) => {}
+                        Ok(EventWaitResult::Signaled) => return rx,
+                        Err(wait_error) => {
+                            error!("failed to wait for console input shutdown: {}", wait_error);
+                            return rx;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("failed to wait for console input client: {}", e);
+                    return rx;
+                }
+            }
         }
 
         read_input(&mut rx, &in_avail_evt, input_buffer, kill_evt);

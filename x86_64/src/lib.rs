@@ -1839,9 +1839,10 @@ impl X8664arch {
                 ) {
                     return Err(Error::CreateFwCfgDevice(err));
                 }
-                // this condition will only be cfg!(debug_assertions) if the user specified at least one bootindex
-                // option on the command line. If none were specified, bootorder_fw_cfg_blob will
-                // only have a null byte (null terminator)
+                // this condition will only be cfg!(debug_assertions) if the user specified at least
+                // one bootindex option on the command line. If none were specified,
+                // bootorder_fw_cfg_blob will only have a null byte (null
+                // terminator)
                 if bootorder_fw_cfg_blob.len() > 1 {
                     // Add boot order file to the device. If the file is not present, firmware may
                     // not be able to boot.

@@ -87,7 +87,10 @@ impl<AppState: ApplicationState> WindowEventLoop<AppState> for UnixWindowEventLo
         let window = Arc::new(UnixWindow {
             display: parent.display as usize,
             window: parent.window,
-            size: size2(initial_window_size.width as u32, initial_window_size.height as u32),
+            size: size2(
+                initial_window_size.width as u32,
+                initial_window_size.height as u32,
+            ),
         });
         let app_state = application_state_builder
             .build(Arc::clone(&window))

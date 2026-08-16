@@ -20,6 +20,4 @@ metrics = { path = "../metrics"}
 once_cell = "1.7.2"
 
 [build-dependencies]
-anyhow = "1"
-prebuilts = { path = "../prebuilts" }
-
+cc = "1"

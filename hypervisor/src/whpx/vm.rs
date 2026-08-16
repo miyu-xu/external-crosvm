@@ -9,6 +9,7 @@ use std::collections::BinaryHeap;
 use std::convert::TryInto;
 use std::sync::Arc;
 
+use base::debug;
 use base::error;
 use base::info;
 use base::pagesize;
@@ -433,7 +434,7 @@ impl WhpxVm {
     /// This will make crosvm unable to access the memory, and allow Windows to reclaim it for other
     /// uses when memory is in demand.
     fn handle_inflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
-        info!(
+        debug!(
             "Balloon: Requested WHPX unmap of addr: {:?}, size: {:?}",
             guest_address, size
         );
@@ -473,8 +474,8 @@ impl WhpxVm {
     /// partition. Remapped memory has no guarantee of content, and the guest should not expect
     /// it to.
     fn handle_deflate(&mut self, guest_address: GuestAddress, size: u64) -> Result<()> {
-        info!(
-            "Balloon: Requested WHPX unmap of addr: {:?}, size: {:?}",
+        debug!(
+            "Balloon: Requested WHPX reclaim of addr: {:?}, size: {:?}",
             guest_address, size
         );
 
@@ -693,7 +694,7 @@ impl Vm for WhpxVm {
     }
 
     fn unmap_gpa_range(&mut self, guest_addr: GuestAddress, len: u64) -> Result<()> {
-        self.unmap_gpa_range(guest_addr, len)
+        WhpxVm::unmap_gpa_range(self, guest_addr, len)
     }
 
     fn create_device(&self, _kind: DeviceKind) -> Result<SafeDescriptor> {

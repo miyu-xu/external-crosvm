@@ -23,8 +23,12 @@ use linux_input_sys::virtio_input_event;
 use vm_control::ServiceSendToGpu;
 use win_util::win32_wide_string;
 use winapi::shared::minwindef::LRESULT;
-use winapi::shared::windef::{HDC, HWND};
-use winapi::um::wingdi::{SetDIBitsToDevice, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS};
+use winapi::shared::windef::HWND;
+use winapi::um::wingdi::SetDIBitsToDevice;
+use winapi::um::wingdi::BITMAPINFO;
+use winapi::um::wingdi::BITMAPINFOHEADER;
+use winapi::um::wingdi::BI_RGB;
+use winapi::um::wingdi::DIB_RGB_COLORS;
 use winapi::um::winuser::DefWindowProcW;
 use winapi::um::winuser::GetDC;
 use winapi::um::winuser::GetForegroundWindow;
@@ -296,6 +300,16 @@ impl WindowMessageDispatcher {
             return Some(ret);
         }
 
+        // The host stores the latest dimensions on the HWND before sending this message. While
+        // the window is vacant there is no Surface (and therefore no gfxstream/input transaction)
+        // to apply it. Return an explicit deferred acknowledgement; Surface replays the property
+        // exactly once when the dispatcher attaches it below.
+        if packet.msg == WM_USER_HOST_VIEWPORT_CHANGE_INTERNAL
+            && self.vacant_gui_windows.contains_key(&hwnd)
+        {
+            return Some(0);
+        }
+
         // Third, check if the message is targeting an in-use GUI window.
         self.in_use_gui_windows
             .get_mut(&hwnd)
@@ -414,16 +428,7 @@ impl WindowMessageDispatcher {
                 pixels,
                 width,
                 height,
-            } => {
-                eprintln!(
-                    "GPU-WNDPROC: handling FlipFramebuffer surface={} w={} h={} len={}",
-                    surface_id,
-                    width,
-                    height,
-                    pixels.len()
-                );
-                self.flip_framebuffer(surface_id, pixels, width, height);
-            }
+            } => self.flip_framebuffer(surface_id, pixels, width, height),
         }
     }
 
@@ -540,7 +545,6 @@ impl WindowMessageDispatcher {
 
     /// Handle FlipFramebuffer: copy pixel data to the window for 2D rendering.
     fn flip_framebuffer(&mut self, surface_id: u32, pixels: Vec<u8>, width: u32, height: u32) {
-        eprintln!("GPU-WNDPROC: flip_framebuffer entry surface={}", surface_id);
         // Find the window associated with this surface
         let hwnd = match self
             .in_use_gui_windows
@@ -550,18 +554,9 @@ impl WindowMessageDispatcher {
             Some((hwnd, _)) => *hwnd,
             None => {
                 error!("FlipFramebuffer: no window for surface {}", surface_id);
-                eprintln!(
-                    "GPU-WNDPROC: flip_framebuffer FAILED - no window for surface {}",
-                    surface_id
-                );
                 return;
             }
         };
-
-        eprintln!(
-            "GPU-WNDPROC: flip_framebuffer found hwnd={:?}, calling SetDIBitsToDevice",
-            hwnd
-        );
 
         // Use GDI SetDIBitsToDevice to draw the pixel data
         unsafe {

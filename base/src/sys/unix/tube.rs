@@ -4,6 +4,8 @@
 
 use std::os::unix::prelude::AsRawFd;
 use std::os::unix::prelude::RawFd;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -22,6 +24,7 @@ use crate::BlockingMode;
 use crate::FramingMode;
 use crate::RawDescriptor;
 use crate::ReadNotifier;
+use crate::SafeDescriptor;
 use crate::ScmSocket;
 use crate::StreamChannel;
 use crate::UnixSeqpacket;
@@ -29,18 +32,30 @@ use crate::SCM_SOCKET_MAX_FD_COUNT;
 
 // This size matches the inline buffer size of CmsgBuffer.
 const TUBE_MAX_FDS: usize = 32;
+const TUBE_FRAME_HEADER_SIZE: usize = std::mem::size_of::<u64>();
+const TUBE_MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
 
 /// Bidirectional tube that support both send and recv.
 #[derive(Serialize, Deserialize)]
 pub struct Tube {
     socket: ScmSocket<StreamChannel>,
+    #[serde(skip)]
+    send_lock: Arc<Mutex<()>>,
+    #[serde(skip)]
+    recv_lock: Arc<Mutex<()>>,
 }
 
 impl Tube {
     /// Create a pair of connected tubes. Request is sent in one direction while response is in the
     /// other direction.
     pub fn pair() -> Result<(Tube, Tube)> {
-        let (socket1, socket2) = StreamChannel::pair(BlockingMode::Blocking, FramingMode::Message)
+        // macOS does not support AF_UNIX SOCK_SEQPACKET. Use a framed Unix stream instead of
+        // pretending that SOCK_STREAM preserves message boundaries.
+        #[cfg(target_os = "macos")]
+        let framing_mode = FramingMode::Byte;
+        #[cfg(not(target_os = "macos"))]
+        let framing_mode = FramingMode::Message;
+        let (socket1, socket2) = StreamChannel::pair(BlockingMode::Blocking, framing_mode)
             .map_err(|errno| Error::Pair(std::io::Error::from(errno)))?;
         let tube1 = Tube::new(socket1)?;
         let tube2 = Tube::new(socket2)?;
@@ -52,11 +67,17 @@ impl Tube {
     /// underlying socket type), otherwise, this method returns an error.
     pub fn new(socket: StreamChannel) -> Result<Tube> {
         match socket.get_framing_mode() {
-            FramingMode::Message => Ok(Tube {
-                socket: socket.try_into().map_err(Error::DupDescriptor)?,
-            }),
+            FramingMode::Message => {}
+            #[cfg(target_os = "macos")]
+            FramingMode::Byte => {}
+            #[cfg(not(target_os = "macos"))]
             FramingMode::Byte => Err(Error::InvalidFramingMode),
         }
+        Ok(Tube {
+            socket: socket.try_into().map_err(Error::DupDescriptor)?,
+            send_lock: Default::default(),
+            recv_lock: Default::default(),
+        })
     }
 
     /// Create a new `Tube` from a UnixSeqpacket. The StreamChannel is implicitly constructed to
@@ -66,6 +87,8 @@ impl Tube {
             socket: StreamChannel::from_unix_seqpacket(sock)
                 .try_into()
                 .map_err(Error::DupDescriptor)?,
+            send_lock: Default::default(),
+            recv_lock: Default::default(),
         })
     }
 
@@ -73,11 +96,15 @@ impl Tube {
     /// directional Tube pair instead.
     #[deprecated]
     pub fn try_clone(&self) -> Result<Self> {
-        self.socket
+        let mut tube = self
+            .socket
             .inner()
             .try_clone()
             .map(Tube::new)
-            .map_err(Error::Clone)?
+            .map_err(Error::Clone)??;
+        tube.send_lock = Arc::clone(&self.send_lock);
+        tube.recv_lock = Arc::clone(&self.recv_lock);
+        Ok(tube)
     }
 
     /// Sends a message via a Tube.
@@ -101,8 +128,7 @@ impl Tube {
             return Err(Error::SendTooManyFds);
         }
 
-        handle_eintr!(self.socket.send_with_fds(&msg_json, &msg_descriptors))
-            .map_err(Error::Send)?;
+        self.send_packet(&msg_json, &msg_descriptors)?;
         Ok(())
     }
 
@@ -119,29 +145,91 @@ impl Tube {
             return Err(Error::RecvTooManyFds);
         }
 
-        // WARNING: The `cros_async` and `base_tokio` tube wrappers both assume that, if the tube
-        // is readable, then a call to `Tube::recv` will not block (which ought to be true since we
-        // use SOCK_SEQPACKET and a single recvmsg call currently).
+        let (msg_json, msg_descriptors) = self.recv_packet(max_fds)?;
 
-        let msg_size = handle_eintr!(self.socket.inner().peek_size()).map_err(Error::Recv)?;
-        // This buffer is the right size, as the size received in peek_size() represents the size
-        // of only the message itself and not the file descriptors. The descriptors are stored
-        // separately in msghdr::msg_control.
-        let mut msg_json = vec![0u8; msg_size];
+        deserialize_with_descriptors(|| serde_json::from_slice(&msg_json), msg_descriptors)
+            .map_err(Error::Json)
+    }
 
-        let (msg_json_size, msg_descriptors) =
-            handle_eintr!(self.socket.recv_with_fds(&mut msg_json, max_fds))
-                .map_err(Error::Recv)?;
-
-        if msg_json_size == 0 {
-            return Err(Error::Disconnected);
+    fn send_packet(&self, msg: &[u8], descriptors: &[RawFd]) -> Result<()> {
+        let _guard = self.send_lock.lock().unwrap_or_else(|e| e.into_inner());
+        match self.socket.inner().get_framing_mode() {
+            FramingMode::Message => {
+                handle_eintr!(self.socket.send_with_fds(msg, descriptors)).map_err(Error::Send)?;
+            }
+            FramingMode::Byte => {
+                let mut frame = Vec::with_capacity(TUBE_FRAME_HEADER_SIZE + msg.len());
+                frame.extend_from_slice(&(msg.len() as u64).to_be_bytes());
+                frame.extend_from_slice(msg);
+                let mut written = 0;
+                while written < frame.len() {
+                    let fds = if written == 0 { descriptors } else { &[] };
+                    let count = handle_eintr!(self.socket.send_with_fds(&frame[written..], fds))
+                        .map_err(Error::Send)?;
+                    if count == 0 {
+                        return Err(Error::Disconnected);
+                    }
+                    written += count;
+                }
+            }
         }
+        Ok(())
+    }
 
-        deserialize_with_descriptors(
-            || serde_json::from_slice(&msg_json[0..msg_json_size]),
-            msg_descriptors,
-        )
-        .map_err(Error::Json)
+    fn recv_packet(&self, max_fds: usize) -> Result<(Vec<u8>, Vec<SafeDescriptor>)> {
+        let _guard = self.recv_lock.lock().unwrap_or_else(|e| e.into_inner());
+        match self.socket.inner().get_framing_mode() {
+            FramingMode::Message => {
+                let msg_size =
+                    handle_eintr!(self.socket.inner().peek_size()).map_err(Error::Recv)?;
+                let mut msg = vec![0u8; msg_size];
+                let (size, descriptors) =
+                    handle_eintr!(self.socket.recv_with_fds(&mut msg, max_fds))
+                        .map_err(Error::Recv)?;
+                if size == 0 {
+                    return Err(Error::Disconnected);
+                }
+                msg.truncate(size);
+                Ok((msg, descriptors))
+            }
+            FramingMode::Byte => {
+                let mut header = [0u8; TUBE_FRAME_HEADER_SIZE];
+                let mut descriptors = Vec::new();
+                self.recv_exact_with_fds(&mut header, max_fds, &mut descriptors)?;
+                let msg_size = usize::try_from(u64::from_be_bytes(header))
+                    .map_err(|_| Error::Recv(std::io::Error::from_raw_os_error(libc::EOVERFLOW)))?;
+                if msg_size == 0 {
+                    return Err(Error::Disconnected);
+                }
+                if msg_size > TUBE_MAX_FRAME_SIZE {
+                    return Err(Error::Recv(std::io::Error::from_raw_os_error(
+                        libc::EMSGSIZE,
+                    )));
+                }
+                let mut msg = vec![0u8; msg_size];
+                self.recv_exact_with_fds(&mut msg, max_fds, &mut descriptors)?;
+                Ok((msg, descriptors))
+            }
+        }
+    }
+
+    fn recv_exact_with_fds(
+        &self,
+        mut buf: &mut [u8],
+        max_fds: usize,
+        descriptors: &mut Vec<SafeDescriptor>,
+    ) -> Result<()> {
+        while !buf.is_empty() {
+            let remaining_fds = max_fds.saturating_sub(descriptors.len());
+            let (size, mut received) = handle_eintr!(self.socket.recv_with_fds(buf, remaining_fds))
+                .map_err(Error::Recv)?;
+            if size == 0 {
+                return Err(Error::Disconnected);
+            }
+            descriptors.append(&mut received);
+            buf = &mut buf[size..];
+        }
+        Ok(())
     }
 
     pub fn set_send_timeout(&self, timeout: Option<Duration>) -> Result<()> {
@@ -163,24 +251,12 @@ impl Tube {
         let bytes = msg.write_to_bytes().map_err(Error::Proto)?;
         let no_fds: [RawFd; 0] = [];
 
-        handle_eintr!(self.socket.send_with_fds(&bytes, &no_fds)).map_err(Error::Send)?;
-
-        Ok(())
+        self.send_packet(&bytes, &no_fds)
     }
 
     #[cfg(feature = "proto_tube")]
     fn recv_proto<M: protobuf::Message>(&self) -> Result<M> {
-        let msg_size = handle_eintr!(self.socket.inner().peek_size()).map_err(Error::Recv)?;
-        let mut msg_bytes = vec![0u8; msg_size];
-
-        let (msg_bytes_size, _) =
-            handle_eintr!(self.socket.recv_with_fds(&mut msg_bytes, TUBE_MAX_FDS))
-                .map_err(Error::Recv)?;
-
-        if msg_bytes_size == 0 {
-            return Err(Error::Disconnected);
-        }
-
+        let (msg_bytes, _) = self.recv_packet(TUBE_MAX_FDS)?;
         protobuf::Message::parse_from_bytes(&msg_bytes).map_err(Error::Proto)
     }
 }

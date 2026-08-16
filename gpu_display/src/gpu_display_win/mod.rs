@@ -65,6 +65,18 @@ use crate::SysDisplayT;
 use crate::VulkanCreateParams;
 use base::VolatileSlice;
 
+#[cfg(feature = "gfxstream")]
+#[link(name = "gfxstream_backend")]
+extern "C" {
+    fn gfxstream_backend_configure_display(
+        scanout_id: u32,
+        width: u32,
+        height: u32,
+        dpi: u32,
+    ) -> i32;
+    fn gfxstream_backend_set_scanout_resource(scanout_id: u32, resource_id: u32);
+}
+
 pub(crate) type ObjectId = NonZeroU32;
 
 pub struct VirtualDisplaySpace;
@@ -186,17 +198,25 @@ impl DisplayWin {
                     #[cfg(not(feature = "vulkan_display"))]
                     let vulkan_display = Arc::new(Mutex::new(VulkanDisplayWrapper::Uninitialized));
 
-                    // The GUI window is created at 1x1 with WS_POPUP (no WS_VISIBLE).
-                    // Resize to a reasonable default size (1024x768) and show it.
-                    // The window will be further resized when the guest sets the display mode.
+                    // The GUI window is created at 1x1 with WS_POPUP (no WS_VISIBLE). Resize it
+                    // to a reasonable default size without overriding the display's hidden
+                    // contract. HD embeds this surface in Player, so a hidden backend display
+                    // must never appear as a standalone Android window.
                     {
                         use crate::gpu_display_win::math_util::Rect;
                         use euclid::size2;
                         use euclid::Point2D;
+                        use winapi::um::winuser::SWP_HIDEWINDOW;
+                        use winapi::um::winuser::SWP_NOACTIVATE;
                         use winapi::um::winuser::SWP_NOZORDER;
                         use winapi::um::winuser::SWP_SHOWWINDOW;
                         let rect = Rect::new(Point2D::new(0, 0), size2(1024, 768));
-                        let _ = window.set_pos(&rect, SWP_SHOWWINDOW | SWP_NOZORDER);
+                        let visibility = if display_params_clone.hidden {
+                            SWP_HIDEWINDOW | SWP_NOACTIVATE
+                        } else {
+                            SWP_SHOWWINDOW
+                        };
+                        let _ = window.set_pos(&rect, visibility | SWP_NOZORDER);
                     }
                     Surface::new(
                         surface_id,
@@ -278,6 +298,17 @@ impl AsRawDescriptor for DisplayWin {
 }
 
 impl DisplayT for DisplayWin {
+    fn set_scanout_resource(&mut self, scanout_id: u32, resource_id: u32) {
+        #[cfg(feature = "gfxstream")]
+        unsafe {
+            // SAFETY: gfxstream_backend is linked into this process and the call carries only the
+            // scalar scanout/resource identity already validated by virtio-gpu.
+            gfxstream_backend_set_scanout_resource(scanout_id, resource_id);
+        }
+        #[cfg(not(feature = "gfxstream"))]
+        let _ = (scanout_id, resource_id);
+    }
+
     fn create_surface(
         &mut self,
         parent_surface_id: Option<u32>,
@@ -298,19 +329,31 @@ impl DisplayT for DisplayWin {
             return Err(GpuDisplayError::Unsupported);
         }
 
+        let scanout_id = scanout_id.expect("scanout id is required");
+        #[cfg(feature = "gfxstream")]
+        {
+            let (width, height) = display_params.get_virtual_display_size();
+            let dpi = display_params.horizontal_dpi();
+            // SAFETY: the linked gfxstream backend owns its display registry. The dimensions and
+            // DPI come from the validated crosvm display configuration for this scanout.
+            if unsafe { gfxstream_backend_configure_display(scanout_id, width, height, dpi) } == 0 {
+                warn!(
+                    "gfxstream rejected display configuration: scanout={} size={}x{} dpi={}",
+                    scanout_id, width, height, dpi
+                );
+            }
+        }
+
         // Gfxstream allows for attaching a window only once along the initialization, so we only
         // create the surface once. See details in b/179319775.
-        let vulkan_display = match self.create_surface_internal(
-            surface_id,
-            scanout_id.expect("scanout id is required"),
-            display_params,
-        ) {
-            Err(e) => {
-                error!("Failed to create surface: {:?}", e);
-                return Err(GpuDisplayError::Allocate);
-            }
-            Ok(display) => display,
-        };
+        let vulkan_display =
+            match self.create_surface_internal(surface_id, scanout_id, display_params) {
+                Err(e) => {
+                    error!("Failed to create surface: {:?}", e);
+                    return Err(GpuDisplayError::Allocate);
+                }
+                Ok(display) => display,
+            };
         self.is_surface_created = true;
         self.vulkan_displays
             .insert(surface_id, Arc::clone(&vulkan_display));
@@ -331,31 +374,11 @@ impl DisplayT for DisplayWin {
         let fb_bytes_per_pixel = 4u32;
         let fb_stride = fb_width * fb_bytes_per_pixel;
         let fb_size = (fb_stride * fb_height) as usize;
-
-        // TEST: immediately fill the window with a red color to verify display pipeline
-        let test_pixels: Vec<u8> = (0..fb_size)
-            .map(|i| {
-                if i % 4 == 2 {
-                    0xFF
-                } else if i % 4 == 0 {
-                    0x80
-                } else {
-                    0
-                } // BGRA: blue tint
-            })
-            .collect();
-        let _ = self
-            .wndproc_thread
-            .post_display_command(DisplaySendToWndProc::FlipFramebuffer {
-                surface_id,
-                pixels: test_pixels,
-                width: fb_width,
-                height: fb_height,
-            });
-        info!(
-            "SurfaceWin: posted initial FlipFramebuffer for surface {}",
-            surface_id
-        );
+        let framebuffer_data = if strict_zero_copy_required() {
+            Vec::new()
+        } else {
+            vec![0u8; fb_size]
+        };
 
         Ok(Box::new(SurfaceWin {
             surface_id,
@@ -365,7 +388,7 @@ impl DisplayT for DisplayWin {
                 GpuDisplayError::Allocate
             })?,
             vulkan_display,
-            framebuffer_data: vec![0u8; fb_size],
+            framebuffer_data,
             framebuffer_width: fb_width,
             framebuffer_height: fb_height,
             framebuffer_stride: fb_stride,
@@ -479,6 +502,12 @@ pub(crate) struct SurfaceWin {
 
 impl GpuDisplaySurface for SurfaceWin {
     fn framebuffer(&mut self) -> Option<GpuDisplayFramebuffer> {
+        if strict_zero_copy_required() {
+            // Production Windows display must arrive through Vulkan external-memory imports and
+            // flip_to(). Exposing a CPU framebuffer here makes a renderer failure look healthy
+            // while every frame is read back and copied through GDI.
+            return None;
+        }
         let bytes_per_pixel = self.framebuffer_bytes_per_pixel;
         let stride = self.framebuffer_stride;
         let fb = GpuDisplayFramebuffer::new(
@@ -499,6 +528,10 @@ impl GpuDisplaySurface for SurfaceWin {
     }
 
     fn flip(&mut self) {
+        if strict_zero_copy_required() {
+            error!("strict Windows zero-copy display rejected a CPU framebuffer flip");
+            return;
+        }
         if let Some(wndproc_thread) = self.wndproc_thread.upgrade() {
             let fb_data = std::mem::take(&mut self.framebuffer_data);
             // Re-allocate for next frame
@@ -587,6 +620,11 @@ impl GpuDisplaySurface for SurfaceWin {
             }
         }
     }
+}
+
+fn strict_zero_copy_required() -> bool {
+    std::env::var_os("HD_FRAME_REQUIRED").is_some_and(|value| value == "1")
+        || std::env::var_os("HD_NATIVE_ZERO_COPY_REQUIRED").is_some_and(|value| value == "1")
 }
 
 impl Drop for SurfaceWin {

@@ -21,9 +21,9 @@ use thiserror::Error;
 #[cfg(feature = "vulkano")]
 use vulkano::device::DeviceCreationError;
 #[cfg(feature = "vulkano")]
-use vulkano::instance::InstanceCreationError;
-#[cfg(feature = "vulkano")]
 use vulkano::image::sys::ImageCreationError;
+#[cfg(feature = "vulkano")]
+use vulkano::instance::InstanceCreationError;
 #[cfg(feature = "vulkano")]
 use vulkano::memory::DeviceMemoryError;
 #[cfg(feature = "vulkano")]

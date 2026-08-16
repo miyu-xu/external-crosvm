@@ -10,7 +10,9 @@ use std::path::PathBuf;
 
 use acpi_tables::aml;
 use acpi_tables::aml::Aml;
-use base::{error, info, warn};
+use base::error;
+use base::info;
+use base::warn;
 
 use crate::pci::CrosvmDeviceId;
 use crate::BusAccessInfo;
@@ -286,7 +288,8 @@ impl MinimalTpm {
     /// Parse the NV index from a command buffer by scanning for valid NV handle values.
     /// Returns the normalized NV index (low 24 bits, without handle type prefix).
     fn parse_nv_handle(command: &[u8]) -> u32 {
-        // Scan backwards from byte 14 for an NV handle (0x01xxxxxx or low 0x00xxxxxx above 0x100000)
+        // Scan backwards from byte 14 for an NV handle (0x01xxxxxx or low 0x00xxxxxx above
+        // 0x100000)
         for off in (14..command.len().saturating_sub(3)).rev() {
             let candidate = u32::from_be_bytes([
                 command[off],
@@ -309,11 +312,12 @@ impl MinimalTpm {
     fn find_nv_data_start(command: &[u8]) -> usize {
         // Auth area is typically ~13 bytes for simple password auth
         // header(10) + handle(4) + auth(~13) + nvIndex(4) + dataOffset(2) = ~33
-        // But this varies. Look for data after the second 4-byte zero region (offset field is 2 bytes)
-        // Conservative: start data at offset 34
+        // But this varies. Look for data after the second 4-byte zero region (offset field is 2
+        // bytes) Conservative: start data at offset 34
         let start = 34usize;
         if start + 2 <= command.len() {
-            // Verify: bytes at start-2 and start-1 should be the offset field (2 bytes, typically 0)
+            // Verify: bytes at start-2 and start-1 should be the offset field (2 bytes, typically
+            // 0)
             start
         } else {
             command.len()
@@ -645,8 +649,9 @@ impl TpmBackend for MinimalTpm {
             }
             TPM2_CC_CREATE_PRIMARY => {
                 // Return a dummy persistent key handle
-                // The response contains: handle(4) + outPublic(variable) + creationData + creationHash + creationTicket
-                // Minimal: return handle 0x80000000 (first transient) and minimal public area
+                // The response contains: handle(4) + outPublic(variable) + creationData +
+                // creationHash + creationTicket Minimal: return handle 0x80000000
+                // (first transient) and minimal public area
                 let handle: u32 = 0x8000_0000;
                 let mut resp = Vec::new();
                 resp.extend_from_slice(&handle.to_be_bytes());

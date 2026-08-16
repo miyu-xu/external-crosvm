@@ -647,9 +647,9 @@ impl DeviceRenderer {
             check_endpoint_buffer_size(&audio_client, shared_audio_engine_period_in_frames)
                 .map_err(RenderError::WinAudioError)?;
         if incoming_buffer_size_in_frames % shared_audio_engine_period_in_frames != 0 {
-            warn!(
-                "Rendering: Guest period size: `{}` not divisible by shared audio engine period size: `{}`. \
-                 Audio glitches may occur if sample rate conversion isn't on.",
+            info!(
+                "Rendering audio period bridge enabled: guest period `{}` frames, shared audio \
+                 engine period `{}` frames",
                 incoming_buffer_size_in_frames, shared_audio_engine_period_in_frames
             );
         }
@@ -1216,9 +1216,9 @@ impl DeviceCapturer {
             get_device_period_in_frames(&audio_client, &format);
 
         if outgoing_buffer_size_in_frames % shared_audio_engine_period_in_frames != 0 {
-            warn!(
-                "Capture: Guest period size: `{}` not divisible by shared audio engine period size: `{}`. \
-                 Audio glitches may occur if sample rate conversion isn't on.",
+            info!(
+                "Capture audio period bridge enabled: guest period `{}` frames, shared audio \
+                 engine period `{}` frames",
                 outgoing_buffer_size_in_frames, shared_audio_engine_period_in_frames
             );
         }

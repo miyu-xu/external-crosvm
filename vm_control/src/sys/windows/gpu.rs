@@ -49,8 +49,19 @@ impl<T: ProvideDisplayData> DisplayModeTrait for WinDisplayMode<T> {
     }
 
     fn get_virtual_display_size_4k_uhd(&self, is_4k_uhd_enabled: bool) -> (u32, u32) {
-        let (width, height) = self.get_window_size();
-        let (width, height) = adjust_virtual_display_size(width, height, is_4k_uhd_enabled);
+        let (width, height) = match self {
+            // An explicit windowed size is also the guest display contract. Clamping it to the
+            // host-product soft limit makes the Windows backend silently disagree with the Linux
+            // backend and with the resolution requested by HD. Host viewport sizing is independent
+            // from the fixed guest scanout size and already fits that scanout to the work area.
+            Self::Windowed(width, height) => (*width, *height),
+            // Borderless full-screen follows the physical host display and keeps the historical
+            // product limit/alignment rules.
+            Self::BorderlessFullScreen(_) => {
+                let (width, height) = self.get_window_size();
+                adjust_virtual_display_size(width, height, is_4k_uhd_enabled)
+            }
+        };
         info!("Guest display size: {}x{}", width, height);
         (width, height)
     }
@@ -83,13 +94,21 @@ impl ProvideDisplayData for DisplayDataProvider {
 }
 
 fn adjust_virtual_display_size(width: u32, height: u32, is_4k_uhd_enabled: bool) -> (u32, u32) {
-    let (max_width, max_height) = if is_4k_uhd_enabled {
+    let (landscape_max_width, landscape_max_height) = if is_4k_uhd_enabled {
         (
             DISPLAY_WIDTH_SOFT_MAX_4K_UHD_ENABLED,
             DISPLAY_HEIGHT_SOFT_MAX_4K_UHD_ENABLED,
         )
     } else {
         (DISPLAY_WIDTH_SOFT_MAX, DISPLAY_HEIGHT_SOFT_MAX)
+    };
+    // The soft limits describe a landscape display. Applying them to the coordinate axes
+    // unconditionally truncates a valid portrait mode such as 1080x1920 to 1080x1080. Keep the
+    // requested orientation when enforcing the same pixel limits.
+    let (max_width, max_height) = if height > width {
+        (landscape_max_height, landscape_max_width)
+    } else {
+        (landscape_max_width, landscape_max_height)
     };
     let width = std::cmp::min(width, max_width);
     let height = std::cmp::min(height, max_height);
@@ -132,5 +151,24 @@ mod tests {
             mode.get_virtual_display_size_4k_uhd(/* is_4k_uhd_enabled */ false);
         assert!(width <= DISPLAY_WIDTH_SOFT_MAX);
         assert!(height <= DISPLAY_HEIGHT_SOFT_MAX);
+    }
+
+    #[test]
+    fn portrait_virtual_window_preserves_portrait_soft_limits() {
+        assert_eq!(adjust_virtual_display_size(1080, 1920, false), (1080, 1920));
+        assert_eq!(adjust_virtual_display_size(1440, 2560, false), (1080, 1920));
+    }
+
+    #[test]
+    fn explicit_windowed_virtual_display_size_matches_request() {
+        let mode = WinDisplayMode::<DisplayDataProvider>::Windowed(1080, 1920);
+        assert_eq!(
+            mode.get_virtual_display_size_4k_uhd(/* is_4k_uhd_enabled */ false),
+            (1080, 1920)
+        );
+        assert_eq!(
+            mode.get_virtual_display_size_4k_uhd(/* is_4k_uhd_enabled */ true),
+            (1080, 1920)
+        );
     }
 }

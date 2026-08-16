@@ -2,7 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+
 use base::Event;
+#[cfg(target_os = "macos")]
+use base::EventWaitResult;
 
 use crate::AsyncError;
 use crate::AsyncResult;
@@ -39,14 +44,21 @@ impl EventAsync {
     }
 
     pub async fn next_val(&self) -> AsyncResult<u64> {
-        let event = self.event.try_clone().map_err(AsyncError::EventAsync)?;
-        self.ex
-            .spawn_blocking(move || {
-                event.wait()?;
-                Ok(1)
-            })
-            .await
-            .map_err(AsyncError::EventAsync)
+        loop {
+            let event = self.event.try_clone().map_err(AsyncError::EventAsync)?;
+            // A blocking wait cannot be canceled when the future is dropped. Keep each blocking
+            // task bounded so executor shutdown and virtio device reset cannot wait forever for
+            // an unsignaled event.
+            match self
+                .ex
+                .spawn_blocking(move || event.wait_timeout(Duration::from_millis(50)))
+                .await
+                .map_err(AsyncError::EventAsync)?
+            {
+                EventWaitResult::Signaled => return Ok(1),
+                EventWaitResult::TimedOut => {}
+            }
+        }
     }
 }
 

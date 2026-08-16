@@ -298,12 +298,20 @@ pub struct IoParams {
 }
 
 /// Handle to a virtual CPU that may be used to request a VM exit from within a signal handler.
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 pub struct VcpuSignalHandle {
     inner: Box<dyn VcpuSignalHandleInner>,
 }
 
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 impl VcpuSignalHandle {
     /// Request an immediate exit for this VCPU.
     ///
@@ -316,7 +324,11 @@ impl VcpuSignalHandle {
 /// Signal-safe mechanism for requesting an immediate VCPU exit.
 ///
 /// Each hypervisor backend must implement this for its VCPU type.
-#[cfg(any(target_os = "android", target_os = "linux"))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    all(target_os = "macos", feature = "hvf")
+))]
 pub(crate) trait VcpuSignalHandleInner {
     /// Signal the associated VCPU to exit if it is currently running.
     ///
@@ -349,7 +361,11 @@ pub trait Vcpu: downcast_rs::DowncastSync {
 
     /// Returns a handle that can be used to cause this VCPU to exit from `run()` from a signal
     /// handler.
-    #[cfg(any(target_os = "android", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        all(target_os = "macos", feature = "hvf")
+    ))]
     fn signal_handle(&self) -> VcpuSignalHandle;
 
     /// Handles an incoming MMIO request from the guest.

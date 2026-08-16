@@ -23,6 +23,7 @@ use base::AsRawDescriptor;
 use base::Event;
 use base::EventToken;
 use base::RawDescriptor;
+use base::ReadNotifier;
 use base::WaitContext;
 use base::WorkerThread;
 use data_model::Le16;
@@ -459,7 +460,10 @@ impl<T: EventSource> Worker<T> {
         let wait_ctx: WaitContext<Token> = match WaitContext::build_with(&[
             (self.event_queue.event(), Token::EventQAvailable),
             (self.status_queue.event(), Token::StatusQAvailable),
-            (&self.event_source, Token::InputEventsAvailable),
+            (
+                self.event_source.get_read_notifier(),
+                Token::InputEventsAvailable,
+            ),
             (&kill_evt, Token::Kill),
         ]) {
             Ok(wait_ctx) => wait_ctx,
@@ -509,11 +513,22 @@ impl<T: EventSource> Worker<T> {
                         }
                     }
                     Token::InputEventsAvailable => match self.event_source.receive_events() {
+                        #[cfg(windows)]
+                        Err(InputError::EventsReadError(error))
+                            if error.kind() == std::io::ErrorKind::WouldBlock =>
+                        {
+                            // A PIPE_NOWAIT StreamChannel reports ERROR_NO_DATA as WouldBlock
+                            // while it is connected but temporarily empty. Windows may also wake
+                            // the pipe handle before bytes are available, especially immediately
+                            // after the input worker starts. Keep the descriptor registered so the
+                            // next real host input report can reach the guest.
+                            continue;
+                        }
                         Err(e) => {
                             #[cfg(windows)]
                             {
                                 debug!("input event source for '{}' closed: {}", self.name, e);
-                                let _ = wait_ctx.delete(&self.event_source);
+                                let _ = wait_ctx.delete(self.event_source.get_read_notifier());
                                 continue;
                             }
                             #[cfg(not(windows))]
@@ -534,7 +549,7 @@ impl<T: EventSource> Worker<T> {
             for event in wait_events.iter().filter(|e| e.is_hungup) {
                 if let Token::InputEventsAvailable = event.token {
                     warn!("input event source for '{}' disconnected", self.name);
-                    let _ = wait_ctx.delete(&self.event_source);
+                    let _ = wait_ctx.delete(self.event_source.get_read_notifier());
                 }
             }
 
@@ -686,7 +701,7 @@ where
 /// Creates a new virtio input device from an event device node
 pub fn new_evdev<T>(source: T, virtio_features: u64) -> Result<Input<EvdevEventSource<T>>>
 where
-    T: Read + Write + AsRawDescriptor + Send + 'static,
+    T: Read + Write + AsRawDescriptor + ReadNotifier + Send + 'static,
 {
     Ok(Input {
         worker_thread: None,
@@ -706,7 +721,7 @@ pub fn new_single_touch<T>(
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
-    T: Read + Write + AsRawDescriptor + Send + 'static,
+    T: Read + Write + AsRawDescriptor + ReadNotifier + Send + 'static,
 {
     Ok(Input {
         worker_thread: None,
@@ -726,7 +741,7 @@ pub fn new_multi_touch<T>(
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
-    T: Read + Write + AsRawDescriptor + Send + 'static,
+    T: Read + Write + AsRawDescriptor + ReadNotifier + Send + 'static,
 {
     Ok(Input {
         worker_thread: None,
@@ -747,7 +762,7 @@ pub fn new_trackpad<T>(
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
-    T: Read + Write + AsRawDescriptor + Send + 'static,
+    T: Read + Write + AsRawDescriptor + ReadNotifier + Send + 'static,
 {
     Ok(Input {
         worker_thread: None,
@@ -768,7 +783,7 @@ pub fn new_multitouch_trackpad<T>(
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
-    T: Read + Write + AsRawDescriptor + Send + 'static,
+    T: Read + Write + AsRawDescriptor + ReadNotifier + Send + 'static,
 {
     Ok(Input {
         worker_thread: None,
@@ -785,7 +800,7 @@ pub fn new_mouse<T>(
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
-    T: Read + Write + AsRawDescriptor + Send + 'static,
+    T: Read + Write + AsRawDescriptor + ReadNotifier + Send + 'static,
 {
     Ok(Input {
         worker_thread: None,
@@ -802,7 +817,7 @@ pub fn new_keyboard<T>(
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
-    T: Read + Write + AsRawDescriptor + Send + 'static,
+    T: Read + Write + AsRawDescriptor + ReadNotifier + Send + 'static,
 {
     Ok(Input {
         worker_thread: None,
@@ -819,7 +834,7 @@ pub fn new_switches<T>(
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
-    T: Read + Write + AsRawDescriptor + Send + 'static,
+    T: Read + Write + AsRawDescriptor + ReadNotifier + Send + 'static,
 {
     Ok(Input {
         worker_thread: None,
@@ -836,7 +851,7 @@ pub fn new_rotary<T>(
     virtio_features: u64,
 ) -> Result<Input<SocketEventSource<T>>>
 where
-    T: Read + Write + AsRawDescriptor + Send + 'static,
+    T: Read + Write + AsRawDescriptor + ReadNotifier + Send + 'static,
 {
     Ok(Input {
         worker_thread: None,

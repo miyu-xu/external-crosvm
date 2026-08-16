@@ -7,9 +7,9 @@ mod connection;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 mod handler;
-#[cfg(feature = "net")]
+#[cfg(all(feature = "net", not(target_os = "macos")))]
 mod net;
-#[cfg(feature = "audio")]
+#[cfg(all(feature = "audio", not(target_os = "macos")))]
 pub mod snd;
 
 pub use block::run_block_device;
@@ -24,15 +24,15 @@ pub use gpu::run_gpu_device;
 pub use gpu::Options as GpuOptions;
 pub use handler::VhostBackendReqConnectionState;
 pub use handler::VhostUserDevice;
-#[cfg(feature = "net")]
+#[cfg(all(feature = "net", not(target_os = "macos")))]
 pub use net::run_net_device;
-#[cfg(feature = "net")]
+#[cfg(all(feature = "net", not(target_os = "macos")))]
 pub use net::NetBackend;
-#[cfg(feature = "net")]
+#[cfg(all(feature = "net", not(target_os = "macos")))]
 pub use net::Options as NetOptions;
-#[cfg(feature = "audio")]
+#[cfg(all(feature = "audio", not(target_os = "macos")))]
 pub use snd::run_snd_device;
-#[cfg(feature = "audio")]
+#[cfg(all(feature = "audio", not(target_os = "macos")))]
 pub use snd::Options as SndOptions;
 
 cfg_if::cfg_if! {

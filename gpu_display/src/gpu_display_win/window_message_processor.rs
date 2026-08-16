@@ -15,10 +15,12 @@ use euclid::point2;
 use euclid::size2;
 use euclid::Rect;
 use linux_input_sys::virtio_input_event;
+use win_util::win32_wide_string;
 use winapi::shared::minwindef::LPARAM;
 use winapi::shared::minwindef::LRESULT;
 use winapi::shared::minwindef::UINT;
 use winapi::shared::minwindef::WPARAM;
+use winapi::um::winuser::GetPropW;
 use winapi::um::winuser::HRAWINPUT;
 use winapi::um::winuser::MK_XBUTTON1;
 use winapi::um::winuser::SWP_HIDEWINDOW;
@@ -78,11 +80,21 @@ pub(crate) const WM_USER_SHUTDOWN_WNDPROC_THREAD_INTERNAL: UINT = WM_USER;
 // and we need to render to a different part of the window. The new width and height are sent as the
 // low/high word of lParam.
 pub(crate) const WM_USER_HOST_VIEWPORT_CHANGE_INTERNAL: UINT = WM_USER + 1;
+pub(crate) const FORCE_VIEWPORT_COMMIT_WPARAM: WPARAM = 1 << 31;
+pub(crate) const LATEST_VIEWPORT_PROPERTY: &str = "HD_LATEST_VIEWPORT_V1";
+pub(crate) const APPLIED_VIEWPORT_PROPERTY: &str = "HD_APPLIED_VIEWPORT_V1";
+pub(crate) const LATEST_ROTATION_PROPERTY: &str = "HD_LATEST_ROTATION_V1";
+pub(crate) const APPLIED_ROTATION_PROPERTY: &str = "HD_APPLIED_ROTATION_V1";
+pub(crate) const FORCE_VIEWPORT_PENDING_PROPERTY: &str = "HD_FORCE_VIEWPORT_PENDING_V1";
 
 /// Thread message for handling the message sent from the GPU worker thread. A pointer to enum
 /// `DisplaySendToWndProc` is sent as the lParam. Note that the receiver is responsible for
 /// destructing the message.
 pub(crate) const WM_USER_HANDLE_DISPLAY_MESSAGE_INTERNAL: UINT = WM_USER + 2;
+
+// Private host message for selecting the crosvm scanout presented by gfxstream. The target HWND is
+// authoritative: Surface forwards its own stable scanout id instead of trusting host payload.
+pub(crate) const WM_USER_SELECT_DISPLAY_INTERNAL: UINT = WM_USER + 3;
 
 /// Struct for resources used for Surface creation.
 pub struct SurfaceResources {
@@ -204,7 +216,51 @@ impl WindowMessageProcessor {
 
         let _trace_event = Self::new_trace_event(packet.msg);
 
-        let window_message: WindowMessage = packet.into();
+        let resolved_packet = if packet.msg == WM_USER_HOST_VIEWPORT_CHANGE_INTERNAL {
+            // HD may post several viewport notifications while the user drags a window edge.
+            // Always consume the scalar latest-value property so a queued older message cannot
+            // revert the input transform and gfxstream swapchain to a stale size.
+            let latest = unsafe {
+                GetPropW(
+                    window.handle(),
+                    win32_wide_string(LATEST_VIEWPORT_PROPERTY).as_ptr(),
+                )
+            };
+            let latest_rotation = unsafe {
+                GetPropW(
+                    window.handle(),
+                    win32_wide_string(LATEST_ROTATION_PROPERTY).as_ptr(),
+                )
+            };
+            let force_pending = unsafe {
+                GetPropW(
+                    window.handle(),
+                    win32_wide_string(FORCE_VIEWPORT_PENDING_PROPERTY).as_ptr(),
+                )
+            };
+            if latest.is_null() {
+                *packet
+            } else {
+                let force_wparam = (packet.w_param & FORCE_VIEWPORT_COMMIT_WPARAM)
+                    | if force_pending.is_null() {
+                        0
+                    } else {
+                        FORCE_VIEWPORT_COMMIT_WPARAM
+                    };
+                MessagePacket::new(
+                    packet.msg,
+                    if latest_rotation.is_null() {
+                        packet.w_param | force_wparam
+                    } else {
+                        (latest_rotation as WPARAM) | force_wparam
+                    },
+                    latest as LPARAM,
+                )
+            }
+        } else {
+            *packet
+        };
+        let window_message: WindowMessage = (&resolved_packet).into();
         keyboard_input_manager.handle_window_message(window, &window_message);
         self.surface
             .handle_window_message(window, window_message)
@@ -227,6 +283,8 @@ impl WindowMessageProcessor {
     fn new_trace_event(msg: UINT) -> impl std::any::Any {
         if msg == WM_USER_HOST_VIEWPORT_CHANGE_INTERNAL {
             trace_event!(gpu_display, "WM_USER_HOST_VIEWPORT_CHANGE_INTERNAL")
+        } else if msg == WM_USER_SELECT_DISPLAY_INTERNAL {
+            trace_event!(gpu_display, "WM_USER_SELECT_DISPLAY_INTERNAL")
         } else {
             trace_event!(gpu_display, "WM_OTHER_GUI_WINDOW_MESSAGE")
         }
@@ -276,7 +334,9 @@ pub enum WindowMessage {
     /// `WM_DISPLAYCHANGE`, "sent to all windows when the display resolution has changed."
     DisplayChange,
     /// `WM_USER_HOST_VIEWPORT_CHANGE_INTERNAL`.
-    HostViewportChange { l_param: LPARAM },
+    HostViewportChange { w_param: WPARAM, l_param: LPARAM },
+    /// `WM_USER_SELECT_DISPLAY_INTERNAL`.
+    SelectDisplay,
     /// Not one of the general window messages we care about.
     Other(MessagePacket),
 }
@@ -411,7 +471,8 @@ impl From<&MessagePacket> for WindowMessage {
                 l_param,
             },
             WM_DISPLAYCHANGE => Self::DisplayChange,
-            WM_USER_HOST_VIEWPORT_CHANGE_INTERNAL => Self::HostViewportChange { l_param },
+            WM_USER_HOST_VIEWPORT_CHANGE_INTERNAL => Self::HostViewportChange { w_param, l_param },
+            WM_USER_SELECT_DISPLAY_INTERNAL => Self::SelectDisplay,
             _ => Self::Other(*packet),
         }
     }

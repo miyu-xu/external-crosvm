@@ -23,21 +23,18 @@ pub(crate) mod poll;
 mod shm;
 mod timer;
 
-pub use ioctl::*;
-pub use platform_timer_resolution::*;
-
-pub use mmap::*;
-
-pub use poll::EventContext;
-
 pub(crate) use event::PlatformEvent;
+pub use ioctl::*;
 pub(in crate::sys) use libc::sendmsg;
+pub use mmap::*;
 #[cfg(not(feature = "hvf"))]
 pub(in crate::sys) use net::sockaddr_un;
 #[cfg(not(feature = "hvf"))]
 pub(in crate::sys) use net::sockaddrv4_to_lib_c;
 #[cfg(not(feature = "hvf"))]
 pub(in crate::sys) use net::sockaddrv6_to_lib_c;
+pub use platform_timer_resolution::*;
+pub use poll::EventContext;
 
 pub fn get_cpu_affinity() -> crate::errno::Result<Vec<usize>> {
     let n = crate::number_of_logical_cores()?;

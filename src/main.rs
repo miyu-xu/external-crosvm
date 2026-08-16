@@ -30,9 +30,9 @@ use crosvm::config::Config;
 use devices::virtio::vhost::user::device::run_block_device;
 #[cfg(feature = "gpu")]
 use devices::virtio::vhost::user::device::run_gpu_device;
-#[cfg(feature = "net")]
+#[cfg(all(feature = "net", not(target_os = "macos")))]
 use devices::virtio::vhost::user::device::run_net_device;
-#[cfg(feature = "audio")]
+#[cfg(all(feature = "audio", not(target_os = "macos")))]
 use devices::virtio::vhost::user::device::run_snd_device;
 #[cfg(feature = "composite-disk")]
 use disk::create_composite_disk;
@@ -62,6 +62,8 @@ use vm_control::client::do_gpu_display_add;
 use vm_control::client::do_gpu_display_list;
 #[cfg(feature = "gpu")]
 use vm_control::client::do_gpu_display_remove;
+#[cfg(feature = "gpu")]
+use vm_control::client::do_gpu_display_replace;
 #[cfg(feature = "gpu")]
 use vm_control::client::do_gpu_set_display_mouse_mode;
 use vm_control::client::do_modify_battery;
@@ -559,9 +561,9 @@ fn start_device(opts: cmdline::DeviceCommand) -> std::result::Result<(), ()> {
             CrossPlatformDevicesCommands::Block(cfg) => run_block_device(cfg),
             #[cfg(feature = "gpu")]
             CrossPlatformDevicesCommands::Gpu(cfg) => run_gpu_device(cfg),
-            #[cfg(feature = "net")]
+            #[cfg(all(feature = "net", not(target_os = "macos")))]
             CrossPlatformDevicesCommands::Net(cfg) => run_net_device(cfg),
-            #[cfg(feature = "audio")]
+            #[cfg(all(feature = "audio", not(target_os = "macos")))]
             CrossPlatformDevicesCommands::Snd(cfg) => run_snd_device(cfg),
         },
         cmdline::DeviceSubcommand::Sys(command) => sys::start_device(command),
@@ -606,6 +608,11 @@ fn gpu_display_remove(cmd: cmdline::GpuRemoveDisplaysCommand) -> ModifyGpuResult
 }
 
 #[cfg(feature = "gpu")]
+fn gpu_display_replace(cmd: cmdline::GpuReplaceDisplayCommand) -> ModifyGpuResult {
+    do_gpu_display_replace(cmd.socket_path, cmd.display_id, cmd.gpu_display)
+}
+
+#[cfg(feature = "gpu")]
 fn gpu_set_display_mouse_mode(cmd: cmdline::GpuSetDisplayMouseModeCommand) -> ModifyGpuResult {
     do_gpu_set_display_mouse_mode(cmd.socket_path, cmd.display_id, cmd.mouse_mode)
 }
@@ -616,6 +623,7 @@ fn modify_gpu(cmd: cmdline::GpuCommand) -> std::result::Result<(), ()> {
         cmdline::GpuSubCommand::AddDisplays(cmd) => gpu_display_add(cmd),
         cmdline::GpuSubCommand::ListDisplays(cmd) => gpu_display_list(cmd),
         cmdline::GpuSubCommand::RemoveDisplays(cmd) => gpu_display_remove(cmd),
+        cmdline::GpuSubCommand::ReplaceDisplay(cmd) => gpu_display_replace(cmd),
         cmdline::GpuSubCommand::SetDisplayMouseMode(cmd) => gpu_set_display_mouse_mode(cmd),
     };
     match result {
@@ -807,8 +815,8 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
                     // but also indicates whether the guest requested reset or stop.
                     run_vm(cmd, log_config)
                 } else if let CrossPlatformCommands::Device(cmd) = command {
-                    // On windows, the device command handles its own logging setup, so we can't handle
-                    // it below otherwise logging will double init.
+                    // On windows, the device command handles its own logging setup, so we can't
+                    // handle it below otherwise logging will double init.
                     if cfg!(unix) {
                         syslog::init_with(log_config).context("failed to initialize syslog")?;
                     }
@@ -897,8 +905,8 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
             }
             cmdline::Command::Sys(command) => {
                 let log_args = log_config.log_args.clone();
-                // On windows, the sys commands handle their own logging setup, so we can't handle it
-                // below otherwise logging will double init.
+                // On windows, the sys commands handle their own logging setup, so we can't handle
+                // it below otherwise logging will double init.
                 if cfg!(unix) {
                     syslog::init_with(log_config).context("failed to initialize syslog")?;
                 }
@@ -919,9 +927,31 @@ fn crosvm_main<I: IntoIterator<Item = String>>(args: I) -> Result<CommandStatus>
     })
 }
 
+#[cfg(all(target_os = "macos", feature = "gpu"))]
+fn crosvm_main_with_cocoa(args: Vec<String>) -> Result<CommandStatus> {
+    let worker = std::thread::spawn(move || {
+        let result = crosvm_main(args);
+        gpu_display::stop_cocoa_main_loop();
+        result
+    });
+    gpu_display::run_cocoa_main_loop();
+    worker
+        .join()
+        .map_err(|_| anyhow!("crosvm VM thread panicked"))?
+}
+
 fn main() {
     syslog::early_init();
     debug!("crosvm started.");
+    #[cfg(all(target_os = "macos", feature = "gpu"))]
+    let args = std::env::args().collect::<Vec<_>>();
+    #[cfg(all(target_os = "macos", feature = "gpu"))]
+    let res = if std::env::var_os("CROSVM_COCOA_DISPLAY").is_some() {
+        crosvm_main_with_cocoa(args)
+    } else {
+        crosvm_main(args)
+    };
+    #[cfg(not(all(target_os = "macos", feature = "gpu")))]
     let res = crosvm_main(std::env::args());
 
     let exit_code = match &res {

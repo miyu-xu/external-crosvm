@@ -9,6 +9,7 @@ use std::io::Write;
 use base::warn;
 use base::AsRawDescriptor;
 use base::RawDescriptor;
+use base::ReadNotifier;
 use linux_input_sys::constants::*;
 use linux_input_sys::input_event;
 use linux_input_sys::virtio_input_event;
@@ -25,7 +26,7 @@ use super::Result;
 /// It supports read and write operations to provide and accept events just like an event device
 /// node would, except that it handles virtio_input_event instead of input_event structures.
 /// It's necessary to call receive_events() before events are available for read.
-pub trait EventSource: AsRawDescriptor {
+pub trait EventSource: AsRawDescriptor + ReadNotifier {
     /// Perform any necessary initialization before receiving and sending events from/to the source.
     fn init(&mut self) -> Result<()> {
         Ok(())
@@ -162,9 +163,15 @@ impl<T: AsRawDescriptor> AsRawDescriptor for SocketEventSource<T> {
     }
 }
 
+impl<T: ReadNotifier> ReadNotifier for SocketEventSource<T> {
+    fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+        self.evt_source_impl.source.get_read_notifier()
+    }
+}
+
 impl<T> EventSource for SocketEventSource<T>
 where
-    T: Read + Write + AsRawDescriptor,
+    T: Read + Write + AsRawDescriptor + ReadNotifier,
 {
     fn init(&mut self) -> Result<()> {
         Ok(())
@@ -214,9 +221,15 @@ impl<T: AsRawDescriptor> AsRawDescriptor for EvdevEventSource<T> {
     }
 }
 
+impl<T: ReadNotifier> ReadNotifier for EvdevEventSource<T> {
+    fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+        self.evt_source_impl.source.get_read_notifier()
+    }
+}
+
 impl<T> EventSource for EvdevEventSource<T>
 where
-    T: Read + Write + AsRawDescriptor,
+    T: Read + Write + AsRawDescriptor + ReadNotifier,
 {
     fn init(&mut self) -> Result<()> {
         grab_evdev(self)
@@ -250,6 +263,10 @@ mod tests {
     use std::io::Read;
     use std::io::Write;
 
+    use base::AsRawDescriptor;
+    use base::Event;
+    use base::RawDescriptor;
+    use base::ReadNotifier;
     use data_model::Le16;
     use data_model::SLe32;
     use linux_input_sys::InputEventDecoder;
@@ -258,6 +275,7 @@ mod tests {
     use crate::virtio::input::event_source::input_event;
     use crate::virtio::input::event_source::virtio_input_event;
     use crate::virtio::input::event_source::EventSourceImpl;
+    use crate::virtio::input::event_source::SocketEventSource;
 
     struct SourceMock {
         events: Vec<u8>,
@@ -290,6 +308,52 @@ mod tests {
         fn flush(&mut self) -> std::result::Result<(), std::io::Error> {
             Ok(())
         }
+    }
+
+    struct NotifyingSourceMock {
+        source_descriptor: Event,
+        read_notifier: Event,
+    }
+
+    impl Read for NotifyingSourceMock {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    impl Write for NotifyingSourceMock {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl AsRawDescriptor for NotifyingSourceMock {
+        fn as_raw_descriptor(&self) -> RawDescriptor {
+            self.source_descriptor.as_raw_descriptor()
+        }
+    }
+
+    impl ReadNotifier for NotifyingSourceMock {
+        fn get_read_notifier(&self) -> &dyn AsRawDescriptor {
+            &self.read_notifier
+        }
+    }
+
+    #[test]
+    fn socket_event_source_forwards_read_notifier() {
+        let source = SocketEventSource::new(NotifyingSourceMock {
+            source_descriptor: Event::new().unwrap(),
+            read_notifier: Event::new().unwrap(),
+        });
+
+        assert_ne!(
+            source.as_raw_descriptor(),
+            source.get_read_notifier().as_raw_descriptor()
+        );
     }
 
     #[test]

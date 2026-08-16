@@ -12,6 +12,7 @@ use std::sync::Weak;
 
 use anyhow::Context;
 use base::error;
+use base::warn;
 use base::MemoryMapping;
 use base::MemoryMappingBuilder;
 use base::Protection;
@@ -756,6 +757,10 @@ impl BusDevice for PciConfigIo {
         // `offset` is relative to 0xcf8
         match info.offset {
             _o @ 1 if data.len() == 1 && data[0] & PCI_RESET_CPU_BIT != 0 => {
+                warn!(
+                    "guest requested reset through PCI CF9: offset={:#x} value={:#x}",
+                    info.offset, data[0]
+                );
                 if let Err(e) = self
                     .reset_evt_wrtube
                     .send::<VmEventType>(&VmEventType::Reset)

@@ -28,10 +28,10 @@ use futures::select_biased;
 use futures::FutureExt;
 use hypervisor::ProtectionType;
 #[cfg(feature = "slirp")]
+use net_util::MacAddress;
+#[cfg(feature = "slirp")]
 use net_util::Slirp;
 use net_util::TapT;
-#[cfg(feature = "slirp")]
-use net_util::MacAddress;
 #[cfg(feature = "slirp")]
 use serde::Deserialize;
 #[cfg(feature = "slirp")]
@@ -175,7 +175,7 @@ pub(in crate::virtio::vhost::user::device::net) fn start_queue<T: 'static + Into
     queue: virtio::Queue,
     _mem: GuestMemory,
 ) -> anyhow::Result<()> {
-    if backend.workers.get(idx).is_some() {
+    if backend.workers.get(idx).is_some_and(Option::is_some) {
         warn!("Starting new queue handler without stopping old handler");
         backend.stop_queue(idx);
     }

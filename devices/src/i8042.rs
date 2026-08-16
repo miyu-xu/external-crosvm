@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 use base::error;
+use base::warn;
 use base::SendTube;
 use base::VmEventType;
 
@@ -47,6 +48,10 @@ impl BusDevice for I8042Device {
 
     fn write(&mut self, info: BusAccessInfo, data: &[u8]) {
         if data.len() == 1 && data[0] == 0xfe && info.address == 0x64 {
+            warn!(
+                "guest requested reset through i8042 command port: address={:#x} value={:#x}",
+                info.address, data[0]
+            );
             if let Err(e) = self
                 .reset_evt_wrtube
                 .send::<VmEventType>(&VmEventType::Reset)

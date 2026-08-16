@@ -18,6 +18,7 @@ use std::ptr::null_mut;
 use std::ptr::write_unaligned;
 use std::slice;
 
+#[cfg(not(target_os = "macos"))]
 use libc::c_long;
 use libc::c_void;
 use libc::cmsghdr;
@@ -46,7 +47,11 @@ pub const SCM_MAX_FD: usize = 253;
 
 #[allow(non_snake_case)]
 const fn CMSG_ALIGN(len: usize) -> usize {
-    (len + size_of::<c_long>() - 1) & !(size_of::<c_long>() - 1)
+    #[cfg(target_os = "macos")]
+    let alignment = size_of::<u32>();
+    #[cfg(not(target_os = "macos"))]
+    let alignment = size_of::<c_long>();
+    (len + alignment - 1) & !(alignment - 1)
 }
 
 #[allow(non_snake_case)]

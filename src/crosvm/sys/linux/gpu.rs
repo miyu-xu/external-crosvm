@@ -10,11 +10,11 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use base::linux::move_proc_to_cgroup;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use jail::*;
 #[cfg(any(target_os = "android", target_os = "linux"))]
-use minijail_stub::Command as MinijailCommand;
-#[cfg(all(target_os = "macos", feature = "hvf"))]
 use minijail_stub::Command as MinijailCommand;
 use serde::Deserialize;
 use serde::Serialize;
@@ -95,7 +95,10 @@ pub fn create_gpu_device(
     has_vfio_gfx_device: bool,
     event_devices: Vec<EventDevice>,
 ) -> DeviceResult {
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     let is_sandboxed = cfg.jail_config.is_some();
+    #[cfg(target_os = "macos")]
+    let is_sandboxed = false;
     let mut gpu_params = cfg.gpu_parameters.clone().unwrap();
 
     if gpu_params.fixed_blob_mapping {
@@ -125,17 +128,22 @@ pub fn create_gpu_device(
     gpu_params.allow_implicit_render_server_exec =
         gpu_params.allow_implicit_render_server_exec && !is_sandboxed;
 
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     let mut display_backends = vec![
         virtio::DisplayBackend::X(cfg.x_display.clone()),
         virtio::DisplayBackend::Stub,
     ];
+    #[cfg(target_os = "macos")]
+    let display_backends = vec![virtio::DisplayBackend::Stub];
 
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     #[cfg(feature = "android_display")]
     if let Some(service_name) = &cfg.android_display_service {
         display_backends.insert(0, virtio::DisplayBackend::Android(service_name.to_string()));
     }
 
     // Use the unnamed socket for GPU display screens.
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     if let Some(socket_path) = cfg.wayland_socket_paths.get("") {
         display_backends.insert(
             0,
@@ -155,9 +163,11 @@ pub fn create_gpu_device(
         event_devices,
         virtio::base_features(cfg.protection_type),
         &cfg.wayland_socket_paths,
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         cfg.gpu_cgroup_path.as_ref(),
     );
 
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     let jail = if let Some(jail_config) = &cfg.jail_config {
         let mut config = SandboxConfig::new(jail_config, "gpu_device");
         config.bind_mounts = true;
@@ -205,6 +215,8 @@ pub fn create_gpu_device(
     } else {
         None
     };
+    #[cfg(target_os = "macos")]
+    let jail = None;
 
     Ok(VirtioDeviceStub {
         dev: Box::new(dev),
@@ -284,6 +296,7 @@ fn get_gpu_render_server_environment(
     Ok(env.iter().map(|(k, v)| format!("{}={}", k, v)).collect())
 }
 
+#[cfg(any(target_os = "android", target_os = "linux"))]
 pub fn start_gpu_render_server(
     cfg: &Config,
     render_server_parameters: &GpuRenderServerParameters,
@@ -369,6 +382,17 @@ pub fn start_gpu_render_server(
     }
 
     Ok((jail, SafeDescriptor::from(client_socket)))
+}
+
+#[cfg(target_os = "macos")]
+pub fn start_gpu_render_server(
+    cfg: &Config,
+    render_server_parameters: &GpuRenderServerParameters,
+) -> Result<(Minijail, SafeDescriptor)> {
+    let _ = (cfg, render_server_parameters);
+    bail!(
+        "external GPU render server is not supported on macOS; use the in-process gfxstream backend"
+    )
 }
 
 #[cfg(test)]

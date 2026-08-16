@@ -46,13 +46,6 @@ use std::process::ExitStatus;
 use std::ptr;
 use std::time::Duration;
 
-pub(crate) use crate::sys::macos::event::PlatformEvent;
-pub use crate::sys::macos::fallocate;
-pub(crate) use crate::sys::macos::file_punch_hole;
-pub(crate) use crate::sys::macos::file_write_zeroes_at;
-pub use crate::sys::macos::mmap::*;
-pub use crate::sys::macos::poll::EventContext;
-pub use crate::sys::macos::FallocateMode;
 pub use capabilities::drop_capabilities;
 pub use event::EventExt;
 pub use file::find_next_data;
@@ -75,6 +68,14 @@ pub(in crate::sys) use net::sendmsg_nosignal;
 pub(in crate::sys) use net::sockaddr_un;
 pub(in crate::sys) use net::sockaddrv4_to_lib_c;
 pub(in crate::sys) use net::sockaddrv6_to_lib_c;
+
+pub(crate) use crate::sys::macos::event::PlatformEvent;
+pub use crate::sys::macos::fallocate;
+pub(crate) use crate::sys::macos::file_punch_hole;
+pub(crate) use crate::sys::macos::file_write_zeroes_at;
+pub use crate::sys::macos::mmap::*;
+pub use crate::sys::macos::poll::EventContext;
+pub use crate::sys::macos::FallocateMode;
 mod priority;
 pub use platform_timer_resolution::*;
 pub use priority::*;
@@ -88,9 +89,8 @@ pub use stubs::AcpiNotifyEvent;
 pub use stubs::NetlinkGenericSocket;
 #[path = "../linux/terminal.rs"]
 mod terminal;
-pub use terminal::*;
-
 use log::warn;
+pub use terminal::*;
 
 use crate::descriptor::FromRawDescriptor;
 use crate::descriptor::SafeDescriptor;

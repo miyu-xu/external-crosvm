@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#[cfg(target_os = "macos")]
+use base::AsRawDescriptor;
 use base::TimerTrait;
 
 use crate::AsyncError;
@@ -9,6 +11,7 @@ use crate::AsyncResult;
 use crate::IntoAsync;
 use crate::TimerAsync;
 
+#[cfg(any(target_os = "android", target_os = "linux"))]
 impl<T: TimerTrait + IntoAsync> TimerAsync<T> {
     pub async fn wait_sys(&self) -> AsyncResult<()> {
         let (n, _) = self
@@ -19,6 +22,42 @@ impl<T: TimerTrait + IntoAsync> TimerAsync<T> {
             return Err(AsyncError::EventAsync(base::Error::new(libc::ENODATA)));
         }
         Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl<T: TimerTrait + IntoAsync> TimerAsync<T> {
+    pub async fn wait_sys(&self) -> AsyncResult<()> {
+        // macOS Timer descriptors are kqueues. The descriptor becomes readable when its timer
+        // event is pending, but unlike Linux timerfd it cannot be consumed with read(2).
+        self.io_source.wait_readable().await?;
+        let mut event = std::mem::MaybeUninit::<libc::kevent>::uninit();
+        loop {
+            // SAFETY: the timer owns a valid kqueue descriptor, the changelist is empty, and the
+            // event output points to space for exactly one initialized kevent on success.
+            let result = unsafe {
+                libc::kevent(
+                    self.io_source.as_source().as_raw_descriptor(),
+                    std::ptr::null(),
+                    0,
+                    event.as_mut_ptr(),
+                    1,
+                    std::ptr::null(),
+                )
+            };
+            if result == 1 {
+                return Ok(());
+            }
+            let error = base::Error::last();
+            if result < 0 && error.errno() == libc::EINTR {
+                continue;
+            }
+            return Err(AsyncError::EventAsync(if result == 0 {
+                base::Error::new(libc::ENODATA)
+            } else {
+                error
+            }));
+        }
     }
 }
 
